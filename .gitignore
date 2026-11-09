@@ -1,0 +1,48 @@
+# 虚拟环境 / 缓存
+.venv/
+**/.venv/
+__pycache__/
+*.pyc
+node_modules/
+
+# 密钥与环境变量(.env.example 是模板,可以提交)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secret.key
+初始管理员密码.txt
+
+# 运行数据:数据库(含 API Key、Token、笔记)、图片、导出包、备份、浏览器登录态
+data/
+*.db
+*.db-shm
+*.db-wal
+*.bak.db
+*.pvt
+*.pvt.zip
+
+# 采集端调试产物:抓到的真实接口响应、运行日志
+collector/probe/
+collector/**/*.log
+collector/**/profile*/
+collector/**/user-data*/
+
+# 回归测试的运行结果和真实样本(来自真实笔记)
+evals/results/
+evals/fixtures/food_real.json
+
+# 内部汇报材料
+汇报材料/
+
+# 编辑器 / 系统
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 采集端(ego)的探索脚本和运行日志:含真实账号名 / 账号 ID,只保留正式的 collector.mjs
+collector/ego/*
+!collector/ego/collector.mjs

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>小红书流水线工作台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside class="side">
+  <div class="brand"><span class="logo">书</span><div><b>小红书流水线</b><small>选好就生成,成品直接发</small></div></div>
+  <nav class="fnav" id="fnav" aria-label="主导航">
+    <button data-k="new"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>新建任务</span></button>
+    <button data-k="runs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg><span>任务</span><em id="runN" hidden></em></button>
+    <button data-k="lib"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l5-5 4 4 3-3 6 6"/></svg><span>成品库</span></button>
+    <button data-k="live"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="9.5" stroke-dasharray="2 2.6"/></svg><span>Live 图</span></button>
+    <button data-k="data"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>数据看板</span></button>
+    <button data-k="loop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/><path d="M8 13l3 3 5-6"/></svg><span>复盘</span></button>
+    <button data-k="notebase"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h13v15H6a2 2 0 0 0-2 2zM4 19.5A2 2 0 0 0 6 21.5h13M9 8h6M9 12h6"/></svg><span>笔记库</span></button>
+  </nav>
+  <div class="advwrap" hidden>
+    <button class="advt" id="advt" aria-expanded="false"><span>高级 · 手动流程</span><b aria-hidden="true">▾</b></button>
+    <div class="advbox">
+      <div class="side-label">当前项目</div>
+      <div class="projwrap"><button class="proj" id="proj" title="切换项目"></button></div>
+      <div class="side-label">流程</div>
+      <nav class="steps" id="nav"></nav>
+    </div>
+  </div>
+  <div class="side-foot"><div class="whoami" id="whoami" hidden></div><p>发布仍需手动:复制文案、保存图片,到小红书发布。</p></div>
+</aside>
+<main>
+  <div class="ph"><div><div class="eyebrow" id="pe"></div><h1 id="pt"></h1><p id="pd"></p></div><div class="ph-act" id="pa"></div></div>
+  <div id="main"></div>
+</main>
+<nav class="tabbar" id="tabbar" aria-label="底部导航">
+  <button data-k="new"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>新建</span></button>
+  <button data-k="runs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg><span>任务</span><em id="runN2" hidden></em></button>
+  <button data-k="lib"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l5-5 4 4 3-3 6 6"/></svg><span>成品</span></button>
+  <button data-k="live"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="9.5" stroke-dasharray="2 2.6"/></svg><span>Live</span></button>
+  <button data-k="data"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span>数据</span></button>
+  <button data-k="loop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/><path d="M8 13l3 3 5-6"/></svg><span>复盘</span></button>
+  <button data-k="notebase"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h13v15H6a2 2 0 0 0-2 2zM4 19.5A2 2 0 0 0 6 21.5h13M9 8h6M9 12h6"/></svg><span>笔记库</span></button>
+</nav>
+<script src="app.js"></script>
+<script src="admin_qf.js"></script>
+<script src="flow.js"></script>
+<script src="live.js"></script>
+</body>
+</html>

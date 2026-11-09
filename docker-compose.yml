@@ -1,0 +1,21 @@
+name: xhs-workbench
+
+services:
+  workbench:
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    image: xhs-workbench:latest
+    container_name: xhs-workbench
+    restart: unless-stopped
+    ports:
+      - "${PORT:-18765}:18765"
+    environment:
+      TZ: Asia/Shanghai
+      # 留空:沿用已有密码;首次启动则随机生成并写入 data/初始管理员密码.txt
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    volumes:
+      - ./data:/app/data
+      # 回归测试:代码、样本集、基线和结果都放在项目目录里,方便改提示词前后对比
+      - ./evals:/app/evals

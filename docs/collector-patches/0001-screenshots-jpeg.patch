@@ -1,0 +1,203 @@
+diff --git a/README.md b/README.md
+index 7836877..2d8a4cb 100644
+--- a/README.md
++++ b/README.md
+@@ -11,6 +11,8 @@
+ | `XHS_BATCH` | 每攒够 N 条回传一批（也可 `--batch N`）。**默认 1 = 采一条传一条**，0 = 只在最后回传 |
+ | `XHS_SHOTS` | 设 `0`/`false` 不截图（默认截图） |
+ | `XHS_SHOTS_KEEP_DAYS` | 截图保留天数，默认 7，`0` = 不清理 |
++| `XHS_SHOT_FORMAT` | 截图格式，默认 `jpeg`（体积约为 PNG 的 1/5），设 `png` 换回 PNG。浏览器不支持 JPEG 截图时自动退回 PNG |
++| `XHS_SHOT_QUALITY` | JPEG 质量 1~100，默认 80 |
+ | `XHS_UNSENT_KEEP_DAYS` | 未回传请求体保留天数，默认 30，`0` = 不清理 |
+ | `XHS_DASH_PORT` | 展示页面端口，默认 18766 |
+ | `XHS_IDLE_TIMEOUT` | 多少秒没有任何进展（消息/心跳/新截图）就当卡住，默认 180 |
+diff --git a/collector.js b/collector.js
+index 2a3802b..d6c797a 100644
+--- a/collector.js
++++ b/collector.js
+@@ -31,6 +31,8 @@ const DATA_DIR = path.join(os.homedir(), 'xhs-collector')
+ const STATE_DIR = path.join(DATA_DIR, 'outbox')      // 脚本 → 本进程 的文件通道（每行的 XHSOUT 消息 + 心跳）
+ const SHOTS = !/^(0|false|off|no)$/i.test(String(process.env.XHS_SHOTS || ''))   // XHS_SHOTS=0 不截图
+ const SHOT_KEEP_DAYS = num(process.env.XHS_SHOTS_KEEP_DAYS, 7)                   // 截图保留天数（0 = 不清理）
++const SHOT_TYPE = /^png$/i.test(String(process.env.XHS_SHOT_FORMAT || '')) ? 'png' : 'jpeg'   // 截图格式：默认 JPEG，XHS_SHOT_FORMAT=png 换回 PNG
++const SHOT_QUALITY = Math.min(100, Math.max(1, Math.floor(num(process.env.XHS_SHOT_QUALITY, 80))))   // JPEG 质量 1~100，默认 80（文字清晰，体积约为 PNG 的 1/5）
+ const UNSENT_KEEP_DAYS = num(process.env.XHS_UNSENT_KEEP_DAYS, 30)               // 未回传请求体保留天数（0 = 不清理）
+ const SHOT_DIR = path.join(DATA_DIR, 'shots')
+ 
+@@ -86,7 +88,7 @@ const params = (mode, query, limit, o = {}) => {
+     knownFile: '',              // 运行时写入本次任务的 /api/notes/known 地址和 token（ego-browser 子进程不继承环境变量）
+     maxScan: Math.max(0, Math.floor(MAX_SCAN)),   // 0 = 脚本按 limit 自动算
+     minDelay: MIN_DELAY, maxDelay: MAX_DELAY, readMin: READ_MIN, readMax: READ_MAX, dwellMin: DWELL_MIN, dwellMax: DWELL_MAX,
+-  shotDir: SHOT_DIR, shots: SHOTS, sep: path.sep, outbox: '', beat: '',
++  shotDir: SHOT_DIR, shots: SHOTS, shotType: SHOT_TYPE, shotQuality: SHOT_QUALITY, sep: path.sep, outbox: '', beat: '',
+   }
+ }
+ // 拦截原因 → 回传给工作台的中文 error；stop=true 表示需要人工处理，回传后停止整个采集端；
+@@ -147,7 +149,7 @@ function pruneShots() {
+       const p = path.join(dir, e.name)
+       try {
+         if (e.isDirectory() && depth < 2) walk(p, depth + 1)
+-        else if (e.isFile() && /\.png$/i.test(e.name) && fs.statSync(p).mtimeMs < cut) { fs.rmSync(p, { force: true }); n++ }
++        else if (e.isFile() && /\.(png|jpe?g)$/i.test(e.name) && fs.statSync(p).mtimeMs < cut) { fs.rmSync(p, { force: true }); n++ }
+       } catch {}
+     }
+   }
+@@ -182,7 +184,7 @@ async function collect(mode, query, limit, onNote, signal, o = {}) {
+   lastPhase = ''
+   const seen = new Set(), notes = []
+   let blocked = null, error = '', done = null, rejected = 0
+-  log(`▶ 采集 ${{ keyword: '关键词', title: '标题', blogger: '博主' }[mode]}「${query}」（${limit} 条${p.skipVideo ? '图文' : ''}${SHOTS ? `，截图存到 ${SHOT_DIR}` : '，不截图'}）`)
++  log(`▶ 采集 ${{ keyword: '关键词', title: '标题', blogger: '博主' }[mode]}「${query}」（${limit} 条${p.skipVideo ? '图文' : ''}${SHOTS ? `，截图（${SHOT_TYPE === 'png' ? 'PNG' : 'JPEG q' + SHOT_QUALITY}）存到 ${SHOT_DIR}` : '，不截图'}）`)
+   if (mode === 'title') p.mode = 'keyword'
+   let st
+   try {
+diff --git a/dashboard.html b/dashboard.html
+index 201880b..055a69e 100644
+--- a/dashboard.html
++++ b/dashboard.html
+@@ -328,8 +328,8 @@
+     if (!recent.length) list.appendChild(el('li', 'empty', '还没有采集记录'))
+     for (const n of recent.slice(0, 12)) {
+       const li = el('li')
+-      const name = (n.note_id || '') + '.png'
+-      if (shotNames.has(name)) {
++      const name = ['.jpg', '.jpeg', '.png'].map((x) => (n.note_id || '') + x).find((x) => shotNames.has(x))
++      if (name) {
+         const img = el('img', 'thumb')
+         img.src = shotUrl(name); img.alt = ''; img.loading = 'lazy'
+         img.onerror = () => img.replaceWith(el('div', 'thumb blank', '无图'))
+diff --git a/docs/backlog.md b/docs/backlog.md
+index 5a23327..80eb37d 100644
+--- a/docs/backlog.md
++++ b/docs/backlog.md
+@@ -36,8 +36,8 @@
+ 
+ ## 三、可以直接做（无需外部确认）
+ 
+-### 3. 截图体积
+-- 现状：全页 PNG，单张约 0.5~1MB。
++### 3. 截图体积（已改：默认 JPEG q80，`XHS_SHOT_FORMAT` / `XHS_SHOT_QUALITY` 可调）
++- 原状：全页 PNG，单张约 0.5~1MB。
+ - 建议：改 JPEG q80 或只截笔记弹窗，能降到约 1/5。
+ - 注意：工作台只存路径、不读文件（文档已确认），改格式不影响对接。
+ 
+diff --git a/docs/data-channel.md b/docs/data-channel.md
+index dd55a43..ccc5773 100644
+--- a/docs/data-channel.md
++++ b/docs/data-channel.md
+@@ -49,7 +49,7 @@ ego-script.mjs                        extractor.js                    collector.
+ 
+ ### 失败现场截图
+ 
+-被拦截（`block()`）时，脚本先把当前页面存到 `shots/errors/<时间戳>_<原因>.png` 再回报。
++被拦截（`block()`）时，脚本先把当前页面存到 `shots/errors/<时间戳>_<原因>.jpg`（`XHS_SHOT_FORMAT=png` 时是 .png） 再回报。
+ 成功时的截图按 `note_id` 命名，同一篇重试会覆盖，不再堆重复文件。
+ 
+ ### 回传节奏
+diff --git a/ego-script.mjs b/ego-script.mjs
+index 9d02d53..8014d9c 100644
+--- a/ego-script.mjs
++++ b/ego-script.mjs
+@@ -61,6 +61,24 @@ try { task = await taskSpace(SPACE) } catch (e) {
+ }
+ const page = task.page('p1')
+ 
++// 截图：默认存 JPEG（体积约 PNG 的 1/5）。浏览器不支持 type/quality 参数而写出了 PNG 时，按文件头把扩展名改成 .png，
++// 不留下「扩展名和内容对不上」的文件；JPEG 截图失败就退回 PNG 再试一次。返回最终的文件路径。
++const takeShot = async (base) => {
++  if (P.shotType === 'png') { const f = base + '.png'; await page.screenshot({ path: f }); return f }
++  const jpg = base + '.jpg'
++  try {
++    await page.screenshot({ path: jpg, type: 'jpeg', quality: P.shotQuality || 80 })
++    const head = fs.readFileSync(jpg).subarray(0, 4)
++    if (head[0] === 0x89 && head[1] === 0x50) { const png = base + '.png'; fs.renameSync(jpg, png); return png }
++    return jpg
++  } catch (e) {
++    try { fs.rmSync(jpg, { force: true }) } catch {}
++    const png = base + '.png'
++    await page.screenshot({ path: png })
++    return png
++  }
++}
++
+ const block = async (reason, extra = {}) => {
+   beat('blocked', { reason })
+   const url = await page.url().catch(() => '')
+@@ -69,7 +87,7 @@ const block = async (reason, extra = {}) => {
+     try {
+       const dir = P.shotDir + P.sep + 'errors'
+       fs.mkdirSync(dir, { recursive: true })
+-      await page.screenshot({ path: dir + P.sep + Date.now() + '_' + reason + '.png' })
++      await takeShot(dir + P.sep + Date.now() + '_' + reason)
+     } catch {}
+   }
+   out({ type: 'blocked', reason, ...extra, url, inner_width: await page.evaluate(() => window.innerWidth).catch(() => null) })
+@@ -678,8 +696,7 @@ run: {
+     // 截图：按 note_id 命名（同一篇重试会覆盖，不再堆出重复文件）；关掉截图时只留路径为空
+     note.screenshot_path = ''
+     if (P.shots) {
+-      note.screenshot_path = P.shotDir + P.sep + next.id + '.png'
+-      await page.screenshot({ path: note.screenshot_path }).catch((e) => { note.screenshot_path = ''; note.screenshot_error = String(e) })
++      await takeShot(P.shotDir + P.sep + next.id).then((f) => { note.screenshot_path = f }).catch((e) => { note.screenshot_path = ''; note.screenshot_error = String(e) })
+     }
+     speed = P.readMin + Math.random() * (P.readMax - P.readMin)   // 每条笔记换一个阅读速度
+     const chars = (note.title + note.content).length
+diff --git a/extractor.js b/extractor.js
+index 6af992d..1a52390 100644
+--- a/extractor.js
++++ b/extractor.js
+@@ -147,7 +147,7 @@ async function runStub(p, onMsg) {
+       note_id: id, title: `测试笔记 ${i + 1}`, content: `来自 ${p.mode}:${p.query}`, tags: ['测试'], author: '测试博主',
+       author_url: 'https://www.xiaohongshu.com/user/profile/stub', likes: '1.2万', collects: '356', comments: '评论',
+       images: [`https://sns-webpic-qc.xhscdn.com/${id}.jpg`], cover: '', type: 'normal',
+-      published_at: '编辑于 3天前 上海', url: `https://www.xiaohongshu.com/explore/${id}?xsec_token=abc`, screenshot_path: `${p.shotDir}${p.sep}${id}.png`,
++      published_at: '编辑于 3天前 上海', url: `https://www.xiaohongshu.com/explore/${id}?xsec_token=abc`, screenshot_path: `${p.shotDir}${p.sep}${id}.${p.shotType === 'png' ? 'png' : 'jpg'}`,
+     } })
+     st.count++
+   }
+diff --git a/test/fake-ego-browser.js b/test/fake-ego-browser.js
+index d44e08e..10ef942 100755
+--- a/test/fake-ego-browser.js
++++ b/test/fake-ego-browser.js
+@@ -108,7 +108,15 @@ let src = ''; process.stdin.on('data', d => src += d).on('end', async () => {
+     waitForTimeout: async (ms) => { if (process.env.FAKE_SLOW) await new Promise((r) => setTimeout(r, ms / +process.env.FAKE_SLOW)); if (ms > 60000) fail('ms too big ' + ms); if (lastWasType) T.typeGaps.push(ms); lastWasType = false; T.waits.push(ms) },
+     evaluate: async (fn, arg) => { if (typeof fn !== 'function') throw new Error('bad evaluate'); return JSON.parse(JSON.stringify((await fn(arg)) ?? null)) },
+     url: async () => url, title: async () => 'x', fill: async () => fail('fill used'),
+-    screenshot: async (o) => { if (!o || !path.isAbsolute(o.path)) fail('screenshot path not absolute'); fs.writeFileSync(o.path, 'png'); T.shots.push(o.path) },
++    screenshot: async (o) => {
++      if (!o || !path.isAbsolute(o.path)) fail('screenshot path not absolute')
++      const wantJpeg = o.type === 'jpeg'
++      if (wantJpeg && process.env.FAKE_SHOT_FAIL_JPEG) throw new Error('jpeg not supported')   // 模拟浏览器不支持 JPEG 截图
++      // FAKE_SHOT_IGNORE_TYPE：模拟浏览器忽略 type 参数，要 JPEG 却写出了 PNG
++      const jpeg = wantJpeg && !process.env.FAKE_SHOT_IGNORE_TYPE
++      fs.writeFileSync(o.path, jpeg ? Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]) : Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
++      T.shots.push(o.path)
++    },
+     keyboard: {
+       type: async (t) => { if ([...t].length !== 1) fail('type not per-char'); if (!focused) fail('typing without focus'); const ae = D.activeElement; if (ae && /INPUT|TEXTAREA/.test(ae.tagName)) { ae.value += t; typed = ae.value } else typed += t; lastWasType = true },
+       press: async (k) => { if (k === 'Backspace' && focused) { const ae = D.activeElement; if (ae && /INPUT|TEXTAREA/.test(ae.tagName)) { ae.value = [...ae.value].slice(0, -1).join(''); typed = ae.value } else typed = [...typed].slice(0, -1).join('') } if (k === 'Enter' && focused) { focused = false; search(typed) } if (k === 'Escape') closeModal() },
+diff --git a/test/run-tests.sh b/test/run-tests.sh
+index 33706e3..e96bfe0 100755
+--- a/test/run-tests.sh
++++ b/test/run-tests.sh
+@@ -16,6 +16,20 @@ t ok blogger 爱做梦的小米哥爱创业 3 0 2;  t wrongprofile blogger 爱
+ FAKE_OUT=silent FAKE_HOLD=1500 FAKE_MODE=ok FAKE_Q=创业 node collector.js --keyword 创业 --limit 3 >/tmp/xhs-t.out 2>/tmp/xhs-t.err; c=$?; n=$(grep -c '"note_id"' /tmp/xhs-t.out)
+ if [ $c = 0 ] && [ $n = 3 ] && ls "$HOME/xhs-collector/outbox/"*.jsonl >/dev/null 2>&1; then echo "PASS silent-stdout exit=$c notes=$n"; else echo "FAIL silent-stdout exit=$c notes=$n"; tail -5 /tmp/xhs-t.err; fi
+ 
++# 截图格式：默认 JPEG；XHS_SHOT_FORMAT=png 换回 PNG；浏览器忽略 type 参数写出 PNG 时按文件头改成 .png；JPEG 失败退回 PNG
++shot_test() { # 名称 期望扩展名 期望文件头(十六进制前两字节) 环境变量...
++  name=$1; ext=$2; magic=$3; shift 3
++  H2=$(mktemp -d)
++  env "$@" HOME="$H2" FAKE_MODE=ok FAKE_Q=创业 node collector.js --keyword 创业 --limit 2 >/tmp/xhs-t.out 2>/tmp/xhs-t.err; c=$?
++  f=$(ls "$H2/xhs-collector/shots/"*.$ext 2>/dev/null | head -1)
++  other=$(ls "$H2/xhs-collector/shots/" 2>/dev/null | grep -v "\.$ext$" | head -1)
++  if [ $c = 0 ] && [ -n "$f" ] && [ -z "$other" ] && [ "$(head -c 2 "$f" | od -An -tx1 | tr -d ' \n')" = "$magic" ] && grep -q "\"screenshot_path\": \".*\.$ext\"" /tmp/xhs-t.out; then echo "PASS shot-$name exit=$c file=$(basename "$f")"; else echo "FAIL shot-$name exit=$c file=$f other=$other"; tail -3 /tmp/xhs-t.err; fi
++}
++shot_test jpeg-default jpg ffd8
++shot_test png-by-env png 8950 XHS_SHOT_FORMAT=png
++shot_test ignore-type-fixed png 8950 FAKE_SHOT_IGNORE_TYPE=1
++shot_test jpeg-fails-fallback png 8950 FAKE_SHOT_FAIL_JPEG=1
++
+ # 心跳：卡住时 error 里要带上最后停在哪一步（XHS_IDLE_TIMEOUT=3 秒，FAKE_STALL 让脚本一直不推进）
+ FAKE_STALL=1 FAKE_MODE=ok FAKE_Q=创业 XHS_IDLE_TIMEOUT=3 node collector.js --keyword 创业 --limit 3 >/tmp/xhs-t.out 2>/tmp/xhs-t.err; c=$?
+ if [ $c = 1 ] && grep -q '采集卡住' /tmp/xhs-t.err; then echo "PASS idle-timeout exit=$c"; else echo "FAIL idle-timeout exit=$c"; tail -5 /tmp/xhs-t.err; fi

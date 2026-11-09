@@ -1,0 +1,128 @@
+"""产品:用户上传的产品图和资料。一键批量生成时,产品资料当作「作者提供的真实事实」写进笔记,
+产品图当作参考图,保证配图里的产品和实物一致。"""
+import base64
+import json
+import re
+import secrets
+from pathlib import Path
+
+from . import mirror
+from .db import q_all, q_exec, q_one
+
+DIR = Path(__file__).resolve().parent.parent / "data" / "products"
+DIR.mkdir(parents=True, exist_ok=True)
+MAX_IMAGES, MAX_BYTES = 9, 4 * 1024 * 1024
+DATA_URL = re.compile(r"^data:image/[a-zA-Z0-9.+-]+;base64,(.+)$", re.S)
+
+
+def decode_images(data_urls: list[str]) -> list[tuple[bytes, str]]:
+    """校验并解码上传的图片(页面已压缩成 JPEG 的 data URL)。按文件头判断真实类型,不收 SVG。"""
+    if not data_urls:
+        raise ValueError("请至少上传一张产品图")
+    if len(data_urls) > MAX_IMAGES:
+        raise ValueError(f"最多上传 {MAX_IMAGES} 张产品图")
+    out = []
+    for i, u in enumerate(data_urls, 1):
+        m = DATA_URL.match(u or "")
+        if not m:
+            raise ValueError(f"第 {i} 张不是图片")
+        try:
+            b = base64.b64decode(m.group(1), validate=True)
+        except ValueError:
+            raise ValueError(f"第 {i} 张图片数据损坏")
+        ext = mirror.sniff(b)
+        if not ext:
+            raise ValueError(f"第 {i} 张不是支持的图片格式(jpg / png / webp)")
+        if len(b) > MAX_BYTES:
+            raise ValueError(f"第 {i} 张图片太大(超过 {MAX_BYTES // 1024 // 1024}MB)")
+        out.append((b, ext))
+    return out
+
+
+def create(name: str, data_urls: list[str], price: str = "", selling_points: str = "", audience: str = "", forbid: str = "") -> int:
+    name = name.strip()[:40]
+    if not name:
+        raise ValueError("请填写产品名称")
+    imgs = decode_images(data_urls)
+    pid = q_exec("INSERT INTO products(name,price,selling_points,audience,forbid) VALUES(?,?,?,?,?)",
+                 name, price.strip()[:40], selling_points.strip()[:500], audience.strip()[:100], forbid.strip()[:200]).lastrowid
+    names = []
+    for b, ext in imgs:
+        n = f"p{pid}_{secrets.token_hex(4)}.{ext}"
+        (DIR / n).write_bytes(b)
+        names.append(n)
+    q_exec("UPDATE products SET images=? WHERE id=?", json.dumps(names), pid)
+    return pid
+
+
+def update(pid: int, name: str, price: str = "", selling_points: str = "", audience: str = "", forbid: str = "",
+           keep: list[str] | None = None, add: list[str] | None = None):
+    """改产品资料和图片。keep:保留的原图文件名;add:新上传的图(data URL)。至少留一张图。
+    换了图就清掉上次的识别结果(下次生成会重新识别)。"""
+    p = get(pid)
+    if not p:
+        raise ValueError("找不到这个产品")
+    name = name.strip()[:40]
+    if not name:
+        raise ValueError("请填写产品名称")
+    kept = [i for i in p["images"] if i in set(keep or [])]
+    new = decode_images(add) if add else []
+    if not kept and not new:
+        raise ValueError("至少保留一张产品图")
+    if len(kept) + len(new) > MAX_IMAGES:
+        raise ValueError(f"最多 {MAX_IMAGES} 张产品图")
+    names = list(kept)
+    for b, ext in new:
+        n = f"p{pid}_{secrets.token_hex(4)}.{ext}"
+        (DIR / n).write_bytes(b)
+        names.append(n)
+    for old in p["images"]:
+        if old not in kept:
+            (DIR / old).unlink(missing_ok=True)
+    changed = names != p["images"]
+    q_exec("UPDATE products SET name=?, price=?, selling_points=?, audience=?, forbid=?, images=?" + (", profile='{}'" if changed else "") + " WHERE id=?",
+           name, price.strip()[:40], selling_points.strip()[:500], audience.strip()[:100], forbid.strip()[:200], json.dumps(names), pid)
+
+
+def get(pid: int | None) -> dict | None:
+    return q_one("SELECT * FROM products WHERE id=?", pid) if pid else None
+
+
+def paths(p: dict, n: int | None = None) -> list[Path]:
+    out = [DIR / i for i in p.get("images") or [] if (DIR / i).is_file()]
+    return out[:n] if n else out
+
+
+def save_profile(pid: int, profile: dict):
+    q_exec("UPDATE products SET profile=?, category=? WHERE id=?", json.dumps(profile, ensure_ascii=False), profile.get("category") or "", pid)
+
+
+def listing() -> list[dict]:
+    return [{"id": p["id"], "name": p["name"], "category": p["category"], "price": p["price"],
+             "selling_points": p["selling_points"], "audience": p["audience"], "forbid": p["forbid"],
+             "images": [f"/product_images/{i}" for i in p["images"]], "created": p["created"]}
+            for p in q_all("SELECT * FROM products ORDER BY id DESC")]
+
+
+def delete(pid: int):
+    p = get(pid)
+    if p:
+        for f in paths(p):
+            f.unlink(missing_ok=True)
+        q_exec("DELETE FROM products WHERE id=?", pid)
+
+
+def block(p: dict | None) -> str:
+    """写作和规划角度时附带的产品资料。"""
+    if not p:
+        return ""
+    prof = p.get("profile") or {}
+    rows = [("产品名", p["name"]), ("品类", p.get("category") or prof.get("category")), ("卖点(作者提供)", p.get("selling_points")),
+            ("价格", p.get("price")), ("适合人群", p.get("audience")), ("外观(从产品图识别)", prof.get("appearance")),
+            ("包装上的字", prof.get("package_text")), ("可以带出产品的场景", "、".join(prof.get("scenes") or []))]
+    lines = [f"- {k}:{v}" for k, v in rows if v]
+    forbid = f"\n- 不能出现的说法:{p['forbid']}" if p.get("forbid") else ""
+    return ("\n\n【产品资料】以下是作者提供的真实产品资料,可以直接写进笔记;不要超出这些资料编造功效、成分、销量、价格。\n"
+            + "\n".join(lines) + forbid +
+            "\n要求:产品要自然植入——先讲读者关心的场景或问题,再带出产品,不要写成硬广;购买渠道只能说本平台内;"
+            "配图提示词里用「图中的产品」指代它,只写场景和构图,不要自己描述产品外观(以参考图为准)。")

@@ -1,0 +1,196 @@
+"""Live 图 Mac 端:从工作台领任务 → 渲染推近动画 → 用 makelive 打成 .pvt 包 → 回传工作台。
+
+在 MacBook 上跑(AirDrop 把 .pvt 传到 iPhone,「照片」里就是一张会动的 Live 图):
+    pip3 install -r requirements-mac.txt
+    python3 mac_worker.py --server http://工作台地址:18765 --token 采集端Token
+
+不连工作台、只想把一个文件夹里的图批量做成 Live 图:
+    python3 mac_worker.py --local ~/Pictures/待做 --out ~/LivePhotos
+
+常用参数:--name 这台电脑的名字(工作台上显示)  --out 成品保存目录(默认 ~/LivePhotos)
+          --once 领完当前任务就退出  --no-pvt 不调用 makelive(只在没有 macOS 时测试流程用,做出来的包 iPhone 认不了)
+只用标准库发请求;图片处理和视频编码复用同目录的 make_live.py。"""
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import platform
+import shutil
+import socket
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import make_live  # noqa: E402
+
+IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".bmp"}
+
+
+# ---------------- 一张图 → .pvt 包 ----------------
+def make_pvt(src: Path, out: Path, slug: str, opts: dict, use_makelive: bool = True) -> Path:
+    """渲染 JPG + MOV,再打成 out/IMG_{slug}_LIVE.pvt(文件夹,双击导入「照片」)。"""
+    with tempfile.TemporaryDirectory() as td:
+        jpg, mov, asset_id = make_live.build_pair(src, Path(td), slug, opts.get("seconds", 5), 30, opts.get("zoom", 1.08),
+                                                  opts.get("focus_y", 0.35), opts.get("fit", "crop"))
+        out.mkdir(parents=True, exist_ok=True)
+        pvt = out / f"{jpg.stem}.pvt"
+        if pvt.exists():
+            shutil.rmtree(pvt)
+        if use_makelive:
+            try:
+                from makelive import save_live_photo_pair_as_pvt
+            except ImportError as e:
+                raise RuntimeError("没有安装 makelive(只能在 macOS 上用):pip3 install makelive") from e
+            _, p = save_live_photo_pair_as_pvt(jpg, mov, out)
+            pvt = Path(p)
+        else:   # 没有 macOS 时的测试流程:只把两个文件放进文件夹,没有 makelive 加的系统级信息
+            pvt.mkdir()
+            shutil.copy(jpg, pvt)
+            shutil.copy(mov, pvt)
+            (pvt / "metadata.plist").write_text("<plist><!-- 未经 makelive 处理,仅用于流程测试 --></plist>", encoding="utf-8")
+    return pvt
+
+
+def zip_dir(d: Path) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:   # MOV 已经压缩过,不再压
+        for f in sorted(d.rglob("*")):
+            if f.is_file():
+                z.write(f, f"{d.name}/{f.relative_to(d).as_posix()}")
+    return buf.getvalue()
+
+
+# ---------------- 工作台接口 ----------------
+class Api:
+    def __init__(self, server: str, token: str, name: str):
+        self.base, self.token, self.name = server.rstrip("/"), token, name
+
+    def call(self, method: str, path: str, body: bytes | None = None, ctype: str = "application/json", timeout: int = 60) -> bytes:
+        sep = "&" if "?" in path else "?"
+        req = urllib.request.Request(f"{self.base}{path}{sep}worker={urllib.parse.quote(self.name)}", data=body, method=method,
+                                     headers={"Authorization": f"Bearer {self.token}", "Content-Type": ctype})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            msg = e.read().decode("utf-8", "replace")[:200]
+            raise RuntimeError(f"HTTP {e.code}:{msg}") from None
+
+    def ping(self):
+        return json.loads(self.call("GET", "/api/live/worker/ping"))
+
+    def claim(self):
+        return json.loads(self.call("GET", "/api/live/worker/claim")).get("job")
+
+    def source(self, job) -> bytes:
+        return self.call("GET", job["source"].split("?")[0], timeout=120)
+
+    def upload(self, job_id: int, data: bytes):
+        self.call("PUT", f"/api/live/worker/jobs/{job_id}/result", data, "application/zip", timeout=300)
+
+    def fail(self, job_id: int, error: str):
+        try:
+            self.call("POST", f"/api/live/worker/jobs/{job_id}/fail", json.dumps({"error": error}).encode())
+        except Exception as e:   # 回报失败本身失败了:工作台会在超时后自动退回任务,这里只记一下
+            print(f"   (没能把失败原因告诉工作台:{e})")
+
+
+def run_job(api: Api, job: dict, out: Path, use_makelive: bool):
+    t0 = time.time()
+    print(f"[任务 {job['id']}] {job.get('name', '')}  参数 {job['opts']}")
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / (Path(job["image"]).name or "src.png")
+        src.write_bytes(api.source(job))
+        pvt = make_pvt(src, out, f"L{job['id']}", job["opts"], use_makelive)
+    api.upload(job["id"], zip_dir(pvt))
+    print(f"   完成 {time.time() - t0:.0f} 秒 → {pvt}")
+
+
+def serve(a):
+    api = Api(a.server, a.token, a.name)
+    try:
+        info = api.ping()
+    except Exception as e:
+        raise SystemExit(f"连不上工作台({a.server}):{e}\n检查:地址是不是电脑的局域网 IP(不是 127.0.0.1)、端口、Token(管理端「接口配置」里的采集端 Token)")
+    print(f"已连接工作台,待做 {info['pending']} 个。Ctrl+C 退出。成品保存在 {a.out}")
+    idle_logged = False
+    while True:
+        try:
+            job = api.claim()
+        except Exception as e:
+            print(f"领任务失败:{e},{a.interval * 3} 秒后重试")
+            time.sleep(a.interval * 3)
+            continue
+        if not job:
+            if a.once:
+                print("没有待做的任务")
+                return
+            if not idle_logged:
+                print("暂时没有任务,等待中…")
+                idle_logged = True
+            time.sleep(a.interval)
+            continue
+        idle_logged = False
+        try:
+            run_job(api, job, a.out, not a.no_pvt)
+        except Exception as e:
+            print(f"   失败:{e}")
+            api.fail(job["id"], f"{type(e).__name__}: {e}")
+        if a.once:
+            return
+
+
+def local(a):
+    src = Path(a.local).expanduser()
+    files = sorted(p for p in (src.iterdir() if src.is_dir() else [src]) if p.suffix.lower() in IMG_EXT)
+    if not files:
+        raise SystemExit(f"{src} 里没有图片({', '.join(sorted(IMG_EXT))})")
+    opts = {"seconds": a.seconds, "zoom": a.zoom, "focus_y": a.focus_y, "fit": a.fit}
+    ok = 0
+    for i, f in enumerate(files, 1):
+        print(f"[{i}/{len(files)}] {f.name}")
+        try:
+            pvt = make_pvt(f, a.out, f"{f.stem}", opts, not a.no_pvt)
+            print(f"   → {pvt}")
+            ok += 1
+        except Exception as e:
+            print(f"   失败:{e}")
+    print(f"完成 {ok}/{len(files)},成品在 {a.out}(.pvt 双击导入「照片」,或 AirDrop 到 iPhone)")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Live 图 Mac 端")
+    ap.add_argument("--server", help="工作台地址,如 http://192.168.1.100:18765")
+    ap.add_argument("--token", help="采集端 Token(管理端「接口配置」里复制)")
+    ap.add_argument("--local", metavar="目录或图片", help="本地模式:不连工作台,把这个目录(或单张图)做成 Live 图")
+    ap.add_argument("--name", default=socket.gethostname().split(".")[0], help="这台电脑的名字(工作台上显示)")
+    ap.add_argument("--out", type=lambda s: Path(s).expanduser(), default=Path("~/LivePhotos").expanduser(), help="成品保存目录")
+    ap.add_argument("--interval", type=int, default=5, help="没有任务时每隔几秒问一次")
+    ap.add_argument("--once", action="store_true", help="只做一个任务就退出")
+    ap.add_argument("--no-pvt", action="store_true", help="不调用 makelive(非 macOS 测试用)")
+    ap.add_argument("--seconds", type=float, default=5)
+    ap.add_argument("--zoom", type=float, default=1.08)
+    ap.add_argument("--focus-y", type=float, default=0.35)
+    ap.add_argument("--fit", choices=("crop", "blur"), default="crop")
+    a = ap.parse_args()
+    if platform.system() != "Darwin" and not a.no_pvt:
+        raise SystemExit("makelive 只能在 macOS 上用。想在别的系统上测试流程,加 --no-pvt(做出的包 iPhone 认不了)。")
+    if a.local:
+        return local(a)
+    if not (a.server and a.token):
+        ap.error("要么 --server 和 --token 一起给,要么用 --local 本地模式")
+    try:
+        serve(a)
+    except KeyboardInterrupt:
+        print("\n已退出")
+
+
+if __name__ == "__main__":
+    main()

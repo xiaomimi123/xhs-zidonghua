@@ -1,0 +1,8 @@
+{
+  "_说明": "每项:url=页面地址(可用 {period} {category}),match=只采用接口地址包含这些片段的返回(可省略)。下面是按创作服务平台推测的地址,hot_* 的地址我不确定,请在浏览器里打开对应榜单页后把地址填进来,再用 --probe 核对。",
+  "account": {"url": "https://creator.xiaohongshu.com/statistics/account/v2"},
+  "notes": {"url": "https://creator.xiaohongshu.com/statistics/data-analysis"},
+  "hot_notes": {"url": ""},
+  "hot_topics": {"url": ""},
+  "hot_keywords": {"url": ""}
+}

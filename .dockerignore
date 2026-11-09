@@ -1,0 +1,12 @@
+.venv
+data
+**/__pycache__
+*.pyc
+.env
+.git
+.claude
+**/.venv
+
+tools/livephoto
+汇报材料
+collector

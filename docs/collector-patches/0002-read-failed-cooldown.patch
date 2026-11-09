@@ -1,0 +1,103 @@
+diff --git a/collector.js b/collector.js
+index bde2677..2fe6c77 100644
+--- a/collector.js
++++ b/collector.js
+@@ -113,7 +113,7 @@ const REASONS = {
+ const SORT_TXT = { applied: '已按最多点赞排序', not_applied: '没找到排序选项，按默认排序继续' }
+ const SKIP_TXT = { no_modal: '弹窗没打开', id_mismatch: '弹窗不是点的这一篇', empty_title: '标题为空', empty_content: '正文和配图都为空', empty_likes: '点赞数没读到', stale_previous: '弹窗还是上一篇的内容', other_author: '不是该博主的笔记', card_not_clickable: '卡片点不到', too_old: '发布时间超出任务范围' }
+ const IDLE_MS = num(process.env.XHS_IDLE_TIMEOUT, 180) * 1000   // 这么久没有任何消息/心跳/新截图就当卡死（有心跳后 3 分钟足够）
+-const BEAT_TXT = { goto_home: '打开首页', search: '输入关键词搜索', ai_close: '关闭点点面板', sort: '设置排序筛选', blogger: '进入博主主页', card: '逐条点开笔记', dwell: '阅读笔记中', finished: '收尾', blocked: '被拦截' }
++const BEAT_TXT = { cooldown: '连续读取失败，冷却等待中', goto_home: '打开首页', search: '输入关键词搜索', ai_close: '关闭点点面板', sort: '设置排序筛选', blogger: '进入博主主页', card: '逐条点开笔记', dwell: '阅读笔记中', finished: '收尾', blocked: '被拦截' }
+ let lastPhase = ''   // 最近一次心跳阶段（卡死时报给用户，方便定位）
+ 
+ // 收尾时要把哪个任务回传 error（被 Ctrl+C / kill / 未捕获异常打断时用）
+@@ -202,6 +202,7 @@ async function collect(mode, query, limit, onNote, signal, o = {}) {
+       if (msg.type === 'info') {
+         if (msg.ai_panel) log(`  点点 AI 面板：${{ closed: '已点 × 关闭', absent: '没出现', close_not_found: '没找到 × 按钮，跳过继续', close_blocked: '× 落点不安全，没点，继续', clicked_still_visible: '点了 ×，但面板还在，继续' }[msg.ai_panel] || msg.ai_panel}`)
+         if (msg.sort) log(`  排序：${SORT_TXT[msg.sort] || msg.sort}${msg.reason ? '（' + msg.reason + '）' : ''}；只看图文：${msg.note_type === 'applied' ? '已选' : '没选上（遇到视频会跳过）'}`)
++        if (msg.cooldown) log(`  ⏸ 连续读取失败，歇 30~90 秒再继续（第 ${msg.cooldown}/2 次冷却）：${Object.entries(msg.reasons || {}).map(([k, v]) => (SKIP_TXT[k] || k) + ' ×' + v).join('、')}`)
+         if (msg.skipped_video !== undefined) log(`  跳过视频笔记 ${msg.skipped_video}`)
+         if (msg.known_check) log(`  ↺ 本屏 ${msg.asked} 篇里 ${msg.known} 篇工作台已有，跳过详情页`)
+         if (msg.known_retry) log(`  ⚠ 查询已有笔记失败（${msg.known_retry}），重试一次`)
+@@ -242,8 +243,13 @@ async function collect(mode, query, limit, onNote, signal, o = {}) {
+   if (st && st.shotError && SHOTS) log(`  ⚠ 截图目录读不了（${st.shotError}），卡死检测只靠消息和心跳`)
+   if (blocked) {
+     const r = REASONS[blocked.reason] || { error: `被拦截：${blocked.reason}` }
+-    error = r.error
+-    log(`  ⛔ ${r.error}（${typeof blocked.url === 'string' ? blocked.url : ''}）${r.hint ? '。' + r.hint : ''}`)
++    if (blocked.reason === 'read_failed' && notes.length) {
++      // 已经采到并回传了一部分：不把整个任务标成失败，按实际条数正常结束，剩下的下次再采（已有的笔记会被跳过）
++      log(`  ⚠ 连续读取失败，已停止；先把已采到的 ${notes.length} 条交给工作台，任务按实际条数结束`)
++    } else {
++      error = r.error
++      log(`  ⛔ ${r.error}（${typeof blocked.url === 'string' ? blocked.url : ''}）${r.hint ? '。' + r.hint : ''}`)
++    }
+   } else if (state.stopping) error = '采集被中断'
+   else if (st.aborted) error = ''                                      // 任务被删/401，调用方处理
+   else if (st.timedOut) error = `采集卡住（${IDLE_MS >= 60000 ? Math.round(IDLE_MS / 60000) + ' 分钟' : Math.round(IDLE_MS / 1000) + ' 秒'}没有进展${lastPhase ? '，最后停在：' + lastPhase : ''}），已中止`
+@@ -258,6 +264,8 @@ async function collect(mode, query, limit, onNote, signal, o = {}) {
+     ? `最近 ${p.maxAgeDays} 天没有符合条件的笔记（${done.skipped_old} 篇超出时间范围）`
+     : '没有找到符合条件的笔记'
+   else if (notes.length < limit) log(`  ℹ 只找到 ${notes.length} 条（要求 ${limit} 条）${done && done.fails ? `，${done.fails} 篇读取失败已跳过` : ''}${done && done.skipped_old ? `，${done.skipped_old} 篇发布时间超出范围` : ''}${done && done.known_skipped ? `，${done.known_skipped} 篇工作台已有` : ''}${rejected ? `，${rejected} 篇校验不通过` : ''}`)
++  const tally = (done && done.skip_reasons) || (blocked && blocked.skip_reasons)
++  if (tally && Object.keys(tally).length) log(`  ℹ 跳过原因统计：${Object.entries(tally).map(([k, v]) => (SKIP_TXT[k] || k) + ' ×' + v).join('、')}`)
+   if (done && done.capped && notes.length < limit) log(`  ℹ 已扫到本次任务上限（看过 ${done.scanned} 张、点开/跳过 ${done.tried} 张）仍未凑够；需要更深可调大 XHS_MAX_SCAN`)
+   if (error && !blocked) log(`  ⛔ ${error}`)
+   return { notes, blocked, error, stop: !!(blocked && (REASONS[blocked.reason] || {}).stop), retry: !!(blocked && (REASONS[blocked.reason] || {}).retry) }
+diff --git a/ego-script.mjs b/ego-script.mjs
+index 43a1bd7..54e397c 100644
+--- a/ego-script.mjs
++++ b/ego-script.mjs
+@@ -612,14 +612,22 @@ run: {
+   await page.waitForSelector(CARD_SEL.join(', '), { state: 'visible', timeout: 15000 }).catch(() => {})
+   const tried = new Set()          // 点过/跳过的卡片 id（按 id 去重，不怕列表重排）
+   const known = new Set(), checked = new Set(), scanned = new Set()   // v1.4：工作台已有 / 问过 / 扫过的卡片 id
+-  let got = 0, stale = 0, fails = 0, failRow = 0, blockedCards = 0, prev = null, skippedVideo = 0, skippedOld = 0, knownSkipped = 0, aborted = false
++  let got = 0, stale = 0, fails = 0, failRow = 0, coolRounds = 0, skipTally = {}, blockedCards = 0, prev = null, skippedVideo = 0, skippedOld = 0, knownSkipped = 0, aborted = false
+   const MAX_TRIES = P.maxScan > 0 ? P.maxScan : Math.max(P.limit * 8, 60)   // 最多点开/跳过多少张卡片（v1.4 前是 limit×3+30，老笔记多时不够深）
+   const MAX_SCAN = P.skipKnown ? (P.maxScan > 0 ? P.maxScan : Math.max(P.limit * 5, 30)) : Infinity   // 跳过已有笔记时最多点开/处理多少张卡片（工作台已有的不占额度；翻屏上限另由 stale=5 控制）
+   let scanStopped = false
+-  const skip = (id, why, extra = {}) => { fails++; failRow++; out({ type: 'info', skipped: why, note_id: id, ...extra }) }
++  const skip = (id, why, extra = {}) => { fails++; failRow++; skipTally[why] = (skipTally[why] || 0) + 1; out({ type: 'info', skipped: why, note_id: id, ...extra }) }
+   while (got < P.limit && stale < (P.skipKnown ? 5 : 8) && tried.size < MAX_TRIES) {
+     beat('card', { got, fails, tried: tried.size, known: known.size })
+-    if (failRow >= 5) { await block('read_failed', { fails }); aborted = true; break }
++    // 连续 3 篇读取失败多半是页面/账号被临时限流:歇 30~90 秒再继续，最多冷却 2 轮，仍然连续失败才报 read_failed
++    if (failRow >= 3) {
++      if (coolRounds >= 2) { await block('read_failed', { fails, skip_reasons: skipTally }); aborted = true; break }
++      coolRounds++; failRow = 0
++      out({ type: 'info', cooldown: coolRounds, reasons: skipTally })
++      beat('cooldown', { got, fails })
++      await page.waitForTimeout(rnd(30000, 90000))
++      continue
++    }
+     if (!(await assertResults('before_card'))) { aborted = true; break }
+     const cards = await listCards()
+     if (!tried.size && !cards.length) { await block((await checkBlock()) || 'empty'); aborted = true; break }
+@@ -671,7 +679,7 @@ run: {
+       else if (!n.title) why = 'empty_title'
+       else if (!n.content && !n.images.length) why = 'empty_content'   // 纯图片笔记正文可以为空，只要读到配图
+       else if (!n.likes) why = 'empty_likes'
+-      else if (prev && n.title === prev.title && n.content === prev.content) why = 'stale_previous'
++      else if (prev && n.title === prev.title && n.content === prev.content && (!uid || uid === prev.note_id)) why = 'stale_previous'
+       else if (BLOG && n.author_url && !new RegExp('/user/profile/' + UID + '(?:[/?#]|$)').test(n.author_url)) why = 'other_author'
+       else { why = ''; note = n; break }
+     }
+@@ -699,7 +707,7 @@ run: {
+       if (!(await closeModal())) { await block('modal_stuck'); aborted = true; break }
+       continue
+     }
+-    failRow = 0
++    failRow = 0; coolRounds = 0
+     prev = note
+     // 截图：按 note_id 命名（同一篇重试会覆盖，不再堆出重复文件）；关掉截图时只留路径为空
+     note.screenshot_path = ''
+@@ -727,7 +735,7 @@ run: {
+     }
+     if (!(await closeModal())) { await block('modal_stuck'); aborted = true; break }
+   }
+-  if (!aborted) out({ type: 'done', got, fails, skipped_video: skippedVideo, skipped_old: skippedOld, known_skipped: knownSkipped, tried: tried.size, scanned: scanned.size, capped: got < P.limit && (scanStopped || tried.size >= MAX_TRIES), limit: P.limit })
++  if (!aborted) out({ type: 'done', got, fails, skipped_video: skippedVideo, skipped_old: skippedOld, known_skipped: knownSkipped, skip_reasons: skipTally, tried: tried.size, scanned: scanned.size, capped: got < P.limit && (scanStopped || tried.size >= MAX_TRIES), limit: P.limit })
+   beat('finished', { got })
+ }
+ await task.finish({ keep: [] }).catch(() => {})
