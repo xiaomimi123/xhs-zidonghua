@@ -204,7 +204,7 @@ def build_pair(src: Path, out: Path, slug: str, seconds: float = 5, fps: int = 3
 
 
 def build_pair_from_video(video: Path, still: Path | None, out: Path, slug: str, fit: str = "crop", focus_y: float = 0.5,
-                          keep_audio: bool = False) -> tuple[Path, Path, str]:
+                          keep_audio: bool = False, sharpen: float = 0.6) -> tuple[Path, Path, str]:
     """以一条现成的视频(例如 H3 生成的手机随手拍风格短视频)为源做实况:关键帧 JPG + MOV,两边同一个内容 ID。
     关键帧 = 原图(still,没有就取视频第一帧),MOV 里带 still-image-time 轨。视频缩放 / 裁成 1080×1440;默认去掉声音。"""
     out.mkdir(parents=True, exist_ok=True)
@@ -221,7 +221,9 @@ def build_pair_from_video(video: Path, still: Path | None, out: Path, slug: str,
     write_jpg(img, jpg, asset_id)
     cmd = [ff, "-y", "-hide_banner", "-loglevel", "error", "-i", str(video), "-map_metadata", "-1", "-map", "0:v:0"]
     cmd += ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k"] if keep_audio else ["-an"]
-    cmd += ["-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{H},setsar=1",
+    # AI 生成的视频细节偏软,放大后更糊;轻锐化(亮度通道)能让清晰度接近原图。太强会出白边,0.6 左右合适,0 = 不锐化
+    vf = f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{H},setsar=1" + (f",unsharp=5:5:{sharpen}:5:5:0.0" if sharpen > 0 else "")
+    cmd += ["-vf", vf,
             "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-preset", "slow", "-crf", "17", "-tag:v", "avc1",
             "-movflags", "use_metadata_tags", "-metadata", f"com.apple.quicktime.content.identifier={asset_id}", "-f", "mov", str(mov)]
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -243,6 +245,7 @@ def main():
     ap.add_argument("--fit", choices=("crop", "blur"), default="crop", help="图不是 3:4 时:crop 裁切 / blur 完整显示+虚化补边")
     ap.add_argument("--video", help="以这条视频为源(不做推近动画);src 当作关键帧原图,可以省略")
     ap.add_argument("--keep-audio", action="store_true", help="用 --video 时保留声音(默认去掉)")
+    ap.add_argument("--sharpen", type=float, default=0.6, help="用 --video 时的锐化强度,0 = 不锐化,超过 1 容易出白边")
     ap.add_argument("--check", nargs=2, metavar=("JPG", "MOV"))
     a = ap.parse_args()
     if a.check:
@@ -250,7 +253,7 @@ def main():
     out = Path(a.out)
     slug = a.name or (Path(a.src).stem if a.src else "")
     if a.video:
-        jpg, mov, asset_id = build_pair_from_video(Path(a.video), Path(a.src) if a.src else None, out, slug or Path(a.video).stem, a.fit, a.focus_y, a.keep_audio)
+        jpg, mov, asset_id = build_pair_from_video(Path(a.video), Path(a.src) if a.src else None, out, slug or Path(a.video).stem, a.fit, a.focus_y, a.keep_audio, a.sharpen)
     else:
         jpg, mov, asset_id = build_pair(Path(a.src), out, slug, a.seconds, a.fps, a.zoom, a.focus_y, a.fit)
     print(f"内容 ID: {asset_id}")
