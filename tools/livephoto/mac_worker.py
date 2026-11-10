@@ -106,7 +106,7 @@ class Api:
             print(f"   (没能把失败原因告诉工作台:{e})")
 
 
-def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool = False, original_still: bool = False):
+def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool = False, first_frame_still: bool = False):
     t0 = time.time()
     print(f"[任务 {job['id']}] {job.get('name', '')}  {'真实动作(以视频为源)' if job.get('video') else '慢推镜头'}  参数 {job['opts']}")
     with tempfile.TemporaryDirectory() as td:
@@ -116,8 +116,8 @@ def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool
         if job.get("video"):
             video = Path(td) / "motion.mp4"
             video.write_bytes(api.call("GET", job["video"].split("?")[0], timeout=180))
-        # 真实动作:关键照片默认取视频第一帧(和视频画面一致,播放时不会「跳一下」);--original-still 改用原图(更清晰但构图可能略有差异)
-        pvt = make_pvt(src if (original_still or not video) else None, out, f"L{job['id']}", job["opts"], use_makelive, video, keep_audio)
+        # 真实动作:关键照片默认用原图(和视频用同一个裁切,包装上的字清晰);--first-frame-still 改取视频第一帧(和视频画面完全一致,但视频分辨率低、字会糊)
+        pvt = make_pvt(None if (first_frame_still and video) else src, out, f"L{job['id']}", job["opts"], use_makelive, video, keep_audio)
     api.upload(job["id"], zip_dir(pvt))
     print(f"   完成 {time.time() - t0:.0f} 秒 → {pvt}")
 
@@ -148,7 +148,7 @@ def serve(a):
             continue
         idle_logged = False
         try:
-            run_job(api, job, a.out, not a.no_pvt, a.keep_audio, a.original_still)
+            run_job(api, job, a.out, not a.no_pvt, a.keep_audio, a.first_frame_still)
         except Exception as e:
             print(f"   失败:{e}")
             api.fail(job["id"], f"{type(e).__name__}: {e}")
@@ -185,7 +185,7 @@ def main():
     ap.add_argument("--once", action="store_true", help="只做一个任务就退出")
     ap.add_argument("--no-pvt", action="store_true", help="不调用 makelive(非 macOS 测试用)")
     ap.add_argument("--keep-audio", action="store_true", help="真实动作模式:保留视频里模型生成的声音(默认去掉)")
-    ap.add_argument("--original-still", action="store_true", help="真实动作模式:关键照片用原图,而不是视频第一帧")
+    ap.add_argument("--first-frame-still", action="store_true", help="真实动作模式:关键照片取视频第一帧,而不是原图")
     ap.add_argument("--seconds", type=float, default=5)
     ap.add_argument("--zoom", type=float, default=1.08)
     ap.add_argument("--focus-y", type=float, default=0.35)

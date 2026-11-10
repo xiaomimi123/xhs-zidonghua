@@ -5,7 +5,7 @@
     python video_worker.py --server http://127.0.0.1:18765 --token 采集端Token
 
 常用参数:--comfy ComfyUI 地址(默认 http://127.0.0.1:8188)  --name 这台电脑的名字  --once 只做一个就退出
-          --size 576x768 输出尺寸(宽x高,必须是 3:4,越大越慢越占显存)  --steps 4 采样步数(配 4 步加速 LoRA)
+          --size 864x1152 输出尺寸(宽x高,必须是 3:4,越大越清楚越慢)  --steps 4 采样步数(配 4 步加速 LoRA)
 只依赖 Pillow;图片适配用同目录的 imgfit.py。ComfyUI 需要装好 MiniMax H3 模型和 Director 节点(见下面 MODELS)。"""
 from __future__ import annotations
 
@@ -128,7 +128,7 @@ def main():
     ap.add_argument("--token", required=True, help="采集端 Token(管理端「接口配置」里)")
     ap.add_argument("--comfy", default="http://127.0.0.1:8188", help="本机 ComfyUI 地址")
     ap.add_argument("--name", default=socket.gethostname().split(".")[0], help="这台电脑的名字(工作台上显示)")
-    ap.add_argument("--size", default="576x768", help="输出尺寸 宽x高(3:4)")
+    ap.add_argument("--size", default="864x1152", help="输出尺寸 宽x高(3:4)。包装上的小字要清晰,至少 768x1024;864x1152 约 70 秒/条,960x1280 约 85 秒/条,576x768 字会糊")
     ap.add_argument("--steps", type=int, default=4)
     ap.add_argument("--interval", type=int, default=5)
     ap.add_argument("--once", action="store_true")
