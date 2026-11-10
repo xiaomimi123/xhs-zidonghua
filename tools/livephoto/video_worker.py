@@ -152,7 +152,9 @@ def comfy_mask(comfy: Http, img: Image.Image, job_id: int, subject: list[str]) -
 def run_mask_job(api: Http, comfy: Http, name: str, job: dict):
     """换背景的第二步:抠出原图主体,贴回生图模型改好背景的新图,回传。"""
     t0 = time.time()
-    print(f"[任务 {job['id']}] 换背景:抠主体 {job['subject']}", flush=True)
+    by_bg = job.get("mode") == "background"
+    prompts = job["background"] if by_bg else job["subject"]
+    print(f"[任务 {job['id']}] 换背景:{'抠背景 ' + str(prompts) + '(其余全部保留)' if by_bg else '抠主体 ' + str(prompts)}", flush=True)
     q = f"?worker={urllib.parse.quote(name)}"
     orig = Image.open(io.BytesIO(api.call("GET", job["orig"] + q, timeout=120))).convert("RGB")
     edit = Image.open(io.BytesIO(api.call("GET", job["edit"] + q, timeout=120))).convert("RGB")
@@ -160,17 +162,25 @@ def run_mask_job(api: Http, comfy: Http, name: str, job: dict):
         comfy.json("GET", "/object_info/SAM3_Detect", timeout=20)
     except Exception as e:
         raise RuntimeError(f"连不上本机 ComfyUI({comfy.base})或没有 SAM3 节点:{e}") from None
-    raw = comfy_mask(comfy, orig, job["id"], job["subject"])
+    raw = comfy_mask(comfy, orig, job["id"], prompts)
     cov = bgswap.coverage(raw)
-    if cov < 0.01:
-        raise RuntimeError(f"没有抠到主体(只占 {cov * 100:.1f}%):换一个主体选项,或补充更准确的英文名词")
-    if cov > 0.92:
-        raise RuntimeError(f"抠图异常(主体占了 {cov * 100:.0f}%,几乎整张图):去掉一些主体选项再试")
-    out = bgswap.composite(orig, edit, bgswap.clean_mask(raw))
+    if by_bg:   # 抠的是背景:太小 = 没找到要换的背景;太大 = 几乎整张图都被当成背景,主体没保住
+        if cov < 0.03:
+            raise RuntimeError(f"没有抠到背景(只占 {cov * 100:.1f}%):换一个背景选项(桌面 / 墙面 / 台面…),或补充更准确的英文名词")
+        if cov > 0.97:
+            raise RuntimeError(f"抠图异常(背景占了 {cov * 100:.0f}%,几乎整张图):去掉一些背景选项再试")
+        mask = bgswap.subject_from_background(raw)
+    else:
+        if cov < 0.01:
+            raise RuntimeError(f"没有抠到主体(只占 {cov * 100:.1f}%):换一个主体选项,或补充更准确的英文名词")
+        if cov > 0.92:
+            raise RuntimeError(f"抠图异常(主体占了 {cov * 100:.0f}%,几乎整张图):去掉一些主体选项再试")
+        mask = bgswap.clean_mask(raw)
+    out = bgswap.composite(orig, edit, mask)
     buf = io.BytesIO()
     out.save(buf, "JPEG", quality=95)
     api.call("PUT", f"/api/live/vworker/jobs/{job['id']}/image?worker={urllib.parse.quote(name)}", buf.getvalue(), "image/jpeg", timeout=120)
-    print(f"   完成 {time.time() - t0:.0f} 秒(主体占 {cov * 100:.0f}%),新图已交给下一步", flush=True)
+    print(f"   完成 {time.time() - t0:.0f} 秒({'背景' if by_bg else '主体'}占 {cov * 100:.0f}%),新图已交给下一步", flush=True)
 
 
 # ---------------- 工作台 ----------------

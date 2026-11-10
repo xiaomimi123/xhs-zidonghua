@@ -462,10 +462,14 @@ def start_gen():
 
 
 # ---------- 换背景(主体不变) ----------
-# 流程:上传实拍图 → [bg:服务端让生图模型只改背景] → [mask:视频 worker 用 SAM3 抠出原图主体,贴回新背景] → 新图 → 真实动作 / 慢推镜头 → Mac
+# 流程:上传实拍图 → [bg:服务端让生图模型只改背景] → [mask:视频 worker 用 SAM3 抠出原图的「背景」,其余全部当主体贴回新背景] → 新图 → 真实动作 / 慢推镜头 → Mac
 # 为什么要「贴回」:生图模型改背景时会顺手改主体(包装上的字、位置),把原图主体按掩膜贴回去,主体才是一像素不变。
+# 为什么抠「背景」而不是列举主体:实测 SAM3 对偏白、斜放的盒子认不全(漏一个盒子,它的字就被 AI 改了);
+# 背景(桌面、墙面)大而完整,抠背景再取补集,图里不管有多少件东西、有没有被识别到,都会保留原样。
 SUBJECTS = {"hand": "手", "jar": "罐子", "bottle": "瓶子", "box": "盒子", "cup": "杯子", "spoon": "勺子", "bowl": "碗", "plate": "盘子", "bag": "袋子", "food": "食物"}
-DEFAULT_SUBJECT = ["hand", "jar", "box", "cup", "spoon"]
+DEFAULT_SUBJECT = ["hand", "jar", "box", "cup", "spoon"]   # 旧方式(按主体抠):只在请求里明确给了 subject 时使用
+BG_ITEMS = {"table": "桌面", "wall": "墙面", "countertop": "台面", "tablecloth": "桌布", "floor": "地面", "window": "窗户", "curtain": "窗帘", "shelf": "架子"}
+DEFAULT_BG = ["table", "wall"]
 MAX_BG_IMAGES, MAX_BG_SCENES = 3, 4
 _RATIOS = {"1:1": 1.0, "3:4": 0.75, "4:3": 4 / 3, "2:3": 2 / 3, "3:2": 1.5, "9:16": 9 / 16, "16:9": 16 / 9}
 BG_KEEP = "保持图中所有的手、产品、容器、餐具、食物和液体的位置、大小、形状、颜色以及包装上的文字完全不变,只把背景(桌面、墙面、杂物等)换成:"
@@ -503,21 +507,22 @@ def _nearest_ratio(size: tuple[int, int] | None) -> str:
     return min(_RATIOS, key=lambda k: abs(_RATIOS[k] - r))
 
 
-def clean_subject(subject: list[str] | None) -> list[str]:
-    """主体名词(给 SAM3 的英文提示):只收 2~24 个字母,最多 8 个,去重。"""
+def clean_subject(subject: list[str] | None, default: list[str] | None = None) -> list[str]:
+    """名词(给 SAM3 的英文提示):只收 2~24 个字母,最多 8 个,去重;一个都没有时用 default。"""
     out = []
     for s in subject or []:
         s = " ".join(str(s).strip().lower().split())
         if 2 <= len(s) <= 24 and all(ch.isalpha() or ch == " " for ch in s) and s not in out:
             out.append(s)
-    return out[:8] or list(DEFAULT_SUBJECT)
+    return out[:8] or list(default or DEFAULT_SUBJECT)
 
 
 class BgIn(BaseModel):
     images: list[str]                    # 实拍图(浏览器压好的 data URL)
     names: list[str] = []
     scenes: list[str] = []               # 新背景(一个场景 = 一张新图);空 = 自动挑一个生活场景
-    subject: list[str] = []              # 要保留不动的主体(英文名词);空 = 默认(手、罐子、盒子、杯子、勺子)
+    background: list[str] = []           # 要换掉的背景是什么(英文名词,如 table / wall);空 = 默认(桌面、墙面);图里其余的东西全部保留
+    subject: list[str] = []              # 旧方式:明确列出要保留的主体(英文名词);给了它且没给 background 时才用
     opts: dict | None = None
     takes: int = 1
 
@@ -527,6 +532,12 @@ def subjects():
     return {"subjects": [{"key": k, "label": v} for k, v in SUBJECTS.items()], "default": DEFAULT_SUBJECT}
 
 
+@router.get("/bg_options")
+def bg_options():
+    """「背景是什么」的选项:选中的会被抠出来当作要换掉的部分,图里其余的东西全部保留原样。"""
+    return {"items": [{"key": k, "label": v} for k, v in BG_ITEMS.items()], "default": DEFAULT_BG}
+
+
 @router.post("/jobs/bgswap")
 def create_bgswap(p: BgIn):
     """上传实拍图 → 换成其他背景,主体(手、产品、包装文字)保持原样 → 再做成 Live 图。每个背景要花一次生图费用。"""
@@ -534,7 +545,9 @@ def create_bgswap(p: BgIn):
     if len(imgs) > MAX_BG_IMAGES:
         raise HTTPException(400, f"一次最多 {MAX_BG_IMAGES} 张")
     scenes = [s.strip()[:80] for s in p.scenes if s.strip()][:MAX_BG_SCENES] or [""]
-    subject = clean_subject(p.subject)
+    legacy = bool([s for s in p.subject if str(s).strip()]) and not [s for s in p.background if str(s).strip()]
+    subject = clean_subject(p.subject) if legacy else []
+    background = [] if legacy else clean_subject(p.background, DEFAULT_BG)
     opts = clean_opts(p.opts)
     who = (CURRENT.get() or {}).get("name", "")
     made, skipped, ids = 0, 0, []
@@ -545,10 +558,11 @@ def create_bgswap(p: BgIn):
         ratio = _nearest_ratio(_img_size(b))
         for k, sc in enumerate(scenes):
             for o in _take_opts(opts, p.takes):
-                g = {"kind": "bgswap", "orig": orig, "scene": sc, "subject": subject, "ratio": ratio, "idx": seed + k * 3 + i}
+                g = {"kind": "bgswap", "orig": orig, "scene": sc, "subject": subject, "background": background, "ratio": ratio, "idx": seed + k * 3 + i}
                 ojs = json.dumps(o, sort_keys=True)
-                dup = q_one("SELECT id FROM live_jobs WHERE src='bgswap' AND opts=? AND status IN ('pending','running','done') AND gen LIKE ? AND gen LIKE ?",
-                            ojs, f'%"orig": "{orig}"%', f'%"scene": {json.dumps(sc, ensure_ascii=False)}%')
+                dup = q_one("SELECT id FROM live_jobs WHERE src='bgswap' AND opts=? AND status IN ('pending','running','done') AND gen LIKE ? AND gen LIKE ? AND gen LIKE ? AND gen LIKE ?",
+                            ojs, f'%"orig": "{orig}"%', f'%"scene": {json.dumps(sc, ensure_ascii=False)}%',
+                            f'%"subject": {json.dumps(subject)}%', f'%"background": {json.dumps(background)}%')
                 if dup:
                     skipped += 1
                     ids.append(dup["id"])
@@ -706,7 +720,9 @@ def v_claim(request: Request, worker: str = ""):
     opts = clean_opts(json.loads(r["opts"] or "{}"))
     if r["stage"] == "mask":
         g = json.loads(r["gen"] or "{}")
-        return {"job": {"id": r["id"], "stage": "mask", "opts": opts, "subject": clean_subject(g.get("subject")),
+        bgp = clean_subject(g.get("background"), DEFAULT_BG) if g.get("background") or not g.get("subject") else []
+        return {"job": {"id": r["id"], "stage": "mask", "opts": opts, "mode": "background" if bgp else "subject",
+                        "background": bgp, "subject": [] if bgp else clean_subject(g.get("subject")),
                         "orig": f"/api/live/vworker/jobs/{r['id']}/file/orig", "edit": f"/api/live/vworker/jobs/{r['id']}/file/edit"}}
     m = MOTIONS[opts["motion"] or "sway"]
     return {"job": {"id": r["id"], "stage": "video", "image": r["image"], "opts": opts, "motion": opts["motion"], "prompt": m["prompt"],

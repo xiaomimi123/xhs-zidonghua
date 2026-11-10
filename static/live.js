@@ -1,7 +1,7 @@
 // ---------- Live 图:从成品库选图 → 排队 → (真实动作:本机显卡先生成视频)→ Mac 端做成实况 → 下载 .pvt 包 AirDrop 到 iPhone ----------
 // 服务端只管队列和文件;视频由装了 ComfyUI 的电脑生成(tools/livephoto/video_worker.py),
 // 实况的动画渲染和 .pvt 打包在 MacBook 上跑(tools/livephoto/mac_worker.py)。
-const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], subjects: [], subjDefault: [], bg: { files: [], subject: null, extra: "", scenes: new Set(), custom: "" }, up: { files: [] }, gen: { files: [], product: 0, scene: "", note: "", count: 1 }, pid: 0, todo: false, show: 60, sel: new Map(), jobs: [], st: null, timer: 0,
+const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], bgItems: [], bgDefault: [], bg: { files: [], items: null, extra: "", scenes: new Set(), custom: "" }, up: { files: [] }, gen: { files: [], product: 0, scene: "", note: "", count: 1 }, pid: 0, todo: false, show: 60, sel: new Map(), jobs: [], st: null, timer: 0,
   opts: Object.assign({ mode: "motion", motion: "sway", seconds: 5, zoom: 1.08, focus_y: 0.35, fit: "crop" }, (() => { try { return JSON.parse(localStorage.lvOpts || "{}"); } catch { return {}; } })()) };
 const LV_FIT = { crop: "裁成 3:4", blur: "完整+虚化补边" };
 const lvKey = (d, img) => `${d}:${img}`;
@@ -24,9 +24,9 @@ async function fLive() {
   [LV.lib, LV.runs, LV.st, LV.jobs, LV.motions, sc, LV.prods, sj] = await Promise.all([api("/api/library"), api("/api/runs").catch(() => []),
     api("/api/live/status").catch(() => null), api("/api/live/jobs").catch(() => []), api("/api/live/motions").catch(() => []),
     api("/api/live/scenes").catch(() => ({ scenes: [] })), api("/api/products").catch(() => []),
-    api("/api/live/subjects").catch(() => ({ subjects: [], default: [] }))]);
-  LV.scenes = sc.scenes || []; LV.subjects = sj.subjects || []; LV.subjDefault = sj.default || [];
-  if (!LV.bg.subject) LV.bg.subject = new Set(LV.subjDefault);
+    api("/api/live/bg_options").catch(() => ({ items: [], default: [] }))]);
+  LV.scenes = sc.scenes || []; LV.bgItems = sj.items || []; LV.bgDefault = sj.default || [];
+  if (!LV.bg.items) LV.bg.items = new Set(LV.bgDefault);
   LV.lib = LV.lib.filter(d => d.images.length);
   if (!LV.motions.some(m => m.key === LV.opts.motion)) LV.opts.motion = (LV.motions[0] || {}).key || "sway";
   if (!LV.tab) LV.tab = LV.jobs.length ? "jobs" : "pick";   // 已经有任务就先看任务,不用翻过长长的选图列表
@@ -159,11 +159,11 @@ function lvUpload() {
       <div class="lv-ctl" data-ctl>${lvCtl()}</div>
       <div class="row"><button class="btn" id="lvgen" ${prod || G.files.length ? "" : "disabled"}>生成场景图并做成 Live 图</button></div></div>
     <div class="card"><h3>③ 换背景(主体不变)</h3>
-      <p class="sub">上传一张<b>实拍图</b>(手拿产品、倒粉、搅拌等),把背景换成别的场景;手、产品、包装文字等主体<b>保持原图不变</b>。同一张图可以换多个背景,重复利用。<b>每个背景要花一次生图费用(约几毛钱)</b>。</p>
+      <p class="sub">上传一张<b>实拍图</b>(手拿产品、倒粉、搅拌等),告诉我背景是什么,把它换成别的场景;图里其余的一切(手、产品、包装文字、杯子、勺子…)都<b>保持原图不变</b>。同一张图可以换多个背景,重复利用。<b>每个背景要花一次生图费用(约几毛钱)</b>。</p>
       ${drop("lvdrop3", "点击选择实拍图,或拖到这里(最多 3 张)")}<div class="lv-pvs" id="lvpv3">${lvThumbs(B.files, "bg")}</div>
-      <label class="f">保留不动的主体 <span class="sub">(没选到的东西会被一起换掉)</span></label>
-      <div class="lv-chips" id="lvsubj">${LV.subjects.map(x => `<button type="button" class="lv-chip ${B.subject.has(x.key) ? "on" : ""}" data-subj="${esc(x.key)}">${esc(x.label)}</button>`).join("")}</div>
-      <input id="lvsubx" placeholder="补充主体(英文名词,逗号分隔,可选),例如:candle, tray" value="${esc(B.extra)}">
+      <label class="f">背景是什么 <span class="sub">(要换掉的部分;没选到的背景会保留原样)</span></label>
+      <div class="lv-chips" id="lvsubj">${LV.bgItems.map(x => `<button type="button" class="lv-chip ${B.items.has(x.key) ? "on" : ""}" data-bgi="${esc(x.key)}">${esc(x.label)}</button>`).join("")}</div>
+      <input id="lvsubx" placeholder="补充背景(英文名词,逗号分隔,可选),例如:sofa, grass" value="${esc(B.extra)}">
       <label class="f">换成什么背景 <span class="sub">(可多选,最多 4 个;不选 = 自动挑一个生活场景)</span></label>
       <div class="lv-chips lv-scn" id="lvscn">${LV.scenes.map(s => `<button type="button" class="lv-chip ${B.scenes.has(s) ? "on" : ""}" data-scn="${esc(s)}">${esc(s)}</button>`).join("")}</div>
       <input id="lvscx" maxlength="80" placeholder="或自己写一个背景,例如:阳台木桌,午后阳光" value="${esc(B.custom)}">
@@ -181,8 +181,8 @@ function lvUpload() {
   sec.onclick = e => {
     const r = e.target.closest("[data-rm]");
     if (r) { const [k, i] = r.dataset.rm.split(":"); ({ up: LV.up.files, gen: G.files, bg: B.files })[k].splice(+i, 1); return lvUpload(); }
-    const sj = e.target.closest("[data-subj]");
-    if (sj) { const k = sj.dataset.subj; B.subject.has(k) ? B.subject.delete(k) : B.subject.add(k); return sj.classList.toggle("on", B.subject.has(k)); }
+    const sj = e.target.closest("[data-bgi]");
+    if (sj) { const k = sj.dataset.bgi; B.items.has(k) ? B.items.delete(k) : B.items.add(k); return sj.classList.toggle("on", B.items.has(k)); }
     const sc = e.target.closest("[data-scn]");
     if (sc) {
       const k = sc.dataset.scn;
@@ -205,8 +205,8 @@ function lvUpload() {
     const btn = $("#lvbgo"); btn.disabled = true;
     try {
       const scenes = [...B.scenes, ...(B.custom.trim() ? [B.custom.trim()] : [])].slice(0, 4);
-      const subject = [...B.subject, ...B.extra.split(/[,,]/).map(x => x.trim()).filter(Boolean)];
-      const r = await api("/api/live/jobs/bgswap", "POST", { images: B.files.map(f => f.url), names: B.files.map(f => f.name), scenes, subject,
+      const background = [...B.items, ...B.extra.split(/[,,]/).map(x => x.trim()).filter(Boolean)];
+      const r = await api("/api/live/jobs/bgswap", "POST", { images: B.files.map(f => f.url), names: B.files.map(f => f.name), scenes, background,
         opts: LV.opts, takes: LV.opts.mode === "motion" ? +LV.opts.takes || 1 : 1 });
       toast(r.created ? `已提交 ${r.created} 个换背景任务,AI 正在改背景` : `这些已经有同样的换背景任务了`);
       B.files = []; lvTab("jobs"); await lvRefresh(); window.scrollTo(0, 0);

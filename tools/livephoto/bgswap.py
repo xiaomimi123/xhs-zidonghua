@@ -55,6 +55,16 @@ def clean_mask(m: Image.Image, close: int = 9, feather: float = 2.5) -> Image.Im
     return f.filter(ImageFilter.GaussianBlur(feather))
 
 
+def subject_from_background(bg_mask: Image.Image, erode: int = 3, feather: float = 2.5) -> Image.Image:
+    """背景掩膜 → 主体掩膜(取补集):图里不属于背景的一切都是主体。
+    轻微内缩(MinFilter)是为了不把主体边缘一圈原背景色带进新背景,再羽化让边缘不生硬。"""
+    from PIL import ImageOps
+    subj = ImageOps.invert(bg_mask.convert("L").point(lambda v: 255 if v > 127 else 0))
+    if erode > 1:
+        subj = subj.filter(ImageFilter.MinFilter(erode))
+    return subj.filter(ImageFilter.GaussianBlur(feather))
+
+
 def composite(orig: Image.Image, newbg: Image.Image, mask: Image.Image) -> Image.Image:
     """主体取原图,其余取新背景(缩放到和原图一样大)。"""
     orig = orig.convert("RGB")
