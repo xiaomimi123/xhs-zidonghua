@@ -1001,3 +1001,14 @@ select.sm,.card-h select{min-height:30px;padding:4px 28px 4px 9px;font-size:13px
 .pager .pg-gap{color:var(--faint);padding:0 2px}
 .pg-top{margin:4px 0 10px}
 @media(max-width:520px){.pager .pg{min-width:32px;height:34px;padding:0 8px}}
+
+/* 新建任务:分三节 + 底部吸附的开始条 */
+.fl-sh{display:flex;align-items:center;gap:10px;margin:0 0 2px;font-size:15px}
+.fl-sh i{flex:none;width:22px;height:22px;border-radius:50%;background:var(--ink);color:#fff;font-weight:600;font-size:12px;line-height:22px;text-align:center;font-style:normal}
+.fl-sh small{color:var(--sub);font-weight:400;font-size:12px}
+.fl-sh.fl-sec{margin-top:26px;padding-top:20px;border-top:1px solid var(--line)}
+.fl-num{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:10px}
+.fl-startbar{position:sticky;bottom:0;z-index:5;margin:22px -4px -4px;padding:12px 4px;background:var(--panel);box-shadow:0 -8px 12px -8px oklch(30% .02 50 / .12)}
+.fl-sum{flex:1;min-width:0;font-size:13px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fl-startbar .btn.lg{margin-left:0}
+@media(max-width:700px){.fl-startbar{flex-wrap:wrap}.fl-sum{flex-basis:100%}}

@@ -52,6 +52,8 @@ async function fNew() {
   if (!FL.account) { FL.angles = new Set(); FL.angAcc = ""; }
   const P = FL.P, prod = FL.mode === "product", picked = P.pick && list.find(x => x.id === P.pick);
   if (!FL.track) FL.track = TRACKS[0]?.[0] || "";
+  const accName = (accts.find(x => x.account_id === FL.account) || {}).name;
+  const sum = `${prod ? (picked ? picked.name : P.name.trim() || "还没填产品") : FL.track || "还没选赛道"} · ${FL.count} 篇${accName ? ` · 发 ${accName}` : ""}`;
   const active = runs.filter(r => r.active);
   const recent = runs.filter(r => !r.active).slice(0, 4);
   const mini = r => `<div class="fl-mini" data-run="${r.id}" tabindex="0">${r.cover ? `<img src="${esc(thumb(r.cover, 240))}" alt="" loading="lazy" decoding="async">` : `<span class="fl-ph">${r.kind === "product" ? "产品" : "赛道"}</span>`}<div class="fl-rt"><b>${esc(r.name)}</b><span class="sub">${r.target} 篇 · ${when(r.created)}</span></div>${runPill(r)}</div>`;
@@ -62,6 +64,7 @@ async function fNew() {
     <section class="card"><div class="card-h"><b>怎么用</b></div><ol class="fl-tips"><li>选已有产品或上传产品图,也可以按赛道生成</li><li>选打算发布的账号,系统按这个账号的数据推荐选题角度</li><li>点「开始生成」后可以离开,做完的笔记在「成品库」</li><li>发布后在「数据看板」看每篇的表现</li></ol></section>
   </aside>`;
   $("#main").innerHTML = `<div class="fl-newgrid"><section class="card fl-new">
+    <h3 class="fl-sh"><i>1</i>做什么</h3>
     <div class="seg"><button class="${prod ? "on" : ""}" data-fmode="product">我有产品</button><button class="${prod ? "" : "on"}" data-fmode="track">按赛道</button></div>
     ${prod ? `${list.length ? `<span class="fl-lbl">已有产品</span><div class="fl-chips">${list.map(x => `<button class="chip ${P.pick === x.id ? "on" : ""}" data-fpick="${x.id}">${esc(x.name)}</button>`).join("")}${P.pick ? `<button class="chip" data-fpick="0">+ 新产品</button>` : ""}</div>` : ""}
       ${picked && FL.edit?.id === picked.id ? editForm(FL.edit)
@@ -79,13 +82,17 @@ async function fNew() {
       <label class="fl-lbl" for="fkw">关键词(可选,不填由系统按赛道挑选)</label><input id="fkw" placeholder="如:快手早餐,多个用逗号分隔" value="${esc(FL.kw)}">
       ${FL.account ? `<div id="fakw">${accKwHtml(FL.accKw[FL.account])}</div>` : ""}
       ${(hot.keywords || []).length || (hot.topics || []).length ? `<span class="fl-lbl">最近的热词 · 点一下加进关键词</span><div class="fl-chips">${[...(hot.keywords || []).slice(0, 8), ...(hot.topics || []).slice(0, 6)].map(w => `<button class="chip" data-fhot="${esc(w)}">${esc(w)}</button>`).join("")}</div>` : ""}`}
+    ${accts.length ? `<h3 class="fl-sh fl-sec"><i>2</i>发到哪个账号 <small>可不选</small></h3>` : ""}
     ${accts.length ? `<span class="fl-lbl">打算发到哪个账号 · 可不选,发布后按标题自动对上</span><div class="fl-chips"><button class="chip ${FL.account ? "" : "on"}" data-facc="">不指定</button>${accts.map(a => `<button class="chip ${FL.account === a.account_id ? "on" : ""}" data-facc="${esc(a.account_id)}" title="${esc(a.shop_name || "")}">${esc(a.name)}${new Set(accts.map(x => x.shop_name)).size > 1 && a.shop_name && a.shop_name.replace(/的店$/, "") !== a.name ? `<span class="sub"> · ${esc(a.shop_name.replace(/的店$/, ""))}</span>` : ""}</button>`).join("")}</div>` : ""}
     ${plan ? angleBlock(plan) : ""}
-    <div class="fl-foot">
-      <span class="fl-lbl" style="margin:0">篇数</span>
+    <h3 class="fl-sh fl-sec"><i>${accts.length ? 3 : 2}</i>生成几篇</h3>
+    <div class="fl-num">
       <div class="fl-step"><button data-fcnt="-1" aria-label="减少">−</button><b>${FL.count}</b><button data-fcnt="1" aria-label="增加">+</button></div>
       <div class="fl-chips">${[5, 10, 20].map(n => `<button class="chip ${FL.count === n ? "on" : ""}" data-fset="${n}">${n}</button>`).join("")}</div>
-      <span class="fl-err" id="ferr"></span>
+    </div>
+    <div class="fl-foot fl-startbar">
+      <span class="fl-sum" title="${esc(sum)}">${esc(sum)}</span>
+      <span class="fl-err" id="ferr" role="alert"></span>
       <button class="btn lg" id="fstart">开始生成</button>
     </div>
   </section>${aside}</div>`;
