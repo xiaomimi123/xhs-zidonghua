@@ -3,7 +3,7 @@
 // 实况的动画渲染和 .pvt 打包在 MacBook 上跑(tools/livephoto/mac_worker.py)。
 const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], bgItems: [], bgDefault: [], upMode: "up", jf: "all", showHow: null,
   bg: { files: [], items: null, extra: "", scenes: new Set(), custom: "" }, up: { files: [] }, gen: { files: [], product: 0, scene: "", note: "", count: 1 },
-  pid: 0, todo: false, show: 60, sel: new Map(), jobs: [], st: null, timer: 0,
+  pid: 0, todo: false, page: 1, sel: new Map(), jobs: [], st: null, timer: 0,
   opts: Object.assign({ mode: "motion", motion: "sway", seconds: 5, zoom: 1.08, focus_y: 0.35, fit: "crop" }, (() => { try { return JSON.parse(localStorage.lvOpts || "{}"); } catch { return {}; } })()) };
 try { LV.upMode = localStorage.lvUpMode || "up"; } catch { }
 const LV_FIT = { crop: "裁成 3:4", blur: "完整+虚化补边" };
@@ -53,8 +53,8 @@ async function fLive() {
     <div class="lv-filter" id="lvfilter" role="group" aria-label="按状态筛选"></div>
     <div id="lvjobs"></div></section><div id="lvbar"></div>`;
   $("#lvseg").onclick = e => { const b = e.target.closest("[data-t]"); if (b) lvTab(b.dataset.t); };
-  $("#lvtodo").onclick = () => { LV.todo = !LV.todo; LV.show = 60; $("#lvtodo").classList.toggle("on", LV.todo); lvGrid(); };
-  $("#lvrun").onchange = e => { LV.pid = +e.target.value; LV.show = 60; lvGrid(); };
+  $("#lvtodo").onclick = () => { LV.todo = !LV.todo; LV.page = 1; $("#lvtodo").classList.toggle("on", LV.todo); lvGrid(); };
+  $("#lvrun").onchange = e => { LV.pid = +e.target.value; LV.page = 1; lvGrid(); };
   $("#lvclear").onclick = async () => {
     if (!LV.jobs.some(j => j.status === "done")) return toast("没有已完成的任务");
     if (!confirm("清除全部已完成的任务和成品文件?(已经传到 iPhone 的就不需要留着了)")) return;
@@ -62,7 +62,7 @@ async function fLive() {
   };
   $("#lvfilter").onclick = e => { const b = e.target.closest("[data-jf]"); if (b) { LV.jf = b.dataset.jf; lvJobs(); } };
   $("#lvgrid").onclick = e => {
-    const more = e.target.closest("[data-more]"); if (more) { LV.show += 60; return lvGrid(); }
+    const pg = e.target.closest("[data-pg]"); if (pg) { if (pg.disabled) return; LV.page = +pg.dataset.pg; lvGrid(); return $("#lvgrid").scrollIntoView({ behavior: "smooth", block: "start" }); }
     const t = e.target.closest("[data-k]"); if (!t) return;
     const [d, img] = [+t.dataset.d, t.dataset.img], k = lvKey(d, img);
     LV.sel.has(k) ? LV.sel.delete(k) : LV.sel.set(k, { draft_id: d, image: img });
@@ -81,9 +81,11 @@ function lvTab(t) {
   lvBar();
 }
 
+const LV_SIZE = 36;   // 选图页每页篇数
 function lvGrid() {
   const ds = LV.lib.filter(d => (!LV.pid || d.pid === LV.pid) && (!LV.todo || !d.published));
-  const shown = ds.slice(0, LV.show);
+  const pages = Math.max(1, Math.ceil(ds.length / LV_SIZE)), page = Math.min(Math.max(1, LV.page), pages);   // 筛选后页数变少时落到最后一页
+  const shown = ds.slice((page - 1) * LV_SIZE, page * LV_SIZE);
   $("#lvgrid").innerHTML = ds.length ? `<div class="fl-grid lv-grid">${shown.map(d => {
     const on = i => LV.sel.has(lvKey(d.id, i));
     return `<article class="fl-nc lv-nc ${d.images.some(on) ? "picked" : ""}">
@@ -91,7 +93,7 @@ function lvGrid() {
       ${d.images.length > 1 ? `<div class="lv-th">${d.images.slice(1).map((i, n) => `<button class="lv-t ${on(i) ? "on" : ""}" data-k data-d="${d.id}" data-img="${esc(i)}" aria-label="选择第 ${n + 2} 张"><img src="${esc(thumb("/images/" + i, 240))}" alt="" loading="lazy" decoding="async"></button>`).join("")}</div>` : ""}
       <div class="fl-nt">${esc(d.title)}</div>
       <div class="fl-ns"><span>${esc(d.run)}</span>${d.published ? `<span class="pub">已发布</span>` : ""}</div></article>`;
-  }).join("")}</div>${ds.length > shown.length ? `<p style="text-align:center"><button class="btn gray" data-more>再显示 ${Math.min(60, ds.length - shown.length)} 篇(还有 ${ds.length - shown.length} 篇)</button></p>` : ""}`
+  }).join("")}</div>${pager(page, ds.length, LV_SIZE)}`
     : `<div class="empty"><b>${LV.lib.length ? "这个筛选下没有带图的笔记" : "还没有成品"}</b>${LV.lib.length ? "换个筛选看看" : "先新建任务做出笔记,再来做 Live 图;也可以到「上传」里直接传自己的图"}</div>`;
   $("#lvgrid").onkeydown = e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches(".lv-cv")) { e.preventDefault(); e.target.click(); } };
 }
