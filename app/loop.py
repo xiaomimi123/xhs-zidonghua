@@ -121,8 +121,8 @@ def _rate(rs: list[dict]) -> dict:
             "lift_avg": round(sum(lifts) / len(lifts), 2) if lifts else None}
 
 
-def overview() -> dict:
-    ev = evaluate()
+def overview(ev: dict | None = None) -> dict:
+    ev = ev or evaluate()
     rows = ev["rows"]
     pub = [r for r in rows if r["published"] or r["tier"] not in ("unpublished", "nodata")]
     got = [r for r in pub if r["tier"] not in ("unpublished", "nodata")]

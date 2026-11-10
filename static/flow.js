@@ -220,6 +220,8 @@ async function fRun() {
   try { r = await api(`/api/runs/${state.runId}`); } catch { return go("runs"); }
   const ds = r.drafts.total ? await api(`/api/library?pid=${r.id}`) : [];
   $("#pt").textContent = r.name;
+  if (FL.runPageId !== r.id) { FL.runPageId = r.id; FL.runPage = 1; }   // 换了任务从第 1 页看起
+  const runPage = Math.min(Math.max(1, FL.runPage || 1), Math.max(1, Math.ceil(ds.length / LIB_SIZE)));
   $("#main").innerHTML = `<button class="btn ghost sm fl-back" data-go="runs">‹ 全部任务</button>
   <section class="card fl-detail">
     <div class="fl-rh"><div class="fl-rt"><b>${esc(r.name)}</b><span class="sub">${r.kind === "product" ? "产品" : "赛道"} · ${esc(r.track)} · ${r.target} 篇 · ${when(r.created)}</span></div>${runPill(r)}</div>
@@ -229,8 +231,9 @@ async function fRun() {
       ${r.active ? "" : `<button class="btn" data-rerun="${r.id}">重新运行</button>`}
 </div>
   </section>
-  ${ds.length ? `<div class="fl-h"><b>成品 ${ds.length} 篇</b>${!r.active ? `<button class="btn ghost sm" id="fgolib">在成品库中筛选 ›</button>` : ""}</div><div class="fl-grid">${ds.map(noteCard).join("")}</div>` : ""}`;
-  $("#main").onclick = e => { const rr = e.target.closest("[data-rerun]"); if (rr) return rerunRun(rr); const n = e.target.closest("[data-note]"); if (n) fOpen(+n.dataset.note, ds); };
+  ${ds.length ? `<div class="fl-h"><b>成品 ${ds.length} 篇</b>${!r.active ? `<button class="btn ghost sm" id="fgolib">在成品库中筛选 ›</button>` : ""}</div><div class="fl-grid">${ds.slice((runPage - 1) * LIB_SIZE, runPage * LIB_SIZE).map(noteCard).join("")}</div>${pager(runPage, ds.length, LIB_SIZE)}` : ""}`;
+  $("#main").onclick = e => { const g = e.target.closest("[data-pg]"); if (g) { if (g.disabled) return; FL.runPage = +g.dataset.pg; return fRun().then(() => window.scrollTo({ top: 0, behavior: "smooth" })); }
+    const rr = e.target.closest("[data-rerun]"); if (rr) return rerunRun(rr); const n = e.target.closest("[data-note]"); if (n) fOpen(+n.dataset.note, ds); };
   $("#fgolib") && ($("#fgolib").onclick = () => { FL.pid = r.id; FL.filter = "all"; go("lib"); });
   $("#fcancel") && ($("#fcancel").onclick = async () => {
     if (!confirm("取消后已生成的稿子会保留,没跑完的步骤不再继续。确定取消?")) return;
@@ -450,7 +453,8 @@ async function fNoteBase() {
     const a = (page - 1) * NB_SIZE + 1, b = a + r.items.length - 1, pg = pager(page, r.total, NB_SIZE);
     $("#nbres").innerHTML = r.items.length
       ? `<div class="pg-top"><span class="sub">共 ${NB.total} 篇 · 第 ${a}–${b} 篇${pages > 1 ? ` · 第 ${page} / ${pages} 页` : ""}</span></div><div class="fl-grid">${r.items.map(nbCard).join("")}</div>${pg}`
-      : `<div class="empty"><b>没有符合条件的笔记</b>换个筛选或关键词试试</div>`;
+      : filtered ? `<div class="empty"><b>没有符合条件的笔记</b>换个筛选或关键词试试<br><button class="btn gray" id="nbreset2">清除筛选</button></div>`
+        : `<div class="empty"><b>笔记库还是空的</b>新建任务后,采集端会按关键词采集笔记,采到的会汇总在这里<br><button class="btn" data-go="new">新建任务</button></div>`;
   };
   await load(NB.page || 1);
   $$("[data-nb-f]").forEach(el => el.onchange = () => { f[el.dataset.nbF] = el.value; if (el.dataset.nbF === "track") f.topic = ""; NB.page = 1; fNoteBase(); });
@@ -461,7 +465,7 @@ async function fNoteBase() {
     if (g) { if (g.disabled) return; return load(+g.dataset.pg).then(() => window.scrollTo({ top: 0, behavior: "smooth" })); }
     const c = e.target.closest("[data-nb]"); if (c) nbOpen(+c.dataset.nb);
   };
-  $("#nbres").onclick = open;
+  $("#nbres").onclick = e => { if (e.target.closest("#nbreset2")) return $("#nbreset").click(); open(e); };
   $("#nbres").onkeydown = e => { if (e.key === "Enter" && e.target.matches("[data-nb]")) nbOpen(+e.target.dataset.nb); };
 }
 
@@ -492,7 +496,8 @@ function nbOpen(i) {
 }
 
 // ---------- 复盘:发布 → 数据回流 → 谁爆了 → 继续复刻 ----------
-const LP = { tier: "", reg: "todo", sel: new Set() };
+const LP = { tier: "", reg: "todo", sel: new Set(), page: 1, regPage: 1 };
+const LP_SIZE = 20;   // 复盘页每个列表每页条数
 const TIER_CLS = { winner: "bad", good: "ok", normal: "", weak: "", observing: "warn", nodata: "", unpublished: "" };
 const lpPct = r => r == null ? "-" : Math.round(r * 100) + "%";
 const lpEff = (name, e) => `<div class="lp-eff"><span class="sub">${name}</span><b>${lpPct(e.rate)}</b><span class="sub">${e.winners} 爆 / ${e.mature} 篇有结论${e.lift_avg ? ` · 平均 ×${e.lift_avg}` : ""}</span></div>`;
@@ -525,20 +530,23 @@ function linkDialog(did, draft, onDone) {
   };
   load();
 }
+// 「数据复盘」一个入口,里面切换:复盘(稿子表现、爆款)和数据看板(千帆账号数据),切换条放在页头右侧
+const dataSwitch = cur => `<div class="seg" role="tablist" aria-label="数据复盘">${[["loop", "复盘"], ["data", "数据看板"]].map(([k, n]) => `<button role="tab" aria-selected="${k === cur}" class="${k === cur ? "on" : ""}" data-dk="${k}">${n}</button>`).join("")}</div>`;
+document.addEventListener("click", e => { const b = e.target.closest("[data-dk]"); if (b && !b.classList.contains("on")) go(b.dataset.dk); });
 async function fLoop() {
-  const [ov, dr, wr, td, nd] = await Promise.all([api("/api/loop/overview"), api(`/api/loop/drafts${LP.tier ? `?tier=${LP.tier}` : ""}`), api("/api/loop/drafts?tier=winner"),
-    api("/api/loop/drafts?tier=unpublished"), api("/api/loop/drafts?tier=nodata")]);
-  const c = ov.cfg, rows = dr.items, wins = wr.items, todo = td.items, nodata = nd.items;
-  const regList = LP.reg === "todo" ? todo : nodata;
-  LP.sel = new Set([...LP.sel].filter(id => regList.some(r => r.id === id)));
+  $("#pa").innerHTML = dataSwitch("loop");
+  const pg = await api(`/api/loop/page?tier=${LP.tier}&page=${LP.page}&reg=${LP.reg}&regpage=${LP.regPage}&size=${LP_SIZE}`);   // 一次请求,各列表按页取
+  LP.page = pg.rows.page; LP.regPage = pg.reg.page;   // 数据变少时服务端会把页码拉回有效范围
+  const ov = pg.overview, dr = { data_at: pg.data_at }, c = pg.cfg, rows = pg.rows.items, wins = pg.winners, regList = pg.reg.items;
+  const nTodo = ov.tiers.unpublished ?? 0, nNodata = ov.tiers.nodata ?? 0, nWin = ov.tiers.winner ?? 0;
   const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const regRow = r => LP.reg === "todo"
     ? `<label class="lp-rr"><input type="checkbox" data-rsel="${r.id}" ${LP.sel.has(r.id) ? "checked" : ""}><span class="lp-rt">${esc(r.title)}</span><span class="sub">${esc(r.account_name || "未指定账号")}</span></label>`
     : `<div class="lp-rr"><span class="lp-rt">${esc(r.title)}</span><span class="sub">${esc(r.account_name || "未指定账号")} · 标了已发布${r.published_at ? `(${esc(String(r.published_at).slice(0, 10))})` : ""}</span><button class="btn gray sm" data-link="${r.id}">对上千帆笔记</button><button class="btn ghost sm" data-unpub="${r.id}" title="其实还没发,取消已发布标记">取消标记</button></div>`;
   const regBlock = `<section class="card" style="margin-top:12px"><div class="card-h"><b>发布登记</b><span class="sub">发布后系统会按标题自动对上千帆数据;这里处理还没登记的和对不上的</span></div>
-    <div class="fl-chips" style="margin-bottom:10px"><button class="chip ${LP.reg === "todo" ? "on" : ""}" data-rtab="todo">待登记发布 ${todo.length}</button><button class="chip ${LP.reg === "nodata" ? "on" : ""}" data-rtab="nodata">标了发布但没对上数据 ${nodata.length}</button></div>
-    ${regList.length ? `${LP.reg === "todo" ? `<div class="lp-rbar"><button class="btn gray sm" data-rall>${LP.sel.size === regList.length ? "取消全选" : `全选 ${regList.length} 篇`}</button><span class="sub">已选 <b>${LP.sel.size}</b> 篇</span><label class="sub" style="margin-left:auto">发布日期 <input type="date" id="rday" value="${today}" max="${today}" style="width:auto"></label><button class="btn sm" data-rpub ${LP.sel.size ? "" : "disabled"}>标记已发布</button></div>` : `<p class="sub" style="margin:0 0 8px">一般是发布时改过标题,或千帆数据还没同步。点「对上千帆笔记」从千帆里挑一篇手动对上;确实还没发的可以取消标记。</p>`}
-    <div class="lp-rl">${regList.slice(0, 60).map(regRow).join("")}</div>${regList.length > 60 ? `<p class="sub" style="margin:8px 0 0">只显示前 60 篇</p>` : ""}`
+    <div class="fl-chips" style="margin-bottom:10px"><button class="chip ${LP.reg === "todo" ? "on" : ""}" data-rtab="todo">待登记发布 ${nTodo}</button><button class="chip ${LP.reg === "nodata" ? "on" : ""}" data-rtab="nodata">标了发布但没对上数据 ${nNodata}</button></div>
+    ${regList.length ? `${LP.reg === "todo" ? `<div class="lp-rbar"><button class="btn gray sm" data-rall>${regList.length && regList.every(r => LP.sel.has(r.id)) ? "取消全选" : `全选本页 ${regList.length} 篇`}</button><span class="sub">已选 <b>${LP.sel.size}</b> 篇</span><label class="sub" style="margin-left:auto">发布日期 <input type="date" id="rday" value="${today}" max="${today}" style="width:auto"></label><button class="btn sm" data-rpub ${LP.sel.size ? "" : "disabled"}>标记已发布</button></div>` : `<p class="sub" style="margin:0 0 8px">一般是发布时改过标题,或千帆数据还没同步。点「对上千帆笔记」从千帆里挑一篇手动对上;确实还没发的可以取消标记。</p>`}
+    <div class="lp-rl">${regList.map(regRow).join("")}</div>${pager(LP.regPage, pg.reg.total, LP_SIZE, "rpg")}`
       : `<div class="empty" style="border:0;padding:18px">${LP.reg === "todo" ? "所有稿子都登记过了" : "没有对不上的稿子"}</div>`}</section>`;
   const fun = ov.funnel, mx = Math.max(1, ...fun.map(f => f.n));
   const se = ov.spawn_effect;
@@ -554,7 +562,7 @@ async function fLoop() {
   <section class="card" style="margin-top:12px"><div class="card-h"><b>继续复刻有没有用</b><span class="sub">对比「普通复刻」和「以爆款为样本继续复刻」两类稿子的爆款率</span></div>
     <div class="lp-effs">${lpEff("普通复刻稿", se.original)}${lpEff("爆款样本复刻稿", se.spawned)}</div>
     ${se.spawned.mature < 5 ? `<p class="sub" style="margin:8px 0 0">爆款样本复刻稿的有结论数据还很少(${se.spawned.mature} 篇),数据多了再看这个对比更可靠。</p>` : ""}</section>
-  <h3 class="lp-h">爆款榜 <span class="sub">${wins.length} 篇 · 发布满 ${c.min_days} 天、互动 ≥ ${c.min_eng} 且 ≥ 本账号平均的 ${c.win_lift} 倍</span></h3>
+  <h3 class="lp-h">爆款榜 <span class="sub">${nWin} 篇${nWin > wins.length ? `(只列前 ${wins.length} 篇)` : ""} · 发布满 ${c.min_days} 天、互动 ≥ ${c.min_eng} 且 ≥ 本账号平均的 ${c.win_lift} 倍</span></h3>
   ${wins.length ? `<div class="lp-ws">${wins.map(lpWinner).join("")}</div>` : `<div class="empty"><b>还没有判定为爆款的稿子</b>先多发布一些稿子;发布满 ${c.min_days} 天、数据回流后会出现在这里。门槛可以在管理端「接口配置 → 爆款回流」调整。</div>`}
   <h3 class="lp-h">哪类更容易爆</h3>
   <div class="lp-two"><section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按选题主题</b></div>${ov.by_topic.length ? tbl("主题", topicRows) : none}</section>
@@ -562,19 +570,22 @@ async function fLoop() {
   <h3 class="lp-h">全部稿子的表现</h3>
   <div class="fl-chips" style="margin-bottom:10px">${Object.entries(names).map(([k, n]) => `<button class="chip ${LP.tier === k ? "on" : ""}" data-lt="${k}">${n}${k ? ` ${ov.tiers[k] ?? 0}` : ""}</button>`).join("")}</div>
   <section class="card flush">${rows.length ? `<table class="tbl lp-tbl"><thead><tr><th>稿子</th><th>账号</th><th>发布</th><th class="num">阅读</th><th class="num">赞藏评</th><th class="num">相对平均</th><th>判定</th></tr></thead><tbody>${rows.map(r => `<tr data-open="${r.id}"><td class="lp-tt">${esc(r.title)}${r.generation ? ` <span class="sub">· 第${r.generation}代</span>` : ""}</td><td class="sub">${esc(r.account_name || "-")}</td><td class="sub">${esc(r.published_at || "-")}</td><td class="num">${r.views == null ? "-" : fmtN(r.views)}</td><td class="num">${r.eng == null ? "-" : r.eng}</td><td class="num">${r.lift == null ? "-" : "×" + r.lift}</td><td><span class="fl-pill ${TIER_CLS[r.tier]}">${r.tier_name}</span></td></tr>`).join("")}</tbody></table>` : `<div class="empty" style="border:0">这个筛选下没有稿子</div>`}</section>
+  ${pager(LP.page, pg.rows.total, LP_SIZE, "lpg")}
   <p class="sub" style="margin:14px 2px 0">「相对平均」= 这篇的互动(赞+藏+评)÷ 该账号所有笔记的平均(去掉最高 5%);账号互动很少时改比阅读量。刚发布的稿子数据还没沉淀,标为「观察中」,不下结论。阈值由管理端调整。数据更新于 ${esc(String(dr.data_at || "-").slice(0, 16))}。</p>`;
   let lib = null;
   $("#main").onclick = async e => {
-    const lt = e.target.closest("[data-lt]"); if (lt) { LP.tier = lt.dataset.lt; return fLoop(); }
-    const rt = e.target.closest("[data-rtab]"); if (rt) { LP.reg = rt.dataset.rtab; LP.sel.clear(); return fLoop(); }
+    const lt = e.target.closest("[data-lt]"); if (lt) { LP.tier = lt.dataset.lt; LP.page = 1; return fLoop(); }
+    const gp = e.target.closest("[data-lpg]"); if (gp) { if (gp.disabled) return; LP.page = +gp.dataset.lpg; return fLoop(); }
+    const gr = e.target.closest("[data-rpg]"); if (gr) { if (gr.disabled) return; LP.regPage = +gr.dataset.rpg; return fLoop(); }
+    const rt = e.target.closest("[data-rtab]"); if (rt) { LP.reg = rt.dataset.rtab; LP.regPage = 1; LP.sel.clear(); return fLoop(); }
     const rs = e.target.closest("[data-rsel]"); if (rs) { const id = +rs.dataset.rsel; LP.sel.has(id) ? LP.sel.delete(id) : LP.sel.add(id); return fLoop(); }
-    if (e.target.closest("[data-rall]")) { LP.sel = LP.sel.size === regList.length ? new Set() : new Set(regList.map(r => r.id)); return fLoop(); }
+    if (e.target.closest("[data-rall]")) { LP.sel = regList.length && regList.every(r => LP.sel.has(r.id)) ? new Set() : new Set([...LP.sel, ...regList.map(r => r.id)]); return fLoop(); }
     if (e.target.closest("[data-rpub]")) {
       try { const r = await api("/api/drafts/publish", "POST", { ids: [...LP.sel], on: true, published_at: $("#rday").value }); toast(`已登记 ${r.n} 篇为已发布`); LP.sel.clear(); return fLoop(); } catch (err) { return toast(err.message, 1); }
     }
     const up = e.target.closest("[data-unpub]");
     if (up) { try { await api("/api/drafts/publish", "POST", { ids: [+up.dataset.unpub], on: false }); toast("已取消发布标记"); return fLoop(); } catch (err) { return toast(err.message, 1); } }
-    const lk = e.target.closest("[data-link]"); if (lk) return linkDialog(+lk.dataset.link, nodata.find(r => r.id === +lk.dataset.link));
+    const lk = e.target.closest("[data-link]"); if (lk) return linkDialog(+lk.dataset.link, regList.find(r => r.id === +lk.dataset.link));
     const sp = e.target.closest("[data-spawn]");
     if (sp) {
       const id = +sp.dataset.spawn, n = +sp.closest(".lp-act").querySelector("[data-spn]").value;
@@ -598,5 +609,5 @@ window.FLOW_VIEWS = {
   lib: { t: "成品库", d: "点开一篇就能复制、存图、标记已发布", fn: fLib },
   loop: { t: "复盘", d: "发出去的稿子谁爆了、哪类更容易爆,一键以爆款为样本继续复刻", fn: fLoop },
   notebase: { t: "笔记库", d: "采集到的笔记,按赛道、主题、热度找参考,点开看全文和配图", fn: fNoteBase },
-  data: { t: "数据看板", d: "各账号的粉丝、笔记表现,看哪类选题更好、最近什么在火", fn: () => { window.QF_STAFF = true; return vQianfan(); } },
+  data: { t: "数据看板", d: "各账号的粉丝、笔记表现,看哪类选题更好、最近什么在火", nav: "loop", fn: () => { window.QF_STAFF = true; return vQianfan(); } },
 };

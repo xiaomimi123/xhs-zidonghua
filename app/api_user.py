@@ -744,13 +744,34 @@ def loop_overview():
     return loop.overview()
 
 
+_TIER_ORDER = {"winner": 0, "good": 1, "normal": 2, "weak": 3, "observing": 4, "nodata": 5, "unpublished": 6}
+
+
+def _loop_rows(ev: dict, tier: str = "", account_id: str = "") -> list[dict]:
+    rows = [r for r in ev["rows"] if (not tier or r["tier"] == tier) and (not account_id or r["account_id"] == account_id)]
+    rows.sort(key=lambda r: (_TIER_ORDER[r["tier"]], -(r["lift"] or 0), -r["id"]))
+    return rows
+
+
 @router.get("/api/loop/drafts")
 def loop_drafts(tier: str = "", account_id: str = ""):
     ev = loop.evaluate()
-    rows = [r for r in ev["rows"] if (not tier or r["tier"] == tier) and (not account_id or r["account_id"] == account_id)]
-    order = {"winner": 0, "good": 1, "normal": 2, "weak": 3, "observing": 4, "nodata": 5, "unpublished": 6}
-    rows.sort(key=lambda r: (order[r["tier"]], -(r["lift"] or 0), -r["id"]))
-    return {"items": rows, "cfg": ev["cfg"], "data_at": ev["data_at"]}
+    return {"items": _loop_rows(ev, tier, account_id), "cfg": ev["cfg"], "data_at": ev["data_at"]}
+
+
+@router.get("/api/loop/page")
+def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1, size: int = 20, wins: int = 12):
+    """复盘页一次取齐:只算一次对号,各个列表按页切(原来要请求 5 次,每次都重算,稿子多了很慢)。"""
+    size = min(max(size, 1), 100)
+    ev = loop.evaluate()
+    rows = _loop_rows(ev, tier)
+    regs = _loop_rows(ev, "unpublished" if reg == "todo" else "nodata")
+    page = min(max(page, 1), max(1, -(-len(rows) // size)))
+    regpage = min(max(regpage, 1), max(1, -(-len(regs) // size)))
+    return {"overview": loop.overview(ev), "winners": _loop_rows(ev, "winner")[:max(wins, 0)],
+            "rows": {"items": rows[(page - 1) * size:page * size], "total": len(rows), "page": page},
+            "reg": {"items": regs[(regpage - 1) * size:regpage * size], "total": len(regs), "page": regpage},
+            "size": size, "cfg": ev["cfg"], "data_at": ev["data_at"]}
 
 
 class SpawnIn(BaseModel):

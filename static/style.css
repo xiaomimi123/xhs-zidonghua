@@ -1012,3 +1012,10 @@ select.sm,.card-h select{min-height:30px;padding:4px 28px 4px 9px;font-size:13px
 .fl-sum{flex:1;min-width:0;font-size:13px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fl-startbar .btn.lg{margin-left:0}
 @media(max-width:700px){.fl-startbar{flex-wrap:wrap}.fl-sum{flex-basis:100%}}
+
+/* 管理端设置页:吸顶的分组导航 */
+.sg-nav{position:sticky;top:0;z-index:6;display:flex;gap:8px;overflow-x:auto;padding:10px 0;margin-bottom:4px;background:var(--bg);scrollbar-width:none}
+.sg-nav::-webkit-scrollbar{display:none}
+.sg-nav .chip{flex:none;padding:5px 12px;font-size:13px;background:var(--panel)}
+.sg-nav+.sg{padding-top:4px}
+.sg{scroll-margin-top:56px}

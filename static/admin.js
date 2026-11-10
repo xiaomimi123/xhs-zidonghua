@@ -597,6 +597,10 @@ async function vSettings() {
     } catch (err) { out.innerHTML = `<span class="st error">失败</span> ${esc(err.message)}`; }
     $$("button", row).forEach(x => x.disabled = false);
   };
+  // 设置分组很多、页面很长:顶部加一条吸顶的分组导航,点一下滚到对应分组
+  const groups = $$("#main > .sg");
+  $("#main").insertAdjacentHTML("afterbegin", `<nav class="sg-nav" aria-label="设置分组">${groups.map((g, i) => `<button class="chip" data-sg="${i}">${esc(g.querySelector("h3").textContent)}</button>`).join("")}</nav>`);
+  $(".sg-nav").onclick = e => { const b = e.target.closest("[data-sg]"); if (b) groups[+b.dataset.sg].scrollIntoView({ behavior: "smooth", block: "start" }); };
   $("#sv").onclick = async () => {
     const d = formVals();
     try { await api("/api/admin/settings", "POST", d); toast("配置已保存"); } catch (e) { toast(e.message, 1); }

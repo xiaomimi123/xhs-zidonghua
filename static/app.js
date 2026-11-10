@@ -31,14 +31,14 @@ const toast = (msg, err) => {
 // 列表 / 卡片网格里用缩略图(WebP,几十 KB),只有点开预览才加载原图;外链图片原样返回
 const thumb = (u, w = 360) => u && /^\/(images|note_images|product_images)\//.test(u) && !u.includes("?") ? `${u}?w=${w}` : u;
 // 分页条:‹ 上一页  1 … 4 5 [6] 7 8 … 20  下一页 ›(最多显示 7 个页码)。按钮带 data-pg,由页面自己监听点击
-function pager(page, total, size) {
+function pager(page, total, size, attr = "pg") {
   const pages = Math.max(1, Math.ceil(total / size));
   if (pages <= 1) return "";
   const nums = new Set([1, pages, page - 1, page, page + 1]);
   if (page <= 3) [2, 3, 4].forEach(n => nums.add(n));
   if (page >= pages - 2) [pages - 1, pages - 2, pages - 3].forEach(n => nums.add(n));
   const list = [...nums].filter(n => n >= 1 && n <= pages).sort((a, b) => a - b);
-  const btn = (n, label, extra = "") => `<button class="pg ${extra}" data-pg="${n}" ${extra.includes("dis") ? "disabled" : ""} ${n === page && !extra ? 'aria-current="page"' : ""} aria-label="${label}">${label}</button>`;
+  const btn = (n, label, extra = "") => `<button class="pg ${extra}" data-${attr}="${n}" ${extra.includes("dis") ? "disabled" : ""} ${n === page && !extra ? 'aria-current="page"' : ""} aria-label="${label}">${label}</button>`;
   return `<nav class="pager" aria-label="分页">${btn(page - 1, "‹ 上一页", page <= 1 ? "dis" : "")}${list.map((n, i) => (i && n - list[i - 1] > 1 ? `<span class="pg-gap" aria-hidden="true">…</span>` : "") + btn(n, n, n === page ? "on" : "")).join("")}${btn(page + 1, "下一页 ›", page >= pages ? "dis" : "")}</nav>`;
 }
 const fmt = n => n >= 10000 ? (n / 10000).toFixed(1) + "w" : (n ?? 0);

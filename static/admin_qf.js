@@ -21,7 +21,7 @@ async function vQianfan() {
   if (QF.account && o.selected !== QF.account) { QF.account = ""; return vQianfan(); }
   if (o.shops.length && !QF.shop && QF.tab.startsWith("hot_") && QF.tab !== "hot_topics") { QF.shop = o.shops[0].shop_id; return vQianfan(); }   // 榜单是分店铺存的,没选就看第一个店铺
   const stat = o.status;
-  $("#pa").innerHTML = QFSTAFF() ? "" : `<button class="btn" id="qsync">立即同步</button>`;
+  $("#pa").innerHTML = QFSTAFF() ? (typeof dataSwitch === "function" ? dataSwitch("data") : "") : `<button class="btn" id="qsync">立即同步</button>`;
   if (QFSTAFF()) $("#main").onclick = null;
   const lastAt = Object.values(stat.kinds).map(k => k.last).sort().pop();
   const body = {

@@ -86,6 +86,12 @@ def run(rep, env):
 
         # 接口
         rep.check("接口:复盘概览和稿子列表", user.get("/api/loop/overview").status_code == 200 and any(r["tier"] == "winner" for r in user.get("/api/loop/drafts?tier=winner").json()["items"]))
+        pg1 = user.get("/api/loop/page?size=2&regpage=1&reg=todo").json()
+        pg9 = user.get("/api/loop/page?size=2&page=99&regpage=99").json()
+        allrows = user.get("/api/loop/drafts").json()["items"]
+        rep.check("接口:复盘分页,一次取齐概览/爆款/列表", pg1["overview"]["funnel"] and pg1["rows"]["total"] == len(allrows) and len(pg1["rows"]["items"]) == min(2, len(allrows))
+                  and all(w["tier"] == "winner" for w in pg1["winners"]) and pg1["reg"]["total"] == pg1["overview"]["tiers"]["unpublished"])
+        rep.check("接口:复盘分页,页码越界会落到最后一页", pg9["rows"]["page"] == max(1, -(-len(allrows) // 2)) and len(pg9["rows"]["items"]) >= 1 and pg9["reg"]["page"] >= 1)
         rep.check("接口:没配 DeepSeek Key 时不能继续复刻", user.post(f"/api/drafts/{d_win}/spawn", json={"count": 3}).status_code == 400)
         db.save_settings({"deepseek_api_key": "k"})
         lib = {x["id"]: x for x in user.get("/api/library").json()}

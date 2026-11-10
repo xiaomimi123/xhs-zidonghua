@@ -134,6 +134,9 @@ def run(rep, env):
               r0["tasks"] == [1, 3] and r0["drafts"]["total"] == 3 and r0["drafts"]["passed"] == 1 and r0["drafts"]["failed"] == 1 and r0["cover"] == f"/images/cov0_0.png" and r0["kind"] == "product" and r0["name"] == "性能产品", str(r0))
     lim = api_user.list_runs(limit=2)
     rep.check("任务页:limit 只返回最近 N 个", len(lim) == 2 and lim[0]["id"] > lim[1]["id"] or lim[0]["id"] != lim[1]["id"], str([x["id"] for x in lim]))
+    off = api_user.list_runs(limit=2, offset=1)
+    full = api_user.list_runs(limit=500)
+    rep.check("任务页分页:offset 跳过前 N 个,总数接口和列表一致", [x["id"] for x in off] == [x["id"] for x in full[1:3]] and api_user.runs_count()["total"] == len(full))
     rep.check("进度:批量版和单个版给同样的结果;没有这个任务时返回 None", autorun.progress(plist[1]) == autorun.progress_many([plist[1], plist[1]])[plist[1]] and autorun.progress(999999) is None)
     nq = []
     _c = db.conn
