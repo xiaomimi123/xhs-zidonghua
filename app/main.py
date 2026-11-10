@@ -4,7 +4,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from . import db, auth, worker, notes, api_user, api_admin, api_collector, autorun, api_qianfan, api_live
+from .textgzip import TextGZip
+from . import db, auth, worker, notes, api_user, api_admin, api_collector, autorun, api_qianfan, api_live, thumbs, imagegen, mirror
 
 db.init()
 auth.bootstrap()
@@ -16,10 +17,12 @@ async def lifespan(_):
     worker.resume()  # 接着跑上次中断的拆解、复刻,启动打标签线程
     autorun.start()  # 一键批量生成的监督线程
     api_live.start_gen()  # Live 图:产品图 → 场景图的生成线程
+    thumbs.warm_dirs([imagegen.IMG_DIR, mirror.DIR])  # 后台补齐已有图片的缩略图(只补缺的)
     yield
 
 
 app = FastAPI(title="小红书流水线工作台", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+app.add_middleware(TextGZip, minimum_size=1024)
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
 for r in (api_collector.router, api_admin.public, api_admin.router, api_user.public, api_user.router, api_qianfan.router, api_qianfan.user, api_live.router, api_live.worker_router, api_live.vworker_router):

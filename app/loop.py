@@ -81,12 +81,16 @@ def classify(it: dict | None, d: dict, base: tuple[str, float] | None, c: dict) 
     return "normal", lift
 
 
-def evaluate(register: bool = True) -> dict:
-    """返回 {"rows": [每篇稿子的判定], "cfg": 当前阈值}。register=True 时把对上号的稿子登记成已发布。"""
+def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
+    """返回 {"rows": [每篇稿子的判定], "cfg": 当前阈值}。register=True 时把对上号的稿子登记成已发布。
+    pre = (笔记列表, 数据时间, 对号结果):调用方已经算过就传进来,不再重算(成品库每次打开都要用)。"""
     c = cfg()
-    items, at = qianfan.notes_all()
+    if pre:
+        items, at, perf = pre
+    else:
+        items, at = qianfan.notes_all()
+        perf = qianfan.match_drafts(items)
     base = _baselines(items)
-    perf = qianfan.match_drafts(items)
     spawned = {r["spawn_from"]: r["n"] for r in q_all("SELECT spawn_from, COUNT(*) AS n FROM projects WHERE spawn_from IS NOT NULL GROUP BY spawn_from")}
     drafts = q_all("""SELECT d.id, d.title, d.angle, d.account_id, d.account_name, d.project_id, d.published, d.published_at, d.qf_note_id, d.status, d.auto_ok, d.created, d.images,
         p.track, p.created_by, p.spawn_from, COALESCE(p.generation, 0) AS generation

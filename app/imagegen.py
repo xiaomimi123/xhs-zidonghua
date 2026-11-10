@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx
 
-from . import mirror
+from . import mirror, thumbs
 from .db import get_settings
 
 IMG_DIR = Path(__file__).resolve().parent.parent / "data" / "images"
@@ -149,6 +149,7 @@ def _generate_once(prompt: str, name: str, s: dict | None = None, refs: list | N
         raise RuntimeError("生图接口返回的不是图片")
     path = IMG_DIR / f"{name}.{ext}"
     path.write_bytes(data)
+    thumbs.warm(path)   # 顺手做好列表用的缩略图,第一次打开成品库就不用等
     return path.name
 
 

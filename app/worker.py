@@ -7,6 +7,7 @@ import threading
 import time
 from itertools import combinations
 from concurrent.futures import ThreadPoolExecutor
+from . import thumbs
 from . import llm, imagegen, compliance, stats, review, mirror, lengthcap, products, cards, covers
 from .db import conn, row_to_dict, get_settings
 
@@ -332,6 +333,7 @@ def _render_cover(did: int, cc: dict, refs: list) -> str:
             photo = imagegen.IMG_DIR / cc["photo"]
     out = imagegen.IMG_DIR / f"d{did}_1_{int(time.time())}.png"
     cards.render(cc["layout"], cc.get("theme") or "cream", cc, out, photo)
+    thumbs.warm(out)
     return out.name
 
 

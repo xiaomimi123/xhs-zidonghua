@@ -13,14 +13,14 @@ const runPill = r => {
 };
 const segCls = (r, i) => i < r.step ? "done" : i === r.step ? (r.active ? "cur" : ["error", "canceled"].includes(r.status) ? "bad" : "") : "";
 const runCard = r => `<article class="fl-run" data-run="${r.id}" tabindex="0">
-  <div class="fl-rh">${r.cover ? `<img src="${esc(r.cover)}" alt="" loading="lazy">` : `<span class="fl-ph">${r.kind === "product" ? "产品" : "赛道"}</span>`}
+  <div class="fl-rh">${r.cover ? `<img src="${esc(thumb(r.cover, 240))}" alt="" loading="lazy" decoding="async">` : `<span class="fl-ph">${r.kind === "product" ? "产品" : "赛道"}</span>`}
     <div class="fl-rt"><b>${esc(r.name)}</b><span class="sub">${r.target} 篇 · ${when(r.created)}</span></div>${runPill(r)}</div>
   <div class="fl-track">${r.steps.map((s, i) => `<div class="${segCls(r, i)}"><i></i><span>${s}</span></div>`).join("")}</div>
   <div class="fl-rf">${r.status === "done" ? `<span class="ok">合格 ${r.drafts.passed}</span>${r.drafts.failed ? `<span class="warn">需检查 ${r.drafts.failed}</span>` : ""}` : `<span class="sub fl-msg">${esc(r.msg)}</span>`}
     ${r.active ? "" : `<button class="btn gray sm" data-rerun="${r.id}" title="用同样的设置再跑一次">重新运行</button>`}
     <span class="go">${r.status === "done" ? "查看成品 ›" : "详情 ›"}</span></div>
 </article>`;
-const noteCover = (d, big) => d.images.length ? `<img src="/images/${esc(d.images[0])}" alt="" loading="lazy">` : `<div class="fl-tc${big ? " big" : ""}">${esc(d.title)}</div>`;
+const noteCover = (d, big) => d.images.length ? `<img src="${esc(thumb("/images/" + d.images[0]))}" alt="" loading="lazy" decoding="async">` : `<div class="fl-tc${big ? " big" : ""}">${esc(d.title)}</div>`;
 const noteCard = d => `<article class="fl-nc ${FL.picked.has(d.id) ? "picked" : ""}" data-note="${d.id}" tabindex="0">
   <div class="fl-cv">${noteCover(d)}${FL.picking ? `<span class="fl-sel" aria-hidden="true"></span>` : `<span class="fl-badge ${d.auto_ok === 0 ? "warn" : "ok"}">${d.auto_ok === 0 ? "需检查" : d.auto_ok === 1 ? "合格" : esc(d.grade || "")}</span>`}</div>
   <div class="fl-nt">${esc(d.title)}</div>
@@ -44,7 +44,7 @@ const accKwHtml = ks => ks === undefined ? `<p class="sub">正在按这个账号
 // ---------- 新建任务 ----------
 async function fNew() {
   if (!TRACKS.length) TRACKS = (await api("/api/tracks")).map(t => [t.name, t.keywords]);
-  const [list, runs, hot, accts] = await Promise.all([api("/api/products").catch(() => []), api("/api/runs").catch(() => []),
+  const [list, runs, hot, accts] = await Promise.all([api("/api/products").catch(() => []), api("/api/runs?limit=40").catch(() => []),
     api(`/api/qianfan/hot?track=${encodeURIComponent(FL.track || "")}`).catch(() => ({})), fetchAccts()]);
   if (FL.account && !accts.some(a => a.account_id === FL.account)) FL.account = "";
   const plan = FL.account ? (FL.plan[FL.account] ||= await api(`/api/qianfan/account_plan?account_id=${encodeURIComponent(FL.account)}`).catch(() => null)) : null;
@@ -54,7 +54,7 @@ async function fNew() {
   if (!FL.track) FL.track = TRACKS[0]?.[0] || "";
   const active = runs.filter(r => r.active);
   const recent = runs.filter(r => !r.active).slice(0, 4);
-  const mini = r => `<div class="fl-mini" data-run="${r.id}" tabindex="0">${r.cover ? `<img src="${esc(r.cover)}" alt="" loading="lazy">` : `<span class="fl-ph">${r.kind === "product" ? "产品" : "赛道"}</span>`}<div class="fl-rt"><b>${esc(r.name)}</b><span class="sub">${r.target} 篇 · ${when(r.created)}</span></div>${runPill(r)}</div>`;
+  const mini = r => `<div class="fl-mini" data-run="${r.id}" tabindex="0">${r.cover ? `<img src="${esc(thumb(r.cover, 240))}" alt="" loading="lazy" decoding="async">` : `<span class="fl-ph">${r.kind === "product" ? "产品" : "赛道"}</span>`}<div class="fl-rt"><b>${esc(r.name)}</b><span class="sub">${r.target} 篇 · ${when(r.created)}</span></div>${runPill(r)}</div>`;
   const aside = `<aside class="fl-aside">
     <section class="card"><div class="card-h"><b>正在进行</b><button class="btn ghost sm" data-go="runs" style="margin-left:auto">全部任务 ›</button></div>
       ${active.length ? active.slice(0, 4).map(mini).join("") : `<p class="sub" style="margin:0">没有进行中的任务</p>`}</section>
@@ -184,13 +184,17 @@ async function rerunRun(btn) {
 const openRun = id => { state.runId = id; localStorage.runId = id; go("run"); };
 async function fRuns() {
   const draw = rs => {
-    $("#main").innerHTML = rs.length ? `<div class="fl-runs">${rs.map(runCard).join("")}</div>`
+    $("#main").innerHTML = rs.length ? `<div class="fl-runs">${rs.map(runCard).join("")}</div>${rs.length >= (FL.runsLimit || 40) ? `<p style="text-align:center"><button class="btn gray" data-moreruns>显示更多任务</button></p>` : ""}`
       : `<div class="empty"><b>还没有任务</b>选赛道或上传产品,填好篇数就能开始<br><button class="btn" data-go="new">新建任务</button></div>`;
     FL.sig = JSON.stringify(rs);
   };
-  const rs = await api("/api/runs"); draw(rs);
-  $("#main").onclick = e => { const rr = e.target.closest("[data-rerun]"); if (rr) return rerunRun(rr); const r = e.target.closest("[data-run]"); if (r) openRun(+r.dataset.run); };
-  if (rs.some(r => r.active)) loop(async () => { const n = await api("/api/runs"); if (JSON.stringify(n) !== FL.sig) draw(n); return n.some(r => r.active); }, 4000);
+  const lim = FL.runsLimit || 40, url = `/api/runs?limit=${lim}`;
+  const rs = await api(url); draw(rs);
+  $("#main").onclick = e => {
+    if (e.target.closest("[data-moreruns]")) { FL.runsLimit = lim + 40; return fRuns(); }
+    const rr = e.target.closest("[data-rerun]"); if (rr) return rerunRun(rr); const r = e.target.closest("[data-run]"); if (r) openRun(+r.dataset.run);
+  };
+  if (rs.some(r => r.active)) loop(async () => { const n = await api(url); if (JSON.stringify(n) !== FL.sig) draw(n); return n.some(r => r.active); }, 4000);
 }
 function stepNote(r, s) {
   return { "识别产品": r.category ? `识别为「${esc(r.category)}」` : "", "采集": `${r.library ? `笔记库复用 ${r.library} 篇` + (r.tasks[1] ? " · " : " · 跳过采集") : ""}${r.tasks[1] ? `${r.tasks[0]}/${r.tasks[1]} 个关键词` : ""} · 共 ${r.notes} 篇<br><span class="sub">${esc(r.keywords.join("、"))}</span>`,
@@ -224,7 +228,7 @@ async function fRun() {
 
 // ---------- 成品库 ----------
 async function fLib() {
-  const [all, runs] = await Promise.all([api(`/api/library${FL.pid ? `?pid=${FL.pid}` : ""}`), api("/api/runs").catch(() => [])]);
+  const [all, runs] = await Promise.all([api(`/api/library${FL.pid ? `?pid=${FL.pid}` : ""}`), api("/api/runs?limit=200").catch(() => [])]);
   const by = { all: () => true, todo: d => !d.published, ok: d => d.auto_ok === 1, warn: d => d.auto_ok === 0 };
   const accOpts = [...new Map(all.filter(d => d.account_id).map(d => [d.account_id, d.account_name])).entries()];
   if (FL.acc && FL.acc !== "_none" && !accOpts.some(([id]) => id === FL.acc)) FL.acc = "";
@@ -237,9 +241,10 @@ async function fLib() {
     <select id="frun" aria-label="按任务筛选"><option value="0">全部任务</option>${runs.map(r => `<option value="${r.id}" ${FL.pid === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select>
     ${accOpts.length ? `<select id="facc2" aria-label="按发布账号筛选"><option value="">全部账号</option>${accOpts.map(([id, n]) => `<option value="${esc(id)}" ${FL.acc === id ? "selected" : ""}>${esc(n)}</option>`).join("")}<option value="_none" ${FL.acc === "_none" ? "selected" : ""}>未指定账号</option></select>` : ""}</div>
   ${FL.picking ? `<div class="fl-pickbar" role="toolbar" aria-label="批量导出"><span>已选 <b>${FL.picked.size}</b> 篇</span><button class="btn gray sm" id="fpall">全选当前 ${ds.length} 篇</button><button class="btn gray sm" id="fpoff">取消</button><button class="btn" id="fzip">打包 ${FL.picked.size} 篇</button></div>` : ""}
-  ${ds.length ? `<div class="fl-grid">${ds.map(noteCard).join("")}</div>` : `<div class="empty"><b>${all.length ? "这个筛选下没有笔记" : "还没有成品"}</b>${all.length ? "换个筛选看看" : "新建一个任务,做完的笔记会出现在这里"}${all.length ? "" : `<br><button class="btn" data-go="new">新建任务</button>`}</div>`}`;
+  ${ds.length ? `<div class="fl-grid">${ds.slice(0, FL.libShow || 60).map(noteCard).join("")}</div>${ds.length > (FL.libShow || 60) ? `<p style="text-align:center"><button class="btn gray" data-libmore>再显示 ${Math.min(60, ds.length - (FL.libShow || 60))} 篇(还有 ${ds.length - (FL.libShow || 60)} 篇)</button></p>` : ""}` : `<div class="empty"><b>${all.length ? "这个筛选下没有笔记" : "还没有成品"}</b>${all.length ? "换个筛选看看" : "新建一个任务,做完的笔记会出现在这里"}${all.length ? "" : `<br><button class="btn" data-go="new">新建任务</button>`}</div>`}`;
   $("#main").onclick = e => {
-    const f = e.target.closest("[data-ff]"); if (f) { FL.filter = f.dataset.ff; return fLib(); }
+    const f = e.target.closest("[data-ff]"); if (f) { FL.filter = f.dataset.ff; FL.libShow = 60; return fLib(); }
+    if (e.target.closest("[data-libmore]")) { FL.libShow = (FL.libShow || 60) + 60; return fLib(); }
     const n = e.target.closest("[data-note]"); if (!n) return;
     const id = +n.dataset.note;
     if (FL.picking) { FL.picked.has(id) ? FL.picked.delete(id) : FL.picked.add(id); return fLib(); }
@@ -299,7 +304,7 @@ function drawPv() {
   let m = $(".fl-pv"); if (!m) { m = document.createElement("div"); m.className = "fl-pv"; document.body.appendChild(m); bindPv(m); }
   m.innerHTML = `<div class="fl-sheet" role="dialog" aria-label="笔记预览">
     <div class="fl-gal"><button class="fl-xm" data-pclose aria-label="关闭">×</button>${imgs.length ? `<div class="fl-big"><img src="/images/${esc(imgs[v.img])}" alt="第 ${v.img + 1} 张配图">${imgs.length > 1 ? `<button class="fl-ib l" data-pimg="-1" aria-label="上一张">‹</button><button class="fl-ib r" data-pimg="1" aria-label="下一张">›</button>` : ""}</div>
-      <div class="fl-thumbs">${imgs.map((u, k) => `<button class="${k === v.img ? "on" : ""}" data-pto="${k}" aria-label="第 ${k + 1} 张"><img src="/images/${esc(u)}" alt=""></button>`).join("")}</div>
+      <div class="fl-thumbs">${imgs.map((u, k) => `<button class="${k === v.img ? "on" : ""}" data-pto="${k}" aria-label="第 ${k + 1} 张"><img src="${esc(thumb("/images/" + u, 240))}" alt=""></button>`).join("")}</div>
       <p class="fl-hint">手机上长按图片可保存到相册</p>` : `<div class="fl-big">${noteCover(d, true)}</div>`}</div>
     <div class="fl-txt">
       <div class="fl-th"><span class="fl-badge ${d.auto_ok === 0 ? "warn" : "ok"}">${d.auto_ok === 0 ? "需检查" : d.auto_ok === 1 ? "合格" : "成品"}</span>${d.score != null ? `<span class="sub">审稿 ${d.score} 分</span>` : ""}
@@ -397,7 +402,7 @@ document.addEventListener("keydown", e => { if (!FL.pv) return; if (e.key === "E
 const NB = { f: { track: "", topic: "", ai_type: "", tier: "", q: "", sort: "new" }, items: [], total: 0 };
 const NB_TIER = { viral: "爆款", hot: "热门", normal: "普通" };
 const nbCard = (n, i) => `<article class="fl-nc" data-nb="${i}" tabindex="0">
-  <div class="fl-cv">${n.cover ? `<img src="${esc(n.cover)}" referrerpolicy="no-referrer" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'fl-tc',textContent:this.dataset.t}))" data-t="${esc(n.title)}">` : `<div class="fl-tc">${esc(n.title)}</div>`}
+  <div class="fl-cv">${n.cover ? `<img src="${esc(thumb(n.cover))}" referrerpolicy="no-referrer" loading="lazy" decoding="async" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'fl-tc',textContent:this.dataset.t}))" data-t="${esc(n.title)}">` : `<div class="fl-tc">${esc(n.title)}</div>`}
     ${n.tier && n.tier !== "normal" ? `<span class="fl-badge ${n.tier === "viral" ? "ok" : ""}">${NB_TIER[n.tier]}</span>` : ""}</div>
   <div class="fl-nt">${n.note_type === "video" ? "▶ " : ""}${esc(n.title)}</div>
   <div class="fl-ns"><span>${esc(n.topic || n.track || "")}</span><span class="sub">♥ ${fmtN(n.likes)} · ★ ${fmtN(n.collects)}</span></div>

@@ -297,17 +297,35 @@ def match_drafts(items: list[dict]) -> dict[int, dict]:
     norm = {d["id"]: _norm_title(d["title"]) for d in drafts}
     grams = {i: _grams(t) for i, t in norm.items() if t}
     acct = {d["id"]: d["account_id"] or "" for d in drafts}
+    # 索引:标题全等 → 稿子(保持原来的先后顺序);3 字片段 → 含它的稿子。
+    # 原来每条笔记都扫一遍所有稿子(稿子 × 笔记,几百篇稿子 × 几千条笔记要循环上百万次),现在只看和它有重合片段的稿子。
+    by_norm, inv = {}, {}
+    for i, g in grams.items():
+        by_norm.setdefault(norm[i], []).append(i)
+        for x in g:
+            inv.setdefault(x, []).append(i)
     for it in items:
         t = _norm_title(it.get("title", ""))
         if not t or str(it.get("note_id") or "") in taken:
             continue
         aid = it.get("account_id", "")
-        cands = [i for i in grams if not acct[i] or not aid or acct[i] == aid]
-        did = next((i for i in cands if norm[i] == t and i not in out), 0)
+        ok = lambda i: i not in out and (not acct[i] or not aid or acct[i] == aid)
+        did = next((i for i in by_norm.get(t, ()) if ok(i)), 0)
         if not did:
             g = _grams(t)
-            best = max(((len(g & grams[i]) / len(g | grams[i]), i) for i in cands if g and grams[i] and i not in out), default=(0, 0))
-            did = best[1] if best[0] >= 0.8 else 0
+            if g:
+                hits = {}
+                for x in g:
+                    for i in inv.get(x, ()):
+                        hits[i] = hits.get(i, 0) + 1
+                best = (0, 0)
+                for i, c in hits.items():
+                    if 5 * c < 4 * len(g) or not ok(i):   # Jaccard ≥ 0.8 的必要条件:共有片段 ≥ 0.8 × 笔记的片段数
+                        continue
+                    score = c / len(g | grams[i])
+                    if (score, i) > best:   # 分数相同取编号大的,和原来 max() 的结果一致
+                        best = (score, i)
+                did = best[1] if best[0] >= 0.8 else 0
         if did:
             out[did] = it
     return out

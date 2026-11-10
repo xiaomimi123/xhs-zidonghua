@@ -479,23 +479,51 @@ def cancel(pid: int):
     q_exec("UPDATE crawl_tasks SET status='failed', error='已取消' WHERE project_id=? AND status IN ('pending','running')", pid)
 
 
+def _in_chunks(sql: str, ids, size: int = 500) -> list[dict]:
+    """sql 里用 {} 代表 IN (...) 的占位符;SQLite 一条语句的参数个数有上限,分批查。"""
+    ids, out = list(ids), []
+    for i in range(0, len(ids), size):
+        part = ids[i:i + size]
+        out += q_all(sql.format(",".join("?" * len(part))), *part)
+    return out
+
+
+def progress_many(pids: list[int]) -> dict[int, dict]:
+    """一批任务的进度。每类数据只查一次(原来每个任务要查 8 条左右,每条还要重新打开数据库连接,任务一多任务页就慢)。"""
+    pids = list(dict.fromkeys(pids))
+    if not pids:
+        return {}
+    runs = {r["project_id"]: r for r in _in_chunks("SELECT * FROM autoruns WHERE project_id IN ({})", pids)}
+    tasks: dict[int, list] = {}
+    for r in _in_chunks("SELECT project_id, status FROM crawl_tasks WHERE project_id IN ({})", pids):
+        tasks.setdefault(r["project_id"], []).append(r["status"])
+    draft_ids = {i for r in runs.values() for i in (r["state"] or {}).get("drafts") or []}
+    pb_ids = {i for r in runs.values() for i in (r["state"] or {}).get("pbs") or []}
+    drafts = {r["id"]: r for r in _in_chunks("SELECT id, status, auto_ok, title FROM drafts WHERE id IN ({})", draft_ids)}
+    pbs = {r["id"]: r for r in _in_chunks("SELECT id, status FROM playbooks WHERE id IN ({})", pb_ids)}
+    notes = {r["project_id"]: r["c"] for r in _in_chunks("SELECT project_id, COUNT(*) c FROM project_notes WHERE project_id IN ({}) GROUP BY project_id", pids)}
+    prod = {r["id"]: r["product_id"] for r in _in_chunks("SELECT id, product_id FROM projects WHERE id IN ({})", pids)}
+    out = {}
+    for pid in pids:
+        run = runs.get(pid)
+        if not run:
+            continue
+        st = run["state"] or {}
+        ts = tasks.get(pid, [])
+        ds = [drafts[i] for i in dict.fromkeys(st.get("drafts") or []) if i in drafts]
+        pl = [pbs[i] for i in dict.fromkeys(st.get("pbs") or []) if i in pbs]
+        out[pid] = {"status": run["status"], "msg": run["msg"], "target": run["target"], "active": run["status"] in ACTIVE,
+                    "product": bool(prod.get(pid)), "failed_at": st.get("failed_at", ""),
+                    "library": st.get("library", 0), "refs": st.get("refs", 0), "reused": st.get("reused", 0),
+                    "step": STEPS.index(run["status"]) if run["status"] in STEPS else -1,
+                    "tasks": [sum(1 for t in ts if t not in ("pending", "running")), len(ts)],
+                    "notes": notes.get(pid, 0),
+                    "playbooks": [sum(1 for p in pl if p["status"] == "done"), len(pl)],
+                    "drafts": {"total": len(ds), "passed": sum(1 for d in ds if d["auto_ok"] == 1),
+                               "finished": sum(1 for d in ds if d["status"] in ("ready", "text_done", "exported", "error") and d["title"]),
+                               "failed": sum(1 for d in ds if d["auto_ok"] == 0)}}
+    return out
+
+
 def progress(pid: int) -> dict | None:
-    run = q_one("SELECT * FROM autoruns WHERE project_id=?", pid)
-    if not run:
-        return None
-    st = run["state"] or {}
-    tasks = q_all("SELECT status FROM crawl_tasks WHERE project_id=?", pid)
-    ids = st.get("drafts") or []
-    ds = q_all(f"SELECT status,auto_ok,title FROM drafts WHERE id IN ({','.join('?' * len(ids))})", *ids) if ids else []
-    pbs = q_all(f"SELECT status FROM playbooks WHERE id IN ({','.join('?' * len(st['pbs']))})", *st["pbs"]) if st.get("pbs") else []
-    pr = q_one("SELECT product_id FROM projects WHERE id=?", pid)
-    return {"status": run["status"], "msg": run["msg"], "target": run["target"], "active": run["status"] in ACTIVE,
-            "product": bool(pr and pr["product_id"]), "failed_at": st.get("failed_at", ""),
-            "library": st.get("library", 0), "refs": st.get("refs", 0), "reused": st.get("reused", 0),
-            "step": STEPS.index(run["status"]) if run["status"] in STEPS else -1,
-            "tasks": [sum(1 for t in tasks if t["status"] not in ("pending", "running")), len(tasks)],
-            "notes": q_one("SELECT COUNT(*) c FROM project_notes WHERE project_id=?", pid)["c"],
-            "playbooks": [sum(1 for p in pbs if p["status"] == "done"), len(pbs)],
-            "drafts": {"total": len(ds), "passed": sum(1 for d in ds if d["auto_ok"] == 1),
-                       "finished": sum(1 for d in ds if d["status"] in ("ready", "text_done", "exported", "error") and d["title"]),
-                       "failed": sum(1 for d in ds if d["auto_ok"] == 0)}}
+    return progress_many([pid]).get(pid)

@@ -32,7 +32,7 @@ function lvFlow(j) {
 async function fLive() {
   clearTimeout(LV.timer);
   let sc, sj;
-  [LV.lib, LV.runs, LV.st, LV.jobs, LV.motions, sc, LV.prods, sj] = await Promise.all([api("/api/library"), api("/api/runs").catch(() => []),
+  [LV.lib, LV.runs, LV.st, LV.jobs, LV.motions, sc, LV.prods, sj] = await Promise.all([api("/api/library"), api("/api/runs?limit=200").catch(() => []),
     api("/api/live/status").catch(() => null), api("/api/live/jobs").catch(() => []), api("/api/live/motions").catch(() => []),
     api("/api/live/scenes").catch(() => ({ scenes: [] })), api("/api/products").catch(() => []),
     api("/api/live/bg_options").catch(() => ({ items: [], default: [] }))]);
@@ -87,8 +87,8 @@ function lvGrid() {
   $("#lvgrid").innerHTML = ds.length ? `<div class="fl-grid lv-grid">${shown.map(d => {
     const on = i => LV.sel.has(lvKey(d.id, i));
     return `<article class="fl-nc lv-nc ${d.images.some(on) ? "picked" : ""}">
-      <div class="fl-cv lv-cv ${on(d.images[0]) ? "on" : ""}" data-k data-d="${d.id}" data-img="${esc(d.images[0])}" tabindex="0" role="checkbox" aria-checked="${on(d.images[0])}" aria-label="选择封面"><img src="/images/${esc(d.images[0])}" alt="" loading="lazy" decoding="async"><span class="fl-sel" aria-hidden="true"></span></div>
-      ${d.images.length > 1 ? `<div class="lv-th">${d.images.slice(1).map((i, n) => `<button class="lv-t ${on(i) ? "on" : ""}" data-k data-d="${d.id}" data-img="${esc(i)}" aria-label="选择第 ${n + 2} 张"><img src="/images/${esc(i)}" alt="" loading="lazy" decoding="async"></button>`).join("")}</div>` : ""}
+      <div class="fl-cv lv-cv ${on(d.images[0]) ? "on" : ""}" data-k data-d="${d.id}" data-img="${esc(d.images[0])}" tabindex="0" role="checkbox" aria-checked="${on(d.images[0])}" aria-label="选择封面"><img src="${esc(thumb("/images/" + d.images[0]))}" alt="" loading="lazy" decoding="async"><span class="fl-sel" aria-hidden="true"></span></div>
+      ${d.images.length > 1 ? `<div class="lv-th">${d.images.slice(1).map((i, n) => `<button class="lv-t ${on(i) ? "on" : ""}" data-k data-d="${d.id}" data-img="${esc(i)}" aria-label="选择第 ${n + 2} 张"><img src="${esc(thumb("/images/" + i, 240))}" alt="" loading="lazy" decoding="async"></button>`).join("")}</div>` : ""}
       <div class="fl-nt">${esc(d.title)}</div>
       <div class="fl-ns"><span>${esc(d.run)}</span>${d.published ? `<span class="pub">已发布</span>` : ""}</div></article>`;
   }).join("")}</div>${ds.length > shown.length ? `<p style="text-align:center"><button class="btn gray" data-more>再显示 ${Math.min(60, ds.length - shown.length)} 篇(还有 ${ds.length - shown.length} 篇)</button></p>` : ""}`
@@ -314,7 +314,7 @@ function lvJobs() {
     const how = motion ? `真实动作 · ${esc(j.motion || lvMotionLabel(o.motion))}${o.take ? ` · 第 ${o.take} 条` : ""} · ${o.seconds || 3} 秒` : `慢推镜头 · 推近 ${Math.round(((o.zoom || 1) - 1) * 100)}% · ${o.seconds || 5} 秒`;
     const from = j.src === "upload" ? "上传图片 · " : j.src === "gen" ? "产品场景图 · " : j.src === "bgswap" ? `换背景 · ${esc(j.scene || "自动场景")} · ` : "";
     const flow = lvFlow(j);
-    return `<article class="lv-job" data-j="${j.id}">${j.thumb || j.image ? `<img src="/images/${esc(j.thumb || j.image)}" alt="" loading="lazy" decoding="async">` : `<div class="lv-ph" aria-hidden="true">场景图</div>`}
+    return `<article class="lv-job" data-j="${j.id}">${j.thumb || j.image ? `<img src="${esc(thumb("/images/" + (j.thumb || j.image), 240))}" alt="" loading="lazy" decoding="async">` : `<div class="lv-ph" aria-hidden="true">场景图</div>`}
       <div class="lv-jt"><b>${esc(j.title)}</b><span class="sub">${from}${how} · ${esc(LV_FIT[o.fit] || "")} · ${esc(when(j.created))}${j.worker ? ` · ${esc(j.worker)}` : ""}${j.size ? ` · ${(j.size / 1048576).toFixed(1)} MB` : ""}</span>
         ${flow.length > 1 ? `<div class="lv-flow" aria-label="进度">${flow.map(f => `<span class="${f.cls}"><i></i>${f.name}</span>`).join("")}</div>` : ""}
         ${j.status === "error" ? `<span class="fl-err">${esc(j.error)}</span>` : ""}</div>

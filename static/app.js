@@ -28,6 +28,8 @@ const toast = (msg, err) => {
   const t = document.createElement("div"); t.className = "toast" + (err ? " err" : ""); t.textContent = msg;
   document.body.appendChild(t); setTimeout(() => t.remove(), 2600);
 };
+// 列表 / 卡片网格里用缩略图(WebP,几十 KB),只有点开预览才加载原图;外链图片原样返回
+const thumb = (u, w = 360) => u && /^\/(images|note_images|product_images)\//.test(u) && !u.includes("?") ? `${u}?w=${w}` : u;
 const fmt = n => n >= 10000 ? (n / 10000).toFixed(1) + "w" : (n ?? 0);
 
 const STEPS = [

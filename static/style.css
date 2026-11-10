@@ -986,3 +986,7 @@ select.sm,.card-h select{min-height:30px;padding:4px 28px 4px 9px;font-size:13px
 .lv-flow .bad i{background:var(--err)}.lv-flow .bad{color:var(--err)}
 @media(max-width:1000px){.lv-form{grid-template-columns:1fr}.lv-side{position:static}}
 @media(max-width:720px){.lv-modes{grid-template-columns:1fr}.lv-mode{grid-template-columns:1fr auto;align-items:center}.lv-mode em{grid-row:1;grid-column:2;margin:0}.lv-mode span{grid-column:1/-1}.lv-m{white-space:normal}.lv-how-b{margin-left:0}}
+
+/* 卡片网格:屏幕外的卡片先不渲染,几百篇成品也能流畅滚动 */
+.fl-nc,.fl-run{content-visibility:auto;contain-intrinsic-size:auto 330px}
+.fl-run{contain-intrinsic-size:auto 120px}

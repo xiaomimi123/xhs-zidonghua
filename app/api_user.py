@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from . import llm, worker, exporter, imagegen, compliance, mirror, lengthcap, autorun, products, qianfan, loop
+from . import llm, worker, exporter, imagegen, compliance, mirror, lengthcap, autorun, products, qianfan, loop, thumbs
 from .auth import (require_user, user_ok, is_admin, check_pw, hash_pw, make_token, make_staff_token, current_staff, staff_mode, login_required,
                    throttle, CURRENT, SESSION_DAYS)
 from .api_collector import collector_summary
@@ -253,27 +253,32 @@ def del_product(pid: int):
 
 
 @router.get("/product_images/{name}")
-def product_image(name: str):
+def product_image(name: str, w: int = 0):
     p = products.DIR / Path(name).name
     if not p.is_file():
         raise HTTPException(404)
-    return FileResponse(p, media_type=mirror.MEDIA.get(p.suffix.lower()), headers={"Cache-Control": "private, max-age=86400"})
+    return _img_response(p, w, "private, max-age=86400")
 
 
 # ---------- 流水线界面:任务列表、任务详情、成品库 ----------
 STEP_NAMES = {"profiling": "识别产品", "collecting": "采集", "tagging": "分类", "analyzing": "拆解", "writing": "写稿配图", "retrying": "质检"}
 
 
-def _run_info(p: dict) -> dict:
-    """一个一键生成任务的概况:名称、阶段条、进度数字、封面图。"""
-    pr = autorun.progress(p["id"]) or {}
-    prod = products.get(p.get("product_id"))
+def _run_info(p: dict, pre: tuple | None = None) -> dict:
+    """一个一键生成任务的概况:名称、阶段条、进度数字、封面图。pre = (进度, 产品, 封面稿子的图片列表):批量查好了就传进来。"""
+    if pre:
+        pr, prod, imgs = pre
+        pr = pr or {}
+    else:
+        pr = autorun.progress(p["id"]) or {}
+        prod = products.get(p.get("product_id"))
+        img = q_one("SELECT images FROM drafts WHERE project_id=? AND images!='[]' ORDER BY auto_ok DESC, id LIMIT 1", p["id"])
+        imgs = img["images"] if img else []
     steps = [s for s in autorun.STEPS if s in STEP_NAMES and (prod or s != "profiling")]
     status = pr.get("status", "")
     at = status if status in steps else pr.get("failed_at") if status in ("error", "canceled") else ""
     idx = len(steps) if status == "done" else (steps.index(at) if at in steps else 0)
-    img = q_one("SELECT images FROM drafts WHERE project_id=? AND images!='[]' ORDER BY auto_ok DESC, id LIMIT 1", p["id"])
-    cover = next((f"/images/{i}" for i in (img["images"] if img else []) if i), "")
+    cover = next((f"/images/{i}" for i in (imgs or []) if i), "")
     if not cover and prod and prod["images"]:
         cover = f"/product_images/{prod['images'][0]}"
     kws = p.get("keywords") or []
@@ -285,9 +290,24 @@ def _run_info(p: dict) -> dict:
             "library": pr.get("library", 0), "refs": pr.get("refs", 0), "reused": pr.get("reused", 0)}
 
 
+def _runs_info(ps: list[dict]) -> list[dict]:
+    """一批任务的概况:进度、产品、封面各查一次(原来每个任务查 8 条左右,任务越多越慢)。"""
+    if not ps:
+        return []
+    pids = [p["id"] for p in ps]
+    prs = autorun.progress_many(pids)
+    prods = {r["id"]: r for r in autorun._in_chunks("SELECT * FROM products WHERE id IN ({})", {p["product_id"] for p in ps if p.get("product_id")})}
+    covers = {r["project_id"]: r["images"] for r in autorun._in_chunks(
+        "SELECT project_id, images FROM (SELECT project_id, images, ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY auto_ok DESC, id) AS rn "
+        "FROM drafts WHERE project_id IN ({}) AND images!='[]') WHERE rn=1", pids)}
+    return [_run_info(p, (prs.get(p["id"]), prods.get(p.get("product_id")), covers.get(p["id"]))) for p in ps]
+
+
 @router.get("/api/runs")
-def list_runs():
-    return [_run_info(p) for p in q_all("SELECT p.* FROM projects p JOIN autoruns a ON a.project_id=p.id ORDER BY a.id DESC")]
+def list_runs(limit: int = 100):
+    """最近的 limit 个任务(默认 100,最多 500)。页面用「显示更多」逐步加载,不一次取全部。"""
+    limit = min(max(int(limit or 100), 1), 500)
+    return _runs_info(q_all("SELECT p.* FROM projects p JOIN autoruns a ON a.project_id=p.id ORDER BY a.id DESC LIMIT ?", limit))
 
 
 @router.post("/api/runs/{pid}/rerun")
@@ -320,8 +340,9 @@ def library(pid: int = 0):
                  "WHERE d.title!='' AND d.status NOT IN ('queued','writing','reviewing','drawing')"
                  + (" AND d.project_id=?" if pid else "") + " ORDER BY d.id DESC LIMIT 500", *([pid] if pid else []))
     names = {r["id"]: r["name"] for r in q_all("SELECT id, name FROM products")}
-    perf = qianfan.match_drafts(qianfan.notes_all()[0])
-    tiers = {r["id"]: r for r in loop.evaluate(register=False)["rows"]}
+    items, data_at = qianfan.notes_all()
+    perf = qianfan.match_drafts(items)   # 只算一次(evaluate 里也要用,原来各算一遍)
+    tiers = {r["id"]: r for r in loop.evaluate(register=False, pre=(items, data_at, perf))["rows"]}
     perf_keys = ("views", "likes", "collects", "comments", "shares", "new_fans", "published_at", "account_id", "account_name", "note_id")
     return [{"id": d["id"], "pid": d["project_id"],
              "run": names.get(d["product_id"]) or f"{d['track']} · {(d['keywords'] or [''])[0]}".strip(" ·"),
@@ -813,18 +834,26 @@ def download(name: str):
     return FileResponse(p, filename=p.name)
 
 
+def _img_response(p: Path, w: int, cache: str):
+    """w > 0:返回缓存好的缩略图(WebP,浏览器可以长期缓存);否则返回原图。"""
+    if w:
+        t = thumbs.thumb_for(p, w)
+        if t != p:
+            return FileResponse(t, media_type="image/webp", headers={"Cache-Control": "private, max-age=31536000, immutable"})
+    return FileResponse(p, media_type=mirror.MEDIA.get(p.suffix.lower()), headers={"Cache-Control": cache})
+
+
 @router.get("/note_images/{name}")
-def note_image(name: str):
+def note_image(name: str, w: int = 0):
     p = mirror.DIR / Path(name).name
     if not p.is_file():
         raise HTTPException(404)
-    return FileResponse(p, media_type=mirror.MEDIA.get(p.suffix.lower()),
-                        headers={"Cache-Control": "private, max-age=31536000, immutable"})  # 文件名是内容哈希,可长期缓存
+    return _img_response(p, w, "private, max-age=31536000, immutable")  # 文件名是内容哈希,可长期缓存
 
 
 @router.get("/images/{name}")
-def image(name: str):
+def image(name: str, w: int = 0):
     p = imagegen.IMG_DIR / Path(name).name
     if not p.exists():
         raise HTTPException(404)
-    return FileResponse(p, media_type=mirror.MEDIA.get(p.suffix.lower()))
+    return _img_response(p, w, "private, max-age=86400")

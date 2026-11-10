@@ -8,9 +8,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from .common import Report
 
-from .cases import iso_collect, iso_notes, iso_autorun, iso_product, iso_library, iso_export, iso_recognize, iso_qianfan, iso_accounts, iso_shops, iso_loop, iso_staff, iso_live
+from .cases import iso_collect, iso_notes, iso_autorun, iso_product, iso_library, iso_export, iso_recognize, iso_qianfan, iso_accounts, iso_shops, iso_loop, iso_staff, iso_live, iso_perf
 
-CASES = [iso_collect, iso_notes, iso_autorun, iso_product, iso_library, iso_export, iso_recognize, iso_qianfan, iso_accounts, iso_shops, iso_loop, iso_live, iso_staff]
+CASES = [iso_collect, iso_notes, iso_autorun, iso_product, iso_library, iso_export, iso_recognize, iso_qianfan, iso_accounts, iso_shops, iso_loop, iso_live, iso_perf, iso_staff]
 
 
 def isolated(rep: Report):
