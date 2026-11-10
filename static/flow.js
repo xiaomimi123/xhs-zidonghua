@@ -227,6 +227,7 @@ async function fRun() {
 }
 
 // ---------- 成品库 ----------
+const LIB_SIZE = 36;   // 成品库每页篇数
 async function fLib() {
   const [all, runs] = await Promise.all([api(`/api/library${FL.pid ? `?pid=${FL.pid}` : ""}`), api("/api/runs?limit=200").catch(() => [])]);
   const by = { all: () => true, todo: d => !d.published, ok: d => d.auto_ok === 1, warn: d => d.auto_ok === 0 };
@@ -234,6 +235,7 @@ async function fLib() {
   if (FL.acc && FL.acc !== "_none" && !accOpts.some(([id]) => id === FL.acc)) FL.acc = "";
   const byAcc = d => !FL.acc || (FL.acc === "_none" ? !d.account_id : d.account_id === FL.acc);
   const ds = all.filter(by[FL.filter] || by.all).filter(byAcc);
+  const libPages = Math.max(1, Math.ceil(ds.length / LIB_SIZE)), libPage = Math.min(Math.max(1, FL.libPage || 1), libPages);   // 筛选后页数变少时,自动落到最后一页
   document.body.classList.toggle("fl-picking", FL.picking);
   $("#pa").innerHTML = FL.picking ? "" : `<button class="btn gray" id="fpon">批量导出</button>`;
   $("#main").innerHTML = `<div id="fres"></div><div class="fl-bar">
@@ -241,17 +243,18 @@ async function fLib() {
     <select id="frun" aria-label="按任务筛选"><option value="0">全部任务</option>${runs.map(r => `<option value="${r.id}" ${FL.pid === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select>
     ${accOpts.length ? `<select id="facc2" aria-label="按发布账号筛选"><option value="">全部账号</option>${accOpts.map(([id, n]) => `<option value="${esc(id)}" ${FL.acc === id ? "selected" : ""}>${esc(n)}</option>`).join("")}<option value="_none" ${FL.acc === "_none" ? "selected" : ""}>未指定账号</option></select>` : ""}</div>
   ${FL.picking ? `<div class="fl-pickbar" role="toolbar" aria-label="批量导出"><span>已选 <b>${FL.picked.size}</b> 篇</span><button class="btn gray sm" id="fpall">全选当前 ${ds.length} 篇</button><button class="btn gray sm" id="fpoff">取消</button><button class="btn" id="fzip">打包 ${FL.picked.size} 篇</button></div>` : ""}
-  ${ds.length ? `<div class="fl-grid">${ds.slice(0, FL.libShow || 60).map(noteCard).join("")}</div>${ds.length > (FL.libShow || 60) ? `<p style="text-align:center"><button class="btn gray" data-libmore>再显示 ${Math.min(60, ds.length - (FL.libShow || 60))} 篇(还有 ${ds.length - (FL.libShow || 60)} 篇)</button></p>` : ""}` : `<div class="empty"><b>${all.length ? "这个筛选下没有笔记" : "还没有成品"}</b>${all.length ? "换个筛选看看" : "新建一个任务,做完的笔记会出现在这里"}${all.length ? "" : `<br><button class="btn" data-go="new">新建任务</button>`}</div>`}`;
+  ${ds.length ? `<div class="pg-top"><span class="sub">共 ${ds.length} 篇 · 第 ${(libPage - 1) * LIB_SIZE + 1}–${Math.min(libPage * LIB_SIZE, ds.length)} 篇${libPages > 1 ? ` · 第 ${libPage} / ${libPages} 页` : ""}</span></div><div class="fl-grid">${ds.slice((libPage - 1) * LIB_SIZE, libPage * LIB_SIZE).map(noteCard).join("")}</div>${pager(libPage, ds.length, LIB_SIZE)}` : `<div class="empty"><b>${all.length ? "这个筛选下没有笔记" : "还没有成品"}</b>${all.length ? "换个筛选看看" : "新建一个任务,做完的笔记会出现在这里"}${all.length ? "" : `<br><button class="btn" data-go="new">新建任务</button>`}</div>`}`;
   $("#main").onclick = e => {
-    const f = e.target.closest("[data-ff]"); if (f) { FL.filter = f.dataset.ff; FL.libShow = 60; return fLib(); }
-    if (e.target.closest("[data-libmore]")) { FL.libShow = (FL.libShow || 60) + 60; return fLib(); }
+    const f = e.target.closest("[data-ff]"); if (f) { FL.filter = f.dataset.ff; FL.libPage = 1; return fLib(); }
+    const g = e.target.closest("[data-pg]");
+    if (g) { if (g.disabled) return; FL.libPage = +g.dataset.pg; return fLib().then(() => window.scrollTo({ top: 0, behavior: "smooth" })); }
     const n = e.target.closest("[data-note]"); if (!n) return;
     const id = +n.dataset.note;
     if (FL.picking) { FL.picked.has(id) ? FL.picked.delete(id) : FL.picked.add(id); return fLib(); }
     fOpen(id, ds);
   };
-  $("#frun").onchange = e => { FL.pid = +e.target.value; fLib(); };
-  $("#facc2") && ($("#facc2").onchange = e => { FL.acc = e.target.value; fLib(); });
+  $("#frun").onchange = e => { FL.pid = +e.target.value; FL.libPage = 1; fLib(); };
+  $("#facc2") && ($("#facc2").onchange = e => { FL.acc = e.target.value; FL.libPage = 1; fLib(); });
   $("#fpon") && ($("#fpon").onclick = () => { FL.picking = true; FL.picked = new Set(ds.filter(d => d.auto_ok !== 0 && !d.published).map(d => d.id)); fLib(); });
   $("#fpoff") && ($("#fpoff").onclick = () => { FL.picking = false; FL.picked.clear(); fLib(); });
   $("#fpall") && ($("#fpall").onclick = () => { ds.forEach(d => FL.picked.add(d.id)); fLib(); });
