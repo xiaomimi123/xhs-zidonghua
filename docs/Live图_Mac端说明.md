@@ -48,9 +48,39 @@ python3 mac_worker.py --local ~/Pictures/待做 --out ~/LivePhotos
   再看 iPhone 上是不是用「照片」App 导入的(微信 / 网页版 iCloud 会丢配对信息)。
 - **任务一直是「生成中」**:领走超过 20 分钟没回传会自动退回排队,Mac 重新启动后会再领到。
 
+
+## 两种效果
+| 效果 | 谁来做 | 说明 |
+|---|---|---|
+| 慢推镜头 | 只需要 Mac | 把图做成缓慢推近的动画,快,不用显卡;但是整张图一起放大,画面是「平」的 |
+| 真实动作 | 先由装了 ComfyUI 的电脑生成视频,再由 Mac 做成实况 | 图生视频(MiniMax H3),手持轻晃 / 手转产品 / 镜头靠近,更像手机随手拍的真实实况 |
+
+```
+选图 → [视频 worker:本机显卡,约 40 秒/条] → 视频 → [Mac:makelive 打包 .pvt] → AirDrop / iCloud → iPhone 相册 → 小红书
+```
+任务状态:排队 · 等待生成视频 → 生成视频中 → 视频已好 · 等待 Mac → Mac 制作实况中 → 已完成。视频好了可以先在任务页点「看视频」。
+
+## 视频 worker(只有「真实动作」需要)
+在装了 ComfyUI + MiniMax H3(UNET / 4 步加速 LoRA / Qwen3-VL 文本编码器 / 视频与音频 VAE)和 MiniMax H3 Director 节点的电脑上:
+```bash
+python tools/livephoto/video_worker.py --server http://工作台地址:18765 --token 采集端Token
+```
+- 默认调用本机 `http://127.0.0.1:8188` 的 ComfyUI(`--comfy` 可改),输出 576×768、3 秒、24fps;`--size 768x1024` 画质更好但更慢更占显存。
+- ComfyUI 不需要对外开放:worker 主动连工作台领任务、把视频传回去。
+- 动作提示词统一写成「手机随手拍的家庭视频、手抖、自动曝光、不要电影感」,模板在 `app/api_live.py` 的 `MOTIONS`。
+- 需要 Pillow;ComfyUI 里没有 SageAttention 补丁节点也能跑(只是可能更慢)。
+
+Mac 端处理真实动作任务时:关键照片默认取视频第一帧(和视频画面一致,播放时不跳变);加 `--original-still` 改用原图(更清晰,但构图可能略有差异);视频里模型生成的声音默认去掉,加 `--keep-audio` 保留。
+
+## 已知问题
+- 真实动作的视频里,产品包装上的小字转动时可能走样;「手转产品」最明显,「手持轻晃」最稳。
+- 生图提示词已改成「手机随手拍的生活照」风格(`app/covers.py` 的 `UGC_STYLE` 和场景库),不再是棚拍商业风。
+
 ## 相关文件
 - `app/api_live.py`:任务队列与接口(用户端 `/api/live/*`,Mac 端 `/api/live/worker/*`)
 - `static/live.js`:「Live 图」页
 - `tools/livephoto/make_live.py`:渲染动画、写 JPG/MOV 元数据(也可单独命令行用)
 - `tools/livephoto/mac_worker.py`:Mac 端领任务脚本
+- `tools/livephoto/video_worker.py`:视频 worker(本机显卡 + ComfyUI,真实动作模式)
+- `tools/livephoto/imgfit.py`:任意比例的图适配成 3:4(只依赖 Pillow)
 - `evals/cases/iso_live.py`:任务队列的隔离测试(在容器里跑回归时会一起跑)

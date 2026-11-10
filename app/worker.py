@@ -318,7 +318,7 @@ def _image_prompt(title: str, p: str, with_product: bool = False, scene: str = "
     有产品参考图时,要求保持产品外观和包装不变。"""
     tail = "图中的文字只能是引号里的这些简体中文,不要添加任何其他文字。" if compliance.image_texts([p]) else "画面中不要出现任何文字、字母或水印。"
     head = "以参考图中的产品为主体,严格保持产品的外观、颜色、包装和包装上的文字不变。" if with_product else ""
-    return f"{head}{f'场景:{scene}。' if scene else ''}{p.rstrip('。')}。纯摄影画面,不要标题大字、图标、对错符号、箭头、序号或标注。{tail}"
+    return f"{head}{f'场景:{scene}。' if scene else ''}{p.rstrip('。')}。{covers.UGC_STYLE}。不要标题大字、图标、对错符号、箭头、序号或标注。{tail}"
 
 
 def _render_cover(did: int, cc: dict, refs: list) -> str:

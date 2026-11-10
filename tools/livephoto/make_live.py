@@ -15,10 +15,11 @@ import sys
 import uuid
 from pathlib import Path
 
-from PIL import Image, ImageFilter
+from PIL import Image
 import imageio_ffmpeg
 
-W, H = 1080, 1440   # 小红书 Live 图 3:4
+from imgfit import W, H, fit_to_3x4
+
 
 
 # ---------------- 画面:缓慢推近(Ken Burns) ----------------
@@ -189,27 +190,6 @@ def check(jpg: Path, mov: Path) -> bool:
     return ok
 
 
-# ---------------- 任意比例的图 → 3:4 ----------------
-def fit_to_3x4(img: Image.Image, mode: str = "crop", focus_y: float = 0.35) -> Image.Image:
-    """成品库里的图常常是 9:16 等比例,Live 图要 3:4(1080×1440)。
-    crop = 铺满后裁掉多出来的部分(focus_y 决定保留偏上还是偏下);blur = 完整显示,上下用放大虚化的原图补边。"""
-    img = img.convert("RGB")
-    if abs(img.width / img.height - W / H) <= 0.01:
-        return img.resize((W, H), Image.LANCZOS)
-    k = max(W / img.width, H / img.height)             # 铺满
-    cover = img.resize((max(W, round(img.width * k)), max(H, round(img.height * k))), Image.LANCZOS)
-    x0 = (cover.width - W) // 2
-    y0 = round((cover.height - H) * min(max(focus_y, 0), 1))
-    bg = cover.crop((x0, y0, x0 + W, y0 + H))
-    if mode != "blur":
-        return bg
-    bg = bg.filter(ImageFilter.GaussianBlur(40)).point(lambda v: int(v * 0.75))   # 虚化并压暗,让前景更突出
-    k = min(W / img.width, H / img.height)             # 完整放进去
-    fg = img.resize((round(img.width * k), round(img.height * k)), Image.LANCZOS)
-    bg.paste(fg, ((W - fg.width) // 2, (H - fg.height) // 2))
-    return bg
-
-
 def build_pair(src: Path, out: Path, slug: str, seconds: float = 5, fps: int = 30, zoom: float = 1.08,
                focus_y: float = 0.35, fit: str = "crop") -> tuple[Path, Path, str]:
     """一张图 → 关键帧 JPG + 5 秒 MOV(两边同一个内容 ID,MOV 里带 still-image-time 轨)。返回 (jpg, mov, 内容 ID)。"""
@@ -219,6 +199,34 @@ def build_pair(src: Path, out: Path, slug: str, seconds: float = 5, fps: int = 3
     jpg, mov = out / f"IMG_{slug}_LIVE.JPG", out / f"IMG_{slug}_LIVE.MOV"
     write_jpg(img, jpg, asset_id)
     render_mov(img, mov, asset_id, seconds, fps, zoom, focus_y)
+    add_still_image_time(mov)
+    return jpg, mov, asset_id
+
+
+def build_pair_from_video(video: Path, still: Path | None, out: Path, slug: str, fit: str = "crop", focus_y: float = 0.5,
+                          keep_audio: bool = False) -> tuple[Path, Path, str]:
+    """以一条现成的视频(例如 H3 生成的手机随手拍风格短视频)为源做实况:关键帧 JPG + MOV,两边同一个内容 ID。
+    关键帧 = 原图(still,没有就取视频第一帧),MOV 里带 still-image-time 轨。视频缩放 / 裁成 1080×1440;默认去掉声音。"""
+    out.mkdir(parents=True, exist_ok=True)
+    asset_id = str(uuid.uuid4()).upper()
+    jpg, mov = out / f"IMG_{slug}_LIVE.JPG", out / f"IMG_{slug}_LIVE.MOV"
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    if still and Path(still).is_file():
+        img = fit_to_3x4(Image.open(still), fit, focus_y)
+    else:   # 没有原图:取视频第一帧
+        tmp = out / f".first_{slug}.png"
+        subprocess.run([ff, "-y", "-hide_banner", "-loglevel", "error", "-i", str(video), "-frames:v", "1", str(tmp)], check=True)
+        img = fit_to_3x4(Image.open(tmp), "crop", focus_y)
+        tmp.unlink(missing_ok=True)
+    write_jpg(img, jpg, asset_id)
+    cmd = [ff, "-y", "-hide_banner", "-loglevel", "error", "-i", str(video), "-map_metadata", "-1", "-map", "0:v:0"]
+    cmd += ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k"] if keep_audio else ["-an"]
+    cmd += ["-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{H},setsar=1",
+            "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-preset", "slow", "-crf", "17", "-tag:v", "avc1",
+            "-movflags", "use_metadata_tags", "-metadata", f"com.apple.quicktime.content.identifier={asset_id}", "-f", "mov", str(mov)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg 转码失败:{r.stderr.strip()[-300:]}")
     add_still_image_time(mov)
     return jpg, mov, asset_id
 
@@ -233,13 +241,18 @@ def main():
     ap.add_argument("--zoom", type=float, default=1.08)
     ap.add_argument("--focus-y", type=float, default=0.35)
     ap.add_argument("--fit", choices=("crop", "blur"), default="crop", help="图不是 3:4 时:crop 裁切 / blur 完整显示+虚化补边")
+    ap.add_argument("--video", help="以这条视频为源(不做推近动画);src 当作关键帧原图,可以省略")
+    ap.add_argument("--keep-audio", action="store_true", help="用 --video 时保留声音(默认去掉)")
     ap.add_argument("--check", nargs=2, metavar=("JPG", "MOV"))
     a = ap.parse_args()
     if a.check:
         sys.exit(0 if check(Path(a.check[0]), Path(a.check[1])) else 1)
     out = Path(a.out)
-    slug = a.name or Path(a.src).stem
-    jpg, mov, asset_id = build_pair(Path(a.src), out, slug, a.seconds, a.fps, a.zoom, a.focus_y, a.fit)
+    slug = a.name or (Path(a.src).stem if a.src else "")
+    if a.video:
+        jpg, mov, asset_id = build_pair_from_video(Path(a.video), Path(a.src) if a.src else None, out, slug or Path(a.video).stem, a.fit, a.focus_y, a.keep_audio)
+    else:
+        jpg, mov, asset_id = build_pair(Path(a.src), out, slug, a.seconds, a.fps, a.zoom, a.focus_y, a.fit)
     print(f"内容 ID: {asset_id}")
     print(jpg)
     print(mov)

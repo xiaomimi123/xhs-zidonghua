@@ -34,11 +34,15 @@ IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".bmp"}
 
 
 # ---------------- 一张图 → .pvt 包 ----------------
-def make_pvt(src: Path, out: Path, slug: str, opts: dict, use_makelive: bool = True) -> Path:
-    """渲染 JPG + MOV,再打成 out/IMG_{slug}_LIVE.pvt(文件夹,双击导入「照片」)。"""
+def make_pvt(src: Path, out: Path, slug: str, opts: dict, use_makelive: bool = True, video: Path | None = None, keep_audio: bool = False) -> Path:
+    """渲染 JPG + MOV,再打成 out/IMG_{slug}_LIVE.pvt(文件夹,双击导入「照片」)。
+    video 有值 = 真实动作模式:以这条视频为源(src 是关键帧原图);没有 = 慢推镜头动画。"""
     with tempfile.TemporaryDirectory() as td:
-        jpg, mov, asset_id = make_live.build_pair(src, Path(td), slug, opts.get("seconds", 5), 30, opts.get("zoom", 1.08),
-                                                  opts.get("focus_y", 0.35), opts.get("fit", "crop"))
+        if video:
+            jpg, mov, asset_id = make_live.build_pair_from_video(video, src, Path(td), slug, opts.get("fit", "crop"), opts.get("focus_y", 0.5), keep_audio)
+        else:
+            jpg, mov, asset_id = make_live.build_pair(src, Path(td), slug, opts.get("seconds", 5), 30, opts.get("zoom", 1.08),
+                                                      opts.get("focus_y", 0.35), opts.get("fit", "crop"))
         out.mkdir(parents=True, exist_ok=True)
         pvt = out / f"{jpg.stem}.pvt"
         if pvt.exists():
@@ -102,13 +106,18 @@ class Api:
             print(f"   (没能把失败原因告诉工作台:{e})")
 
 
-def run_job(api: Api, job: dict, out: Path, use_makelive: bool):
+def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool = False, original_still: bool = False):
     t0 = time.time()
-    print(f"[任务 {job['id']}] {job.get('name', '')}  参数 {job['opts']}")
+    print(f"[任务 {job['id']}] {job.get('name', '')}  {'真实动作(以视频为源)' if job.get('video') else '慢推镜头'}  参数 {job['opts']}")
     with tempfile.TemporaryDirectory() as td:
         src = Path(td) / (Path(job["image"]).name or "src.png")
         src.write_bytes(api.source(job))
-        pvt = make_pvt(src, out, f"L{job['id']}", job["opts"], use_makelive)
+        video = None
+        if job.get("video"):
+            video = Path(td) / "motion.mp4"
+            video.write_bytes(api.call("GET", job["video"].split("?")[0], timeout=180))
+        # 真实动作:关键照片默认取视频第一帧(和视频画面一致,播放时不会「跳一下」);--original-still 改用原图(更清晰但构图可能略有差异)
+        pvt = make_pvt(src if (original_still or not video) else None, out, f"L{job['id']}", job["opts"], use_makelive, video, keep_audio)
     api.upload(job["id"], zip_dir(pvt))
     print(f"   完成 {time.time() - t0:.0f} 秒 → {pvt}")
 
@@ -139,7 +148,7 @@ def serve(a):
             continue
         idle_logged = False
         try:
-            run_job(api, job, a.out, not a.no_pvt)
+            run_job(api, job, a.out, not a.no_pvt, a.keep_audio, a.original_still)
         except Exception as e:
             print(f"   失败:{e}")
             api.fail(job["id"], f"{type(e).__name__}: {e}")
@@ -175,6 +184,8 @@ def main():
     ap.add_argument("--interval", type=int, default=5, help="没有任务时每隔几秒问一次")
     ap.add_argument("--once", action="store_true", help="只做一个任务就退出")
     ap.add_argument("--no-pvt", action="store_true", help="不调用 makelive(非 macOS 测试用)")
+    ap.add_argument("--keep-audio", action="store_true", help="真实动作模式:保留视频里模型生成的声音(默认去掉)")
+    ap.add_argument("--original-still", action="store_true", help="真实动作模式:关键照片用原图,而不是视频第一帧")
     ap.add_argument("--seconds", type=float, default=5)
     ap.add_argument("--zoom", type=float, default=1.08)
     ap.add_argument("--focus-y", type=float, default=0.35)

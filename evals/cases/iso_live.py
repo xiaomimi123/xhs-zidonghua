@@ -17,6 +17,11 @@ def _pvt_zip(with_mov=True, with_jpg=True) -> bytes:
     return buf.getvalue()
 
 
+def _video_ok(jid):
+    from app import api_live
+    return (api_live.LIVE_DIR / f"{jid}.mp4").is_file()
+
+
 def run(rep, env):
     from app import api_live, db, imagegen
     user, col, q = env.user, env.col, env.q
@@ -90,9 +95,59 @@ def run(rep, env):
         # 清理
         rep.check("清理已完成:删记录也删成品文件", user.post("/api/live/jobs/clear_done").json()["deleted"] == 1 and not (api_live.LIVE_DIR / f"{jid}.zip").exists())
         rep.check("删除任务", user.delete(f"/api/live/jobs/{c2['id']}").status_code == 200 and user.get(f"/api/live/jobs/{c2['id']}/download").status_code == 404)
+
+        # ---------- 真实动作模式:先视频 worker 生成视频,再轮到 Mac ----------
+        print()
+        print("[Live 图 · 真实动作]")
+        mo = user.get("/api/live/motions").json()
+        rep.check("动作模板:至少有手持轻晃 / 手转产品 / 镜头靠近", {"sway", "rotate", "push"} <= {m["key"] for m in mo}, str(mo))
+        o = api_live.clean_opts({"mode": "motion", "motion": "nope", "seconds": 5, "zoom": 1.2})
+        rep.check("参数:真实动作模式的模板 / 时长被收回合法值", o["mode"] == "motion" and o["motion"] == "sway" and o["seconds"] == 3.0, str(o))
+        rep.check("参数:模式不认识时按慢推处理", api_live.clean_opts({"mode": "evil"})["mode"] == "zoom")
+        rm = user.post("/api/live/jobs", json={"items": [{"draft_id": did, "image": "lv_b.png"}], "opts": {"mode": "motion", "motion": "rotate"}})
+        mid = rm.json()["ids"][0]
+        rep.check("真实动作下单:先进视频阶段", db.q_one("SELECT mode, stage, status FROM live_jobs WHERE id=?", mid) == {"mode": "motion", "stage": "video", "status": "pending"}, rm.text)
+        rep.check("真实动作下单:同图同模板不重复", user.post("/api/live/jobs", json={"items": [{"draft_id": did, "image": "lv_b.png"}], "opts": {"mode": "motion", "motion": "rotate"}}).json()["skipped"] == 1)
+        rep.check("Mac 领不到还在等视频的任务", col.get("/api/live/worker/claim?worker=mac-test").json()["job"] is None)
+        rep.check("视频 worker 接口:没有 Token 拒绝", anon.get("/api/live/vworker/claim").status_code == 401)
+        st = user.get("/api/live/status").json()
+        rep.check("状态:待生成视频的任务单独计数,视频 worker 还没来 = 离线", st["video"]["pending"] == 1 and not st["video"]["online"], str(st))
+        vj = col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"]
+        rep.check("视频 worker 领任务:带动作提示词、时长和原图地址", vj and vj["id"] == mid and "rotates the product" in vj["prompt"] and vj["seconds"] == 3.0 and vj["source"].endswith("/source"), str(vj))
+        rep.check("视频 worker 下载原图", col.get(vj["source"]).content == b"png-b")
+        rep.check("视频 worker 在线", user.get("/api/live/status").json()["video"]["online"])
+        rep.check("回传视频:不是 mp4 / 空 都拒绝", col.put(f"/api/live/vworker/jobs/{mid}/video", content=b"junk-junk-junk").status_code == 400
+                  and col.put(f"/api/live/vworker/jobs/{mid}/video", content=b"").status_code == 400)
+        fake_mp4 = bytes([0, 0, 0, 24]) + b"ftypmp42" + bytes(40)
+        rep.check("回传视频:成功后进入 Mac 队列", col.put(f"/api/live/vworker/jobs/{mid}/video?worker=gpu-pc", content=fake_mp4).status_code == 200
+                  and db.q_one("SELECT status, stage FROM live_jobs WHERE id=?", mid) == {"status": "pending", "stage": "live"})
+        rep.check("回传视频:重复回传被拒绝", col.put(f"/api/live/vworker/jobs/{mid}/video", content=fake_mp4).status_code == 409)
+        rep.check("用户端能先看视频", user.get(f"/api/live/jobs/{mid}/video").content == fake_mp4)
+        mj = col.get("/api/live/worker/claim?worker=mac-test").json()["job"]
+        rep.check("视频好了 Mac 才领得到:带视频地址和模式", mj and mj["id"] == mid and mj["mode"] == "motion" and mj["video"].endswith("/video"), str(mj))
+        rep.check("Mac 下载视频", col.get(mj["video"]).content == fake_mp4)
+        col.put(f"/api/live/worker/jobs/{mid}/result?worker=mac-test", content=_pvt_zip())
+        rows = {x["id"]: x for x in user.get("/api/live/jobs").json()}
+        rep.check("列表:真实动作任务带模板名称、有视频、有成品", rows[mid]["motion"] == "手转产品" and rows[mid]["has_video"] and rows[mid]["has_result"] and rows[mid]["mode"] == "motion", str(rows[mid]))
+
+        # 失败与重试:视频失败 → 重新生成视频;Mac 失败 → 只重做实况(不重拍视频)
+        r2 = user.post("/api/live/jobs", json={"items": [{"draft_id": did, "image": "lv_a.png"}], "opts": {"mode": "motion", "motion": "push"}}).json()["ids"][0]
+        v2 = col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"]
+        col.post(f"/api/live/vworker/jobs/{v2['id']}/fail", json={"error": "ComfyUI 没有启动"})
+        e = db.q_one("SELECT status, stage, error FROM live_jobs WHERE id=?", r2)
+        rep.check("视频失败:记录原因,停在视频阶段", e["status"] == "error" and e["stage"] == "video" and "ComfyUI" in e["error"], str(e))
+        rep.check("视频失败重试:没有视频文件 → 回到视频阶段", user.post(f"/api/live/jobs/{r2}/retry").json()["stage"] == "video")
+        col.get("/api/live/vworker/claim?worker=gpu-pc")
+        col.put(f"/api/live/vworker/jobs/{r2}/video", content=fake_mp4)
+        col.get("/api/live/worker/claim?worker=mac-test")
+        col.post(f"/api/live/worker/jobs/{r2}/fail", json={"error": "makelive 报错"})
+        rep.check("Mac 失败重试:视频还在 → 只重做实况", user.post(f"/api/live/jobs/{r2}/retry").json()["stage"] == "live" and _video_ok(r2))
+        rep.check("强制重拍视频:删掉旧视频回到视频阶段", user.post(f"/api/live/jobs/{r2}/retry?video=1").json()["stage"] == "video" and not _video_ok(r2))
+        rep.check("删除任务:视频和成品文件一起删", user.delete(f"/api/live/jobs/{mid}").status_code == 200 and not (api_live.LIVE_DIR / f"{mid}.mp4").exists() and not (api_live.LIVE_DIR / f"{mid}.zip").exists())
     finally:
         api_live.LIVE_DIR, imagegen.IMG_DIR = old_live, old_img
         db.q_exec("DELETE FROM live_jobs")
         db.q_exec("DELETE FROM live_workers")
+        db.q_exec("DELETE FROM live_vworkers")
         db.q_exec("DELETE FROM drafts WHERE project_id=?", pid)
         db.q_exec("DELETE FROM projects WHERE id=?", pid)

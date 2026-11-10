@@ -289,12 +289,24 @@ def _m005_live(c):
     """)
 
 
+def _m006_live_motion(c):
+    """Live 图「真实动作」模式:先由本机显卡(ComfyUI + MiniMax H3)把静图生成短视频,再交给 Mac 做成实况。
+    mode = zoom(慢推镜头,Mac 直接做)/ motion(真实动作);stage = video(等视频)/ live(等 Mac)。"""
+    add_column(c, "live_jobs", "mode", "TEXT DEFAULT 'zoom'")
+    add_column(c, "live_jobs", "stage", "TEXT DEFAULT 'live'")
+    add_column(c, "live_jobs", "video_size", "INTEGER DEFAULT 0")
+    c.execute("""CREATE TABLE IF NOT EXISTS live_vworkers(
+        worker TEXT PRIMARY KEY, ip TEXT DEFAULT '', last_seen REAL DEFAULT 0, done INTEGER DEFAULT 0,
+        first_seen TEXT DEFAULT CURRENT_TIMESTAMP)""")
+
+
 MIGRATIONS = [
     (1, "baseline", _m001_baseline),
     (2, "staff", _m002_staff),
     (3, "loop", _m003_loop),
     (4, "qf_link", _m004_qf_link),
     (5, "live", _m005_live),
+    (6, "live_motion", _m006_live_motion),
     # (2, "说明", _m002_xxx),
 ]
 

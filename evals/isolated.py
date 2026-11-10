@@ -26,7 +26,7 @@ def isolated(rep: Report):
         db.save_settings({"collector_token": "T"})
         from app import api_collector, api_user, api_live, stats
         app = FastAPI()
-        for r in (api_collector.router, api_user.public, api_user.router, api_live.router, api_live.worker_router):
+        for r in (api_collector.router, api_user.public, api_user.router, api_live.router, api_live.worker_router, api_live.vworker_router):
             app.include_router(r)
         user, col = TestClient(app), TestClient(app, headers={"Authorization": "Bearer T"})
         q = lambda sql, *a: db.q_all(sql, *a)
