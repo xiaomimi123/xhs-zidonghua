@@ -1,6 +1,7 @@
 """Live 图任务队列:选图下单 → Mac 端领取 → 回传成品 → 下载 / 预览 → 失败重试 / 超时退回 / 清理。
 成品目录和图片目录都换成临时目录,不碰真实的 data/。"""
 import io
+import json
 import tempfile
 import zipfile
 from pathlib import Path
@@ -211,6 +212,28 @@ def run(rep, env):
             rep.check("场景图失败重试:回到场景图阶段(不会误进视频阶段)", user.post(f"/api/live/jobs/{f}/retry").json()["stage"] == "image")
         finally:
             imagegen.generate_image = _gen0
+
+        # ---------- 每张拍几条(真实动作多拍,挑最好的) ----------
+        print()
+        print("[Live 图 · 每张拍几条]")
+        mo3 = {"mode": "motion", "motion": "sway", "fit": "crop"}
+        t1 = user.post("/api/live/jobs", json={"items": [{"draft_id": did, "image": "lv_a.png"}], "opts": mo3, "takes": 3}).json()
+        tk = sorted(r["opts"].get("take") for r in db.q_all("SELECT opts FROM live_jobs WHERE id IN (%s)" % ",".join(str(i) for i in t1["ids"])))
+        rep.check("拍 3 条:建 3 个任务,参数里带第几条", t1["created"] == 3 and tk == [1, 2, 3], str(t1))
+        t2 = user.post("/api/live/jobs", json={"items": [{"draft_id": did, "image": "lv_a.png"}], "opts": mo3, "takes": 3}).json()
+        rep.check("拍 3 条:重复提交不重复建", t2["created"] == 0 and t2["skipped"] == 3, str(t2))
+        t3 = user.post("/api/live/jobs", json={"items": [{"draft_id": did, "image": "lv_a.png"}], "opts": mo3, "takes": 4}).json()
+        rep.check("加到 4 条:只补第 4 条", t3["created"] == 1 and t3["skipped"] == 3, str(t3))
+        t4 = user.post("/api/live/jobs", json={"items": [{"draft_id": did, "image": "lv_b.png"}], "opts": mo3, "takes": 99}).json()
+        rep.check("条数上限 4", t4["created"] == 4, str(t4))
+        t5 = user.post("/api/live/jobs", json={"items": [{"draft_id": did, "image": "lv_b.png"}], "opts": {"mode": "zoom"}, "takes": 3}).json()
+        rep.check("慢推镜头没有随机性,只做 1 条", t5["created"] == 1, str(t5))
+        t6 = user.post("/api/live/jobs", json={"items": [{"draft_id": did, "image": "lv_a.png"}], "opts": mo3}).json()
+        rep.check("不传条数 = 1 条", t6["created"] == 1, str(t6))
+        up2 = user.post("/api/live/jobs/upload", json={"images": [url(png + b"takes")], "names": ["多拍.png"], "opts": mo3, "takes": 2}).json()
+        rep.check("上传图片也能多拍", up2["created"] == 2, str(up2))
+        lst2 = user.get("/api/live/jobs").json()
+        rep.check("列表里带出第几条", any((x["opts"] or {}).get("take") == 2 for x in lst2))
     finally:
         api_live.LIVE_DIR, imagegen.IMG_DIR = old_live, old_img
         db.q_exec("DELETE FROM live_jobs")

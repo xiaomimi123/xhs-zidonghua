@@ -38,6 +38,7 @@ DEFAULT_OPTS = {"mode": "zoom", "seconds": 5.0, "zoom": 1.08, "focus_y": 0.35, "
 FITS = ("crop", "blur")
 MODES = ("zoom", "motion")
 MOTION_SECONDS = 3.0
+MAX_TAKES = 4   # 真实动作:同一张图最多拍几条(每条随机种子不同,挑效果最好的)
 # 真实动作模板:提示词统一往「手机随手拍的家庭视频」靠,避免电影感 / AI 感
 _BASE = "Casual handheld iPhone video filmed at home, ordinary phone footage, auto-exposure, no cinematic look, no new objects, no text changes"
 MOTIONS = {
@@ -66,6 +67,12 @@ def clean_opts(o: dict | None) -> dict:
     out = {"mode": mode, "seconds": num("seconds", 2, 6), "zoom": num("zoom", 1.0, 1.3), "focus_y": num("focus_y", 0, 1), "fit": fit, "motion": ""}
     if mode == "motion":
         out["motion"] = o.get("motion") if o.get("motion") in MOTIONS else "sway"
+        try:
+            t = int(o.get("take") or 0)
+        except (TypeError, ValueError):
+            t = 0
+        if 1 <= t <= MAX_TAKES:
+            out["take"] = t   # 第几条:只用来让同一张图的几条任务互不重复,视频 worker 每次都用随机种子
         out["seconds"] = MOTION_SECONDS   # H3 按固定时长生成,用户端不开放
         out["zoom"] = DEFAULT_OPTS["zoom"]
     return out
@@ -79,6 +86,15 @@ class JobItem(BaseModel):
 class JobsIn(BaseModel):
     items: list[JobItem]
     opts: dict | None = None
+    takes: int = 1                 # 真实动作:每张图拍几条(1~4)
+
+
+def _take_opts(opts: dict, takes: int) -> list[dict]:
+    """真实动作模式下,每张图拍 takes 条:每条的参数里带上「第几条」,互不算重复。慢推镜头没有随机性,只做 1 条。"""
+    takes = min(max(int(takes or 1), 1), MAX_TAKES)
+    if opts["mode"] != "motion" or takes == 1:
+        return [opts]
+    return [dict(opts, take=k) for k in range(1, takes + 1)]
 
 
 def _job_or_404(jid: int) -> dict:
@@ -153,7 +169,6 @@ def create_jobs(p: JobsIn):
     stage = "video" if opts["mode"] == "motion" else "live"
     who = (CURRENT.get() or {}).get("name", "")
     made, skipped, ids = 0, 0, []
-    ojs = json.dumps(opts, sort_keys=True)
     for it in p.items:
         d = q_one("SELECT id, images FROM drafts WHERE id=?", it.draft_id)
         if not d:
@@ -163,15 +178,17 @@ def create_jobs(p: JobsIn):
             raise HTTPException(400, f"稿子 #{it.draft_id} 没有这张图")
         if not (imagegen.IMG_DIR / name).is_file():
             raise HTTPException(400, f"图片文件不存在:{name}")
-        dup = q_one("SELECT id FROM live_jobs WHERE draft_id=? AND image=? AND opts=? AND status IN ('pending','running','done')",
-                    it.draft_id, name, ojs)
-        if dup:
-            skipped += 1
-            ids.append(dup["id"])
-            continue
-        ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage) VALUES(?,?,?,?,?,?)",
-                          it.draft_id, name, ojs, who, opts["mode"], stage).lastrowid)
-        made += 1
+        for o in _take_opts(opts, p.takes):
+            ojs = json.dumps(o, sort_keys=True)
+            dup = q_one("SELECT id FROM live_jobs WHERE draft_id=? AND image=? AND opts=? AND status IN ('pending','running','done')",
+                        it.draft_id, name, ojs)
+            if dup:
+                skipped += 1
+                ids.append(dup["id"])
+                continue
+            ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage) VALUES(?,?,?,?,?,?)",
+                              it.draft_id, name, ojs, who, opts["mode"], stage).lastrowid)
+            made += 1
     return {"created": made, "skipped": skipped, "ids": ids}
 
 
@@ -283,6 +300,7 @@ class UploadIn(BaseModel):
     images: list[str]              # 浏览器压好的 data URL(jpg / png / webp)
     names: list[str] = []          # 原文件名,用来给任务起名
     opts: dict | None = None
+    takes: int = 1                 # 真实动作:每张图拍几条(1~4)
 
 
 @router.post("/jobs/upload")
@@ -291,20 +309,21 @@ def create_from_upload(p: UploadIn):
     imgs = _decode(p.images)
     opts = clean_opts(p.opts)
     stage = "video" if opts["mode"] == "motion" else "live"
-    ojs = json.dumps(opts, sort_keys=True)
     who = (CURRENT.get() or {}).get("name", "")
     made, skipped, ids = 0, 0, []
     for i, (b, ext) in enumerate(imgs):
         name = _save_img(b, ext, "lvup_")
         title = (Path(p.names[i]).stem[:30] if i < len(p.names) and p.names[i] else "") or "上传图片"
-        dup = q_one("SELECT id FROM live_jobs WHERE image=? AND opts=? AND status IN ('pending','running','done')", name, ojs)
-        if dup:
-            skipped += 1
-            ids.append(dup["id"])
-            continue
-        ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src) VALUES(NULL,?,?,?,?,?,?,'upload')",
-                          name, ojs, who, opts["mode"], stage, title).lastrowid)
-        made += 1
+        for o in _take_opts(opts, p.takes):
+            ojs = json.dumps(o, sort_keys=True)
+            dup = q_one("SELECT id FROM live_jobs WHERE image=? AND opts=? AND status IN ('pending','running','done')", name, ojs)
+            if dup:
+                skipped += 1
+                ids.append(dup["id"])
+                continue
+            ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src) VALUES(NULL,?,?,?,?,?,?,'upload')",
+                              name, ojs, who, opts["mode"], stage, title).lastrowid)
+            made += 1
     return {"created": made, "skipped": skipped, "ids": ids}
 
 

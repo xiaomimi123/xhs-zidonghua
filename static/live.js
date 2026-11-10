@@ -5,6 +5,8 @@ const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], up:
   opts: Object.assign({ mode: "motion", motion: "sway", seconds: 5, zoom: 1.08, focus_y: 0.35, fit: "crop" }, (() => { try { return JSON.parse(localStorage.lvOpts || "{}"); } catch { return {}; } })()) };
 const LV_FIT = { crop: "裁成 3:4", blur: "完整+虚化补边" };
 const lvKey = (d, img) => `${d}:${img}`;
+// 经验:图里有「正在倒、撒、研磨」的动作(粉末、液体)时,AI 容易把粉末画成球状颗粒、越堆越多
+const LV_TIP = "选图小提示:图里有倒、撒、研磨这类<b>正在进行的动作</b>(粉末、液体)时,AI 容易把粉末画成球状颗粒;建议选<b>静态画面</b>(手拿罐子、俯拍、搅拌),一定要用就选「慢推镜头」,或把「每张拍几条」调高,挑最好的一条。";
 const lvMotionLabel = k => (LV.motions.find(m => m.key === k) || {}).label || k || "";
 
 // 任务状态:按「阶段」说清楚现在卡在哪一台机器上
@@ -29,6 +31,7 @@ async function fLive() {
   $("#main").innerHTML = `<div id="lvst"></div>
     <div class="seg lv-seg" role="tablist" id="lvseg"><button role="tab" data-t="pick">选图</button><button role="tab" data-t="up">上传</button><button role="tab" data-t="jobs">任务<em id="lvn"></em></button></div>
     <section id="lvpick"><div class="lv-h"><h3>选图</h3><span class="sub">点图片选中,一张图 = 一个 Live 图;封面最常用</span>
+      <p class="lv-tip">${LV_TIP}</p>
       <span class="lv-f"><button class="chip ${LV.todo ? "on" : ""}" id="lvtodo">只看未发布</button>
       <select id="lvrun" aria-label="按任务筛选"><option value="0">全部任务</option>${LV.runs.map(r => `<option value="${r.id}" ${LV.pid === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></span></div>
     <div id="lvgrid"></div></section>
@@ -85,7 +88,8 @@ function lvCtl() {
   const cur = motion ? "motion:" + o.motion : "zoom";
   const m = LV.motions.find(x => x.key === o.motion);
   return `<label class="lv-o">效果 <select data-o="effect">${LV.motions.map(x => `<option value="motion:${x.key}" ${cur === "motion:" + x.key ? "selected" : ""}>真实动作 · ${esc(x.label)}</option>`).join("")}<option value="zoom" ${cur === "zoom" ? "selected" : ""}>慢推镜头(快,不用显卡)</option></select></label>
-    ${motion ? `<span class="lv-hint" title="${esc(m ? m.desc : "")}">由本机显卡生成,约 85 秒/条${m ? ` · ${esc(m.desc)}` : ""}</span>` : `
+    ${motion ? `<label class="lv-o" title="每条的随机种子不同,同一张图多拍几条,挑效果最好的">每张拍 <select data-o="takes">${[1, 2, 3, 4].map(n => `<option value="${n}" ${(+o.takes || 1) === n ? "selected" : ""}>${n} 条</option>`).join("")}</select></label>
+    <span class="lv-hint" title="${esc(m ? m.desc : "")}">由本机显卡生成,约 85 秒/条${m ? ` · ${esc(m.desc)}` : ""}</span>` : `
     <label class="lv-o">推近 <select data-o="zoom">${opt(1.05, o.zoom, "轻微")}${opt(1.08, o.zoom, "标准")}${opt(1.15, o.zoom, "明显")}</select></label>
     <label class="lv-o">焦点 <select data-o="focus_y">${opt(0.3, o.focus_y, "偏上")}${opt(0.35, o.focus_y, "略偏上")}${opt(0.5, o.focus_y, "居中")}${opt(0.7, o.focus_y, "偏下")}</select></label>
     <label class="lv-o">时长 <select data-o="seconds">${opt(3, o.seconds, "3 秒")}${opt(5, o.seconds, "5 秒")}</select></label>`}
@@ -112,7 +116,7 @@ function lvBar() {
   $("#lvgo").onclick = async () => {
     const btn = $("#lvgo"); btn.disabled = true;
     try {
-      const r = await api("/api/live/jobs", "POST", { items: [...LV.sel.values()], opts: LV.opts });
+      const r = await api("/api/live/jobs", "POST", { items: [...LV.sel.values()], opts: LV.opts, takes: LV.opts.mode === "motion" ? +LV.opts.takes || 1 : 1 });
       toast(r.created ? `已提交 ${r.created} 个任务${r.skipped ? `,${r.skipped} 个已存在` : ""}` : `这 ${r.skipped} 张已经有同样参数的任务了`);
       LV.sel.clear(); lvGrid(); lvTab("jobs"); await lvRefresh(); window.scrollTo(0, 0);
     } catch (e) { toast(e.message, 1); btn.disabled = false; }
@@ -131,7 +135,7 @@ async function lvPick(files, bucket, max) {
 function lvUpload() {
   const sec = $("#lvup"), G = LV.gen, prod = LV.prods.find(p => p.id === G.product);
   const drop = (id, text) => `<label class="lv-drop" id="${id}" tabindex="0"><span>${text}</span><input type="file" accept="image/*" multiple hidden></label>`;
-  sec.innerHTML = `<div class="lv-up">
+  sec.innerHTML = `<p class="lv-tip lv-tip-up">${LV_TIP}</p><div class="lv-up">
     <div class="card"><h3>① 直接上传图片做 Live 图</h3>
       <p class="sub">图片原样用作源图,不经过生图模型,不花生图费用。建议 3:4 竖图、画面清晰、包装上的字清楚;不是 3:4 的会按下面的设置处理。</p>
       ${drop("lvdrop1", "点击选择图片,或拖到这里(最多 9 张)")}<div class="lv-pvs" id="lvpv1">${lvThumbs(LV.up.files, "up")}</div>
@@ -168,7 +172,7 @@ function lvUpload() {
   $("#lvup1") && ($("#lvup1").onclick = async () => {
     const btn = $("#lvup1"); btn.disabled = true;
     try {
-      const r = await api("/api/live/jobs/upload", "POST", { images: LV.up.files.map(f => f.url), names: LV.up.files.map(f => f.name), opts: LV.opts });
+      const r = await api("/api/live/jobs/upload", "POST", { images: LV.up.files.map(f => f.url), names: LV.up.files.map(f => f.name), opts: LV.opts, takes: LV.opts.mode === "motion" ? +LV.opts.takes || 1 : 1 });
       toast(r.created ? `已提交 ${r.created} 个任务${r.skipped ? `,${r.skipped} 个已存在` : ""}` : `这 ${r.skipped} 张已经有同样参数的任务了`);
       LV.up.files = []; lvTab("jobs"); await lvRefresh(); window.scrollTo(0, 0);
     } catch (e) { toast(e.message, 1); btn.disabled = false; }
@@ -222,7 +226,7 @@ function lvJobs() {
   const n = $("#lvn"); if (n) { n.textContent = act || js.length || ""; n.className = act ? "run" : ""; n.title = act ? "进行中的任务数" : "任务总数"; }
   $("#lvjobs").innerHTML = js.length ? `<div class="lv-jobs">${js.map(j => {
     const [lab, cls] = lvState(j), o = j.opts || {}, motion = j.mode === "motion";
-    const how = motion ? `真实动作 · ${esc(j.motion || lvMotionLabel(o.motion))} · ${o.seconds || 3} 秒` : `慢推镜头 · 推近 ${Math.round(((o.zoom || 1) - 1) * 100)}% · ${o.seconds || 5} 秒`;
+    const how = motion ? `真实动作 · ${esc(j.motion || lvMotionLabel(o.motion))}${o.take ? ` · 第 ${o.take} 条` : ""} · ${o.seconds || 3} 秒` : `慢推镜头 · 推近 ${Math.round(((o.zoom || 1) - 1) * 100)}% · ${o.seconds || 5} 秒`;
     const from = j.src === "upload" ? "上传图片 · " : j.src === "gen" ? "产品场景图 · " : "";
     return `<article class="lv-job" data-j="${j.id}">${j.image ? `<img src="/images/${esc(j.image)}" alt="" loading="lazy">` : `<div class="lv-ph" aria-hidden="true">场景图</div>`}
       <div class="lv-jt"><b>${esc(j.title)}</b><span class="sub">${from}${how} · ${esc(LV_FIT[o.fit] || "")} · ${esc(when(j.created))}${j.worker ? ` · ${esc(j.worker)}` : ""}${j.size ? ` · ${(j.size / 1048576).toFixed(1)} MB` : ""}</span>

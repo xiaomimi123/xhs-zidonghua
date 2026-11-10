@@ -906,3 +906,7 @@ select.sm,.card-h select{min-height:30px;padding:4px 28px 4px 9px;font-size:13px
 @media(max-width:720px){.lv-up{grid-template-columns:1fr}.lv-two{grid-template-columns:1fr}}
 
 .lv-bar .lv-ctl{margin:0}
+
+.lv-tip{margin:8px 0 0;padding:8px 12px;border-radius:var(--r-sm);background:var(--warn-wash);color:var(--warn);font-size:12.5px;line-height:1.6;flex-basis:100%}
+.lv-tip b{font-weight:600}
+.lv-tip-up{margin:0 0 14px}
