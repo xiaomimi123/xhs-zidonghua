@@ -304,10 +304,16 @@ def _runs_info(ps: list[dict]) -> list[dict]:
 
 
 @router.get("/api/runs")
-def list_runs(limit: int = 100):
-    """最近的 limit 个任务(默认 100,最多 500)。页面用「显示更多」逐步加载,不一次取全部。"""
+def list_runs(limit: int = 100, offset: int = 0):
+    """最近的任务,从 offset 起取 limit 个(默认 100,最多 500)。任务页按页取,不一次取全部。"""
     limit = min(max(int(limit or 100), 1), 500)
-    return _runs_info(q_all("SELECT p.* FROM projects p JOIN autoruns a ON a.project_id=p.id ORDER BY a.id DESC LIMIT ?", limit))
+    offset = max(int(offset or 0), 0)
+    return _runs_info(q_all("SELECT p.* FROM projects p JOIN autoruns a ON a.project_id=p.id ORDER BY a.id DESC LIMIT ? OFFSET ?", limit, offset))
+
+
+@router.get("/api/runs/count")
+def runs_count():
+    return {"total": q_one("SELECT COUNT(*) c FROM autoruns")["c"]}
 
 
 @router.post("/api/runs/{pid}/rerun")

@@ -182,19 +182,25 @@ async function rerunRun(btn) {
 
 // ---------- 任务 ----------
 const openRun = id => { state.runId = id; localStorage.runId = id; go("run"); };
+const RUN_SIZE = 24;   // 任务页每页个数
 async function fRuns() {
-  const draw = rs => {
-    $("#main").innerHTML = rs.length ? `<div class="fl-runs">${rs.map(runCard).join("")}</div>${rs.length >= (FL.runsLimit || 40) ? `<p style="text-align:center"><button class="btn gray" data-moreruns>显示更多任务</button></p>` : ""}`
+  const draw = (rs, total) => {
+    const pages = Math.max(1, Math.ceil(total / RUN_SIZE));
+    $("#main").innerHTML = rs.length ? `<div class="fl-runs">${rs.map(runCard).join("")}</div>${pager(FL.runsPage, total, RUN_SIZE)}`
       : `<div class="empty"><b>还没有任务</b>选赛道或上传产品,填好篇数就能开始<br><button class="btn" data-go="new">新建任务</button></div>`;
-    FL.sig = JSON.stringify(rs);
+    FL.sig = JSON.stringify(rs); FL.runsPages = pages;
   };
-  const lim = FL.runsLimit || 40, url = `/api/runs?limit=${lim}`;
-  const rs = await api(url); draw(rs);
+  const load = async () => {
+    const { total } = await api("/api/runs/count");
+    FL.runsPage = Math.min(Math.max(1, FL.runsPage || 1), Math.max(1, Math.ceil(total / RUN_SIZE)));   // 任务被删后页数变少,落到最后一页
+    return [await api(`/api/runs?limit=${RUN_SIZE}&offset=${(FL.runsPage - 1) * RUN_SIZE}`), total];
+  };
+  let [rs, total] = await load(); draw(rs, total);
   $("#main").onclick = e => {
-    if (e.target.closest("[data-moreruns]")) { FL.runsLimit = lim + 40; return fRuns(); }
+    const g = e.target.closest("[data-pg]"); if (g) { if (g.disabled) return; FL.runsPage = +g.dataset.pg; return fRuns().then(() => window.scrollTo({ top: 0, behavior: "smooth" })); }
     const rr = e.target.closest("[data-rerun]"); if (rr) return rerunRun(rr); const r = e.target.closest("[data-run]"); if (r) openRun(+r.dataset.run);
   };
-  if (rs.some(r => r.active)) loop(async () => { const n = await api(url); if (JSON.stringify(n) !== FL.sig) draw(n); return n.some(r => r.active); }, 4000);
+  if (rs.some(r => r.active)) loop(async () => { const [n, t] = await load(); if (JSON.stringify(n) !== FL.sig) draw(n, t); return n.some(r => r.active); }, 4000);
 }
 function stepNote(r, s) {
   return { "识别产品": r.category ? `识别为「${esc(r.category)}」` : "", "采集": `${r.library ? `笔记库复用 ${r.library} 篇` + (r.tasks[1] ? " · " : " · 跳过采集") : ""}${r.tasks[1] ? `${r.tasks[0]}/${r.tasks[1]} 个关键词` : ""} · 共 ${r.notes} 篇<br><span class="sub">${esc(r.keywords.join("、"))}</span>`,
