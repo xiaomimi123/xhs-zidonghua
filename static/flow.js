@@ -399,7 +399,8 @@ document.addEventListener("keydown", e => { if (!FL.pv) return; if (e.key === "E
 
 
 // ---------- 笔记库(只读):采集到的笔记,按赛道 / 主题 / 内容类型 / 分级找参考 ----------
-const NB = { f: { track: "", topic: "", ai_type: "", tier: "", q: "", sort: "new" }, items: [], total: 0 };
+const NB = { f: { track: "", topic: "", ai_type: "", tier: "", q: "", sort: "new" }, items: [], total: 0, page: 1 };
+const NB_SIZE = 36;   // 每页篇数
 const NB_TIER = { viral: "爆款", hot: "热门", normal: "普通" };
 const nbCard = (n, i) => `<article class="fl-nc" data-nb="${i}" tabindex="0">
   <div class="fl-cv">${n.cover ? `<img src="${esc(thumb(n.cover))}" referrerpolicy="no-referrer" loading="lazy" decoding="async" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'fl-tc',textContent:this.dataset.t}))" data-t="${esc(n.title)}">` : `<div class="fl-tc">${esc(n.title)}</div>`}
@@ -423,21 +424,27 @@ async function fNoteBase() {
     <input id="nbq" placeholder="搜索标题 / 正文 / 作者 / 标签" value="${esc(f.q)}" style="flex:1;min-width:160px">
     ${filtered ? `<button class="btn ghost sm" id="nbreset">清除筛选</button>` : ""}</div>
     <div id="nbres"></div>`;
-  const load = async more => {
+  // 真分页:每页只渲染 NB_SIZE 篇,换页替换内容并回到顶部;筛选 / 搜索变了回到第 1 页
+  const load = async page => {
     const qs = Object.entries(f).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
-    const r = await api(`/api/notebase?${qs}&offset=${more ? NB.items.length : 0}&limit=36`);
-    NB.items = more ? NB.items.concat(r.items) : r.items; NB.total = r.total;
-    $("#nbres").innerHTML = NB.items.length
-      ? `<p class="sub" style="margin:4px 0 10px">共 ${NB.total} 篇${NB.items.length < NB.total ? `,已显示 ${NB.items.length} 篇` : ""}</p><div class="fl-grid">${NB.items.map(nbCard).join("")}</div>
-         ${NB.items.length < NB.total ? `<div style="text-align:center;margin:18px 0"><button class="btn gray" id="nbmore">加载更多</button></div>` : ""}`
+    const r = await api(`/api/notebase?${qs}&offset=${(page - 1) * NB_SIZE}&limit=${NB_SIZE}`);
+    const pages = Math.max(1, Math.ceil(r.total / NB_SIZE));
+    if (page > pages) return load(pages);   // 筛选后总数变少,当前页已经不存在
+    NB.items = r.items; NB.total = r.total; NB.page = page;
+    const a = (page - 1) * NB_SIZE + 1, b = a + r.items.length - 1, pg = pager(page, r.total, NB_SIZE);
+    $("#nbres").innerHTML = r.items.length
+      ? `<div class="pg-top"><span class="sub">共 ${NB.total} 篇 · 第 ${a}–${b} 篇${pages > 1 ? ` · 第 ${page} / ${pages} 页` : ""}</span></div><div class="fl-grid">${r.items.map(nbCard).join("")}</div>${pg}`
       : `<div class="empty"><b>没有符合条件的笔记</b>换个筛选或关键词试试</div>`;
-    $("#nbmore") && ($("#nbmore").onclick = () => load(true));
   };
-  await load(false);
-  $$("[data-nb-f]").forEach(el => el.onchange = () => { f[el.dataset.nbF] = el.value; if (el.dataset.nbF === "track") f.topic = ""; fNoteBase(); });
-  let deb; $("#nbq").oninput = e => { clearTimeout(deb); deb = setTimeout(() => { f.q = e.target.value.trim(); load(false); }, 350); };
-  $("#nbreset") && ($("#nbreset").onclick = () => { NB.f = { track: "", topic: "", ai_type: "", tier: "", q: "", sort: "new" }; fNoteBase(); });
-  const open = e => { const c = e.target.closest("[data-nb]"); if (c) nbOpen(+c.dataset.nb); };
+  await load(NB.page || 1);
+  $$("[data-nb-f]").forEach(el => el.onchange = () => { f[el.dataset.nbF] = el.value; if (el.dataset.nbF === "track") f.topic = ""; NB.page = 1; fNoteBase(); });
+  let deb; $("#nbq").oninput = e => { clearTimeout(deb); deb = setTimeout(() => { f.q = e.target.value.trim(); load(1); }, 350); };
+  $("#nbreset") && ($("#nbreset").onclick = () => { NB.f = { track: "", topic: "", ai_type: "", tier: "", q: "", sort: "new" }; NB.page = 1; fNoteBase(); });
+  const open = e => {
+    const g = e.target.closest("[data-pg]");
+    if (g) { if (g.disabled) return; return load(+g.dataset.pg).then(() => window.scrollTo({ top: 0, behavior: "smooth" })); }
+    const c = e.target.closest("[data-nb]"); if (c) nbOpen(+c.dataset.nb);
+  };
   $("#nbres").onclick = open;
   $("#nbres").onkeydown = e => { if (e.key === "Enter" && e.target.matches("[data-nb]")) nbOpen(+e.target.dataset.nb); };
 }

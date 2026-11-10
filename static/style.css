@@ -990,3 +990,14 @@ select.sm,.card-h select{min-height:30px;padding:4px 28px 4px 9px;font-size:13px
 /* 卡片网格:屏幕外的卡片先不渲染,几百篇成品也能流畅滚动 */
 .fl-nc,.fl-run{content-visibility:auto;contain-intrinsic-size:auto 330px}
 .fl-run{contain-intrinsic-size:auto 120px}
+
+/* 分页条 */
+.pager{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px;margin:22px 0 8px}
+.pager .pg{min-width:36px;height:36px;padding:0 10px;border:1px solid var(--line-2);border-radius:var(--r-sm);background:var(--panel);color:var(--ink);cursor:pointer;font:inherit;font-variant-numeric:tabular-nums;transition:border-color .15s,background .15s}
+.pager .pg:hover:not(:disabled):not(.on){border-color:var(--accent);color:var(--accent-ink)}
+.pager .pg.on{background:var(--accent);border-color:var(--accent);color:#fff;cursor:default;font-weight:600}
+.pager .pg:disabled{opacity:.4;cursor:default}
+.pager .pg:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.pager .pg-gap{color:var(--faint);padding:0 2px}
+.pg-top{margin:4px 0 10px}
+@media(max-width:520px){.pager .pg{min-width:32px;height:34px;padding:0 8px}}
