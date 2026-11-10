@@ -1,6 +1,8 @@
-"""Live 图「真实动作」的视频 worker:在装了 ComfyUI(MiniMax H3 图生视频)的电脑上跑。
-从工作台领任务 → 把静图裁成 3:4 → 交给本机 ComfyUI 生成 3 秒左右「手机随手拍」风格的视频 → 回传工作台。
-之后由 Mac 端(mac_worker.py)以这条视频为源做成实况 .pvt。
+"""Live 图的「本机显卡」worker:在装了 ComfyUI 的电脑上跑,领两种任务:
+  1. 真实动作:把静图裁成 3:4 → 本机 ComfyUI(MiniMax H3 图生视频)生成 3 秒左右「手机随手拍」风格的视频 → 回传工作台。
+     之后由 Mac 端(mac_worker.py)以这条视频为源做成实况 .pvt。
+  2. 换背景:服务端让生图模型改好背景后,这里用 ComfyUI 的 SAM3 抠出原图里的主体(手、产品、杯子…),
+     按掩膜贴回新背景(主体一像素不变),回传新图,再接着做 Live。
 
     python video_worker.py --server http://127.0.0.1:18765 --token 采集端Token
 
@@ -25,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from PIL import Image  # noqa: E402
 from imgfit import fit_to_3x4  # noqa: E402
+import bgswap  # noqa: E402
 
 MODELS = {   # ComfyUI 里的模型文件名(models/diffusion_models、loras、text_encoders、vae)
     "unet": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
@@ -32,6 +35,7 @@ MODELS = {   # ComfyUI 里的模型文件名(models/diffusion_models、loras、t
     "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
     "video_vae": "minimax_h3_video_vae_fp16.safetensors",
     "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+    "sam3": "sam3.1_multiplex_fp16.safetensors",   # 换背景抠主体用(checkpoints 目录)
 }
 WAIT_MAX = 25 * 60   # 一条视频最多等多少秒;超过就中断,避免卡死显卡
 
@@ -110,8 +114,69 @@ def comfy_video(comfy: Http, img: Image.Image, job_id: int, prompt: str, seconds
                 raise RuntimeError(f"等了 {WAIT_MAX // 60} 分钟还没出视频,已中断(显卡可能被别的任务占满了)")
 
 
+def comfy_mask(comfy: Http, img: Image.Image, job_id: int, subject: list[str]) -> Image.Image:
+    """SAM3 按文字提示抠出主体(每个名词抠一次,再取并集)。返回和 img 一样大的灰度掩膜。"""
+    name = comfy_upload(comfy, img, f"xhs_mask_{job_id}.png")
+    g = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": MODELS["sam3"]}},
+         "2": {"class_type": "LoadImage", "inputs": {"image": name}}}
+    ids = []
+    for i, p in enumerate(subject):
+        g[f"t{i}"] = {"class_type": "CLIPTextEncode", "inputs": {"text": p, "clip": ["1", 1]}}
+        g[f"d{i}"] = {"class_type": "SAM3_Detect", "inputs": {"model": ["1", 0], "image": ["2", 0], "threshold": 0.4, "refine_iterations": 2,
+                                                              "individual_masks": False, "conditioning": [f"t{i}", 0]}}
+        ids.append(f"d{i}")
+    cur = [ids[0], 0]
+    for i, d in enumerate(ids[1:]):
+        g[f"u{i}"] = {"class_type": "MaskComposite", "inputs": {"destination": cur, "source": [d, 0], "x": 0, "y": 0, "operation": "add"}}
+        cur = [f"u{i}", 0]
+    g["m"] = {"class_type": "MaskToImage", "inputs": {"mask": cur}}
+    g["s"] = {"class_type": "PreviewImage", "inputs": {"images": ["m", 0]}}
+    try:
+        pid = comfy.json("POST", "/prompt", {"prompt": g, "client_id": uuid.uuid4().hex})["prompt_id"]
+    except RuntimeError as e:
+        raise RuntimeError(f"提交抠图任务失败(ComfyUI 里要有 SAM3 模型 {MODELS['sam3']}):{e}") from None
+    t0 = time.time()
+    while True:
+        time.sleep(1)
+        h_ = comfy.json("GET", f"/history/{pid}", timeout=30)
+        if pid in h_:
+            if h_[pid]["status"]["status_str"] != "success":
+                raise RuntimeError("SAM3 抠图失败:" + json.dumps(h_[pid]["status"].get("messages"), ensure_ascii=False)[-300:])
+            f = h_[pid]["outputs"]["s"]["images"][0]
+            q = urllib.parse.urlencode({"filename": f["filename"], "subfolder": f.get("subfolder", ""), "type": f.get("type", "temp")})
+            return Image.open(io.BytesIO(comfy.call("GET", f"/view?{q}", timeout=60))).convert("L").resize(img.size)
+        if time.time() - t0 > 180:
+            raise RuntimeError("SAM3 抠图超过 3 分钟没有结果")
+
+
+def run_mask_job(api: Http, comfy: Http, name: str, job: dict):
+    """换背景的第二步:抠出原图主体,贴回生图模型改好背景的新图,回传。"""
+    t0 = time.time()
+    print(f"[任务 {job['id']}] 换背景:抠主体 {job['subject']}", flush=True)
+    q = f"?worker={urllib.parse.quote(name)}"
+    orig = Image.open(io.BytesIO(api.call("GET", job["orig"] + q, timeout=120))).convert("RGB")
+    edit = Image.open(io.BytesIO(api.call("GET", job["edit"] + q, timeout=120))).convert("RGB")
+    try:
+        comfy.json("GET", "/object_info/SAM3_Detect", timeout=20)
+    except Exception as e:
+        raise RuntimeError(f"连不上本机 ComfyUI({comfy.base})或没有 SAM3 节点:{e}") from None
+    raw = comfy_mask(comfy, orig, job["id"], job["subject"])
+    cov = bgswap.coverage(raw)
+    if cov < 0.01:
+        raise RuntimeError(f"没有抠到主体(只占 {cov * 100:.1f}%):换一个主体选项,或补充更准确的英文名词")
+    if cov > 0.92:
+        raise RuntimeError(f"抠图异常(主体占了 {cov * 100:.0f}%,几乎整张图):去掉一些主体选项再试")
+    out = bgswap.composite(orig, edit, bgswap.clean_mask(raw))
+    buf = io.BytesIO()
+    out.save(buf, "JPEG", quality=95)
+    api.call("PUT", f"/api/live/vworker/jobs/{job['id']}/image?worker={urllib.parse.quote(name)}", buf.getvalue(), "image/jpeg", timeout=120)
+    print(f"   完成 {time.time() - t0:.0f} 秒(主体占 {cov * 100:.0f}%),新图已交给下一步", flush=True)
+
+
 # ---------------- 工作台 ----------------
 def run_job(api: Http, comfy: Http, name: str, job: dict, w: int, h: int, steps: int):
+    if job.get("stage") == "mask":
+        return run_mask_job(api, comfy, name, job)
     t0 = time.time()
     print(f"[任务 {job['id']}] 动作「{job.get('motion')}」 {job['seconds']} 秒", flush=True)
     src = Image.open(io.BytesIO(api.call("GET", job["source"] + f"?worker={urllib.parse.quote(name)}", timeout=120)))
@@ -143,7 +208,7 @@ def main():
         info = api.json("GET", "/api/live/vworker/ping" + q)
     except Exception as e:
         raise SystemExit(f"连不上工作台({a.server}):{e}\n检查:地址、端口、Token(管理端「接口配置」里的采集端 Token)")
-    print(f"已连接工作台,待生成视频 {info['pending']} 个。本机 ComfyUI:{a.comfy}。Ctrl+C 退出。", flush=True)
+    print(f"已连接工作台,待处理 {info['pending']} 个。本机 ComfyUI:{a.comfy}。Ctrl+C 退出。", flush=True)
     idle = False
     try:
         while True:
@@ -155,7 +220,7 @@ def main():
                 continue
             if not job:
                 if a.once:
-                    print("没有待生成的视频")
+                    print("没有待处理的任务")
                     return
                 if not idle:
                     print("暂时没有任务,等待中…", flush=True)

@@ -234,6 +234,72 @@ def run(rep, env):
         rep.check("上传图片也能多拍", up2["created"] == 2, str(up2))
         lst2 = user.get("/api/live/jobs").json()
         rep.check("列表里带出第几条", any((x["opts"] or {}).get("take") == 2 for x in lst2))
+
+        # ---------- 换背景(主体不变):服务端改背景 → 视频 worker 抠主体贴回 → 再接 Live ----------
+        print()
+        print("[Live 图 · 换背景]")
+        db.q_exec("DELETE FROM live_jobs WHERE status IN ('pending','running','error')")
+        rep.check("主体名词:只收英文字母,去重、最多 8 个,全是无效值时用默认", api_live.clean_subject(["Hand", "hand", "手", "jar!", "x"]) == ["hand"] and api_live.clean_subject(["手"]) == api_live.DEFAULT_SUBJECT and len(api_live.clean_subject([f"item{chr(97 + i)}" * 1 for i in range(12)])) <= 8)
+        ihdr = bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]) + (13).to_bytes(4, "big") + b"IHDR" + (1080).to_bytes(4, "big") + (1920).to_bytes(4, "big") + bytes(5)
+        rep.check("按原图比例出图:读 PNG 宽高,1080×1920 = 9:16", api_live._nearest_ratio(api_live._img_size(ihdr)) == "9:16" and api_live._nearest_ratio(None) == "3:4")
+        sj = user.get("/api/live/subjects").json()
+        rep.check("主体选项:有中文名和默认值", {"hand", "jar", "box"} <= {x["key"] for x in sj["subjects"]} and sj["default"], str(sj)[:120])
+        bg = user.post("/api/live/jobs/bgswap", json={"images": [url(ihdr)], "names": ["黄金奶.png"], "scenes": ["白色大理石台面", "木桌窗边", " "], "opts": {"mode": "motion", "motion": "sway"}})
+        bids = bg.json()["ids"]
+        brow = db.q_one("SELECT * FROM live_jobs WHERE id=?", bids[0])
+        rep.check("换背景下单:2 个场景 = 2 个任务,先进「改背景」阶段,不带图", bg.status_code == 200 and len(bids) == 2 and brow["stage"] == "bg" and brow["src"] == "bgswap" and brow["image"] == "" and brow["title"] == "黄金奶·换背景", bg.text)
+        g0 = brow["gen"]
+        rep.check("换背景任务记录:原图、场景、主体、原图比例", g0["orig"].startswith("lvup_") and g0["scene"] == "白色大理石台面" and g0["subject"] == api_live.DEFAULT_SUBJECT and g0["ratio"] == "9:16", str(g0))
+        rep.check("换背景:同图同场景不重复", user.post("/api/live/jobs/bgswap", json={"images": [url(ihdr)], "scenes": ["白色大理石台面"], "opts": {"mode": "motion", "motion": "sway"}}).json()["skipped"] == 1)
+        rep.check("换背景:不选场景 = 自动 1 个;图太多 / 不是图片 都拒绝",
+                  user.post("/api/live/jobs/bgswap", json={"images": [url(png + b"auto")], "opts": {"mode": "zoom"}}).json()["created"] == 1
+                  and user.post("/api/live/jobs/bgswap", json={"images": [url(png + bytes([i])) for i in range(4)]}).status_code == 400
+                  and user.post("/api/live/jobs/bgswap", json={"images": [url(b"junk")]}).status_code == 400)
+        rep.check("还在改背景的任务,视频 worker 和 Mac 都领不到", col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"] is None and col.get("/api/live/worker/claim?worker=mac-test").json()["job"] is None)
+        seen = []
+        _gen1 = imagegen.generate_image
+
+        def _fake_edit(prompt, name, s=None, refs=None):
+            seen.append((prompt, (s or {}).get("image_size"), [r.name for r in (refs or [])]))
+            (imagegen.IMG_DIR / f"{name}.png").write_bytes(png + b"edited-bg")
+            return f"{name}.png"
+        imagegen.generate_image = _fake_edit
+        try:
+            rep.check("服务端改背景:处理一个", api_live.run_gen_once() is True)
+            pr, sz, rf = seen[0]
+            rep.check("改背景提示词:保持主体不变 + 新场景 + 随手拍风格;按原图比例出图;原图当参考",
+                      pr.startswith("保持图中所有的手、产品") and "白色大理石台面" in pr and "手机随手拍的生活照风格" in pr and sz == "9:16" and rf and rf[0] == g0["orig"], f"{pr[:80]} {sz} {rf}")
+            b1 = db.q_one("SELECT status, stage, gen FROM live_jobs WHERE id=?", bids[0])
+            rep.check("改背景成功:记下新图,进入「抠主体合成」阶段", b1["status"] == "pending" and b1["stage"] == "mask" and b1["gen"]["edit"].startswith("lvgen_") and (imagegen.IMG_DIR / b1["gen"]["edit"]).is_file(), str(b1))
+            api_live.run_gen_once()
+        finally:
+            imagegen.generate_image = _gen1
+        user_vid = user.post("/api/live/jobs/upload", json={"images": [url(png + b"vid-first")], "opts": {"mode": "motion", "motion": "sway"}}).json()["ids"][0]
+        mj = col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"]
+        rep.check("视频 worker 优先领「抠主体合成」(快),不先领排在前面的视频任务",
+                  mj and mj["stage"] == "mask" and mj["id"] == bids[0] and mj["subject"] == api_live.DEFAULT_SUBJECT and mj["orig"].endswith("/file/orig") and mj["edit"].endswith("/file/edit"), str(mj))
+        rep.check("视频 worker 取原图和改过背景的图", col.get(mj["orig"]).content == (imagegen.IMG_DIR / g0["orig"]).read_bytes() and col.get(mj["edit"]).content.endswith(b"edited-bg") and col.get(f"/api/live/vworker/jobs/{mj['id']}/file/nope").status_code == 404)
+        rep.check("回传合成图:不是图片 / 空 都拒绝", col.put(f"/api/live/vworker/jobs/{mj['id']}/image", content=b"junk").status_code == 400 and col.put(f"/api/live/vworker/jobs/{mj['id']}/image", content=b"").status_code == 400)
+        final = png + b"composited"
+        rep.check("回传合成图:成功后真实动作进入视频阶段,任务里有新图", col.put(f"/api/live/vworker/jobs/{mj['id']}/image?worker=gpu-pc", content=final).status_code == 200
+                  and db.q_one("SELECT status, stage FROM live_jobs WHERE id=?", mj["id"]) == {"status": "pending", "stage": "video"} and db.q_one("SELECT image FROM live_jobs WHERE id=?", mj["id"])["image"].startswith("lvgen_"))
+        rep.check("回传合成图:重复回传被拒绝", col.put(f"/api/live/vworker/jobs/{mj['id']}/image", content=final).status_code == 409)
+        mj2 = col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"]
+        rep.check("下一个领到的还是第二个场景的合成任务", mj2 and mj2["stage"] == "mask" and mj2["id"] == bids[1])
+        col.post(f"/api/live/vworker/jobs/{mj2['id']}/fail", json={"error": "没有抠到主体"})
+        rows = {x["id"]: x for x in user.get("/api/live/jobs").json()}
+        rep.check("列表:换背景任务显示场景;还没有新图时缩略图用原图;失败显示原因", rows[bids[0]]["scene"] == "白色大理石台面" and rows[bids[0]]["image"] and rows[bids[1]]["thumb"] == g0["orig"] and rows[bids[1]]["status"] == "error" and "抠到" in rows[bids[1]]["error"], str(rows[bids[1]]))
+        rep.check("失败重试:改好的背景还在 → 回到合成阶段(不重复花生图费用)", user.post(f"/api/live/jobs/{bids[1]}/retry").json()["stage"] == "mask")
+        no_edit = db.q_exec("INSERT INTO live_jobs(image,opts,mode,stage,status,src,gen) VALUES('','{}','zoom','bg','error','bgswap',?)", json.dumps({"kind": "bgswap", "orig": g0["orig"], "scene": "x"})).lastrowid
+        rep.check("失败重试:没有改好的背景 → 回到改背景阶段", user.post(f"/api/live/jobs/{no_edit}/retry").json()["stage"] == "bg")
+        st = user.get("/api/live/status").json()
+        rep.check("状态:合成阶段单独计数", st["video"]["mask_pending"] >= 1, str(st["video"]))
+        edit_name = db.q_one("SELECT gen FROM live_jobs WHERE id=?", bids[0])["gen"]["edit"]
+        user.delete(f"/api/live/jobs/{no_edit}")
+        rep.check("删除:原图还被别的换背景任务用着就留着", (imagegen.IMG_DIR / g0["orig"]).is_file())
+        for i in bids:
+            user.delete(f"/api/live/jobs/{i}")
+        rep.check("删除全部相关任务后:原图和改过背景的图一起清理", not (imagegen.IMG_DIR / g0["orig"]).exists() and not (imagegen.IMG_DIR / edit_name).exists())
     finally:
         api_live.LIVE_DIR, imagegen.IMG_DIR = old_live, old_img
         db.q_exec("DELETE FROM live_jobs")

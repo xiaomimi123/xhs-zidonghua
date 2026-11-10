@@ -142,8 +142,9 @@ def status():
     n = lambda st, sg=None: sum(v for (s_, g_), v in counts.items() if s_ == st and (sg is None or g_ == sg))
     mac, vid = _workers("live_workers"), _workers("live_vworkers")
     return {**mac, "pending": n("pending", "live"), "running": n("running", "live"), "done": n("done"), "error": n("error"),
-            "video": {**vid, "pending": n("pending", "video"), "running": n("running", "video")},
-            "image": {"pending": n("pending", "image"), "running": n("running", "image")}}
+            "video": {**vid, "pending": n("pending", "video"), "running": n("running", "video"),
+                      "mask_pending": n("pending", "mask"), "mask_running": n("running", "mask")},
+            "image": {"pending": n("pending", "image") + n("pending", "bg"), "running": n("running", "image") + n("running", "bg")}}
 
 
 @router.get("/jobs")
@@ -152,6 +153,7 @@ def list_jobs(limit: int = Query(200, le=500)):
         _requeue_stale(c)
     rows = q_all("SELECT j.*, COALESCE(NULLIF(j.title,''), d.title) AS shown FROM live_jobs j LEFT JOIN drafts d ON d.id=j.draft_id ORDER BY j.id DESC LIMIT ?", limit)
     return [{"id": j["id"], "draft_id": j["draft_id"], "title": j["shown"] or f"#{j['id']}", "image": j["image"], "opts": j["opts"],
+             "thumb": j["image"] or (j["gen"] or {}).get("orig", ""), "scene": (j["gen"] or {}).get("scene", "") if j["src"] == "bgswap" else "",
              "src": j["src"], "status": j["status"], "stage": j["stage"], "mode": j["mode"], "error": j["error"], "worker": j["worker"], "created": j["created"],
              "finished_at": j["finished_at"] or "", "size": j["result_size"] or 0, "has_video": _video_path(j["id"]).is_file(),
              "motion": MOTIONS.get((j["opts"] or {}).get("motion"), {}).get("label", ""),
@@ -201,6 +203,8 @@ def retry(jid: int, video: int = 0):
     stage = "live"
     if j["src"] == "gen" and not j["image"]:
         stage = "image"
+    elif j["src"] == "bgswap" and not j["image"]:
+        stage = "mask" if (j["gen"] or {}).get("edit") else "bg"
     elif j["mode"] == "motion" and (video or not _video_path(jid).is_file()):
         stage = "video"
         _video_path(jid).unlink(missing_ok=True)
@@ -214,19 +218,23 @@ def delete(jid: int):
     j = _job_or_404(jid)
     _rm_files(jid)
     q_exec("DELETE FROM live_jobs WHERE id=?", jid)
-    _gc_image(j["image"])
+    g = j["gen"] or {}
+    for n in (j["image"], g.get("orig", ""), g.get("edit", "")):
+        _gc_image(n)
     return {"ok": True}
 
 
 @router.post("/jobs/clear_done")
 def clear_done():
     """清掉已完成的任务和成品文件(成品传到 iPhone 以后就不需要留着了)。"""
-    rows = q_all("SELECT id, image FROM live_jobs WHERE status='done'")
+    rows = q_all("SELECT id, image, gen FROM live_jobs WHERE status='done'")
     for r in rows:
         _rm_files(r["id"])
     q_exec("DELETE FROM live_jobs WHERE status='done'")
     for r in rows:
-        _gc_image(r["image"])
+        g = r["gen"] or {}
+        for n in (r["image"], g.get("orig", ""), g.get("edit", "")):
+            _gc_image(n)
     return {"deleted": len(rows)}
 
 
@@ -277,7 +285,7 @@ UP_PREFIX = ("lvup_", "lvgen_", "lvref_")   # 这三类文件放在 data/images 
 
 def _gc_image(name: str):
     """上传 / 生成的图片,没有别的任务在用就删掉(成品库的图不动)。"""
-    if name and name.startswith(UP_PREFIX) and not q_one("SELECT 1 AS x FROM live_jobs WHERE image=?", name):
+    if name and name.startswith(UP_PREFIX) and not q_one("SELECT 1 AS x FROM live_jobs WHERE image=? OR gen LIKE ?", name, f"%{name}%"):
         (imagegen.IMG_DIR / Path(name).name).unlink(missing_ok=True)
 
 
@@ -391,10 +399,12 @@ def _gen_refs(g: dict) -> list[Path]:
 
 def process_gen_job(jid: int):
     """生成一张场景图,成功后把任务交给下一阶段(真实动作 → 视频;慢推镜头 → Mac)。失败记原因,可以重试。"""
-    j = q_one("SELECT * FROM live_jobs WHERE id=? AND status='running' AND stage='image'", jid)
+    j = q_one("SELECT * FROM live_jobs WHERE id=? AND status='running' AND stage IN ('image','bg')", jid)
     if not j:
         return
     try:
+        if j["stage"] == "bg":
+            return _process_bg(j)
         g = j["gen"] or {}
         refs = _gen_refs(g)
         if not refs:
@@ -409,7 +419,7 @@ def process_gen_job(jid: int):
 def claim_gen() -> int | None:
     with conn() as c:
         c.execute("BEGIN IMMEDIATE")
-        r = c.execute("SELECT id FROM live_jobs WHERE status='pending' AND stage='image' ORDER BY id LIMIT 1").fetchone()
+        r = c.execute("SELECT id FROM live_jobs WHERE status='pending' AND stage IN ('image','bg') ORDER BY id LIMIT 1").fetchone()
         if not r:
             return None
         c.execute("UPDATE live_jobs SET status='running', worker='server', claimed_at=datetime('now'), error='' WHERE id=?", (r["id"],))
@@ -447,8 +457,125 @@ def _gen_loop():
 
 def start_gen():
     """服务启动时调用:把上次中断的场景图任务放回队列,再开监督线程。"""
-    q_exec("UPDATE live_jobs SET status='pending', worker='' WHERE status='running' AND stage='image'")
+    q_exec("UPDATE live_jobs SET status='pending', worker='' WHERE status='running' AND stage IN ('image','bg')")
     threading.Thread(target=_gen_loop, daemon=True, name="live-gen").start()
+
+
+# ---------- 换背景(主体不变) ----------
+# 流程:上传实拍图 → [bg:服务端让生图模型只改背景] → [mask:视频 worker 用 SAM3 抠出原图主体,贴回新背景] → 新图 → 真实动作 / 慢推镜头 → Mac
+# 为什么要「贴回」:生图模型改背景时会顺手改主体(包装上的字、位置),把原图主体按掩膜贴回去,主体才是一像素不变。
+SUBJECTS = {"hand": "手", "jar": "罐子", "bottle": "瓶子", "box": "盒子", "cup": "杯子", "spoon": "勺子", "bowl": "碗", "plate": "盘子", "bag": "袋子", "food": "食物"}
+DEFAULT_SUBJECT = ["hand", "jar", "box", "cup", "spoon"]
+MAX_BG_IMAGES, MAX_BG_SCENES = 3, 4
+_RATIOS = {"1:1": 1.0, "3:4": 0.75, "4:3": 4 / 3, "2:3": 2 / 3, "3:2": 1.5, "9:16": 9 / 16, "16:9": 16 / 9}
+BG_KEEP = "保持图中所有的手、产品、容器、餐具、食物和液体的位置、大小、形状、颜色以及包装上的文字完全不变,只把背景(桌面、墙面、杂物等)换成:"
+BG_STYLE = "。手机随手拍的生活照风格,家里的自然光,不是棚拍广告大片。画面中不要出现任何新增的文字。"
+
+
+def _img_size(b: bytes) -> tuple[int, int] | None:
+    """读 JPEG / PNG 的宽高(服务端没有 Pillow):用来让生图模型按原图比例出图,贴回主体时才对得上位置。"""
+    try:
+        if b[:8] == b"\x89PNG\r\n\x1a\n":
+            return int.from_bytes(b[16:20], "big"), int.from_bytes(b[20:24], "big")
+        if b[:3] == b"\xff\xd8\xff":
+            i = 2
+            while i + 9 < len(b):
+                if b[i] != 0xFF:
+                    i += 1
+                    continue
+                mk = b[i + 1]
+                if mk in (0xD8, 0x01) or 0xD0 <= mk <= 0xD7:
+                    i += 2
+                    continue
+                ln = int.from_bytes(b[i + 2:i + 4], "big")
+                if 0xC0 <= mk <= 0xCF and mk not in (0xC4, 0xC8, 0xCC):
+                    return int.from_bytes(b[i + 7:i + 9], "big"), int.from_bytes(b[i + 5:i + 7], "big")
+                i += 2 + ln
+    except Exception:
+        return None
+    return None
+
+
+def _nearest_ratio(size: tuple[int, int] | None) -> str:
+    if not size or not size[1]:
+        return "3:4"
+    r = size[0] / size[1]
+    return min(_RATIOS, key=lambda k: abs(_RATIOS[k] - r))
+
+
+def clean_subject(subject: list[str] | None) -> list[str]:
+    """主体名词(给 SAM3 的英文提示):只收 2~24 个字母,最多 8 个,去重。"""
+    out = []
+    for s in subject or []:
+        s = " ".join(str(s).strip().lower().split())
+        if 2 <= len(s) <= 24 and all(ch.isalpha() or ch == " " for ch in s) and s not in out:
+            out.append(s)
+    return out[:8] or list(DEFAULT_SUBJECT)
+
+
+class BgIn(BaseModel):
+    images: list[str]                    # 实拍图(浏览器压好的 data URL)
+    names: list[str] = []
+    scenes: list[str] = []               # 新背景(一个场景 = 一张新图);空 = 自动挑一个生活场景
+    subject: list[str] = []              # 要保留不动的主体(英文名词);空 = 默认(手、罐子、盒子、杯子、勺子)
+    opts: dict | None = None
+    takes: int = 1
+
+
+@router.get("/subjects")
+def subjects():
+    return {"subjects": [{"key": k, "label": v} for k, v in SUBJECTS.items()], "default": DEFAULT_SUBJECT}
+
+
+@router.post("/jobs/bgswap")
+def create_bgswap(p: BgIn):
+    """上传实拍图 → 换成其他背景,主体(手、产品、包装文字)保持原样 → 再做成 Live 图。每个背景要花一次生图费用。"""
+    imgs = _decode(p.images)
+    if len(imgs) > MAX_BG_IMAGES:
+        raise HTTPException(400, f"一次最多 {MAX_BG_IMAGES} 张")
+    scenes = [s.strip()[:80] for s in p.scenes if s.strip()][:MAX_BG_SCENES] or [""]
+    subject = clean_subject(p.subject)
+    opts = clean_opts(p.opts)
+    who = (CURRENT.get() or {}).get("name", "")
+    made, skipped, ids = 0, 0, []
+    seed = random.randint(0, 99)
+    for i, (b, ext) in enumerate(imgs):
+        orig = _save_img(b, ext, "lvup_")
+        title = (Path(p.names[i]).stem[:24] if i < len(p.names) and p.names[i] else "") or "实拍图"
+        ratio = _nearest_ratio(_img_size(b))
+        for k, sc in enumerate(scenes):
+            for o in _take_opts(opts, p.takes):
+                g = {"kind": "bgswap", "orig": orig, "scene": sc, "subject": subject, "ratio": ratio, "idx": seed + k * 3 + i}
+                ojs = json.dumps(o, sort_keys=True)
+                dup = q_one("SELECT id FROM live_jobs WHERE src='bgswap' AND opts=? AND status IN ('pending','running','done') AND gen LIKE ? AND gen LIKE ?",
+                            ojs, f'%"orig": "{orig}"%', f'%"scene": {json.dumps(sc, ensure_ascii=False)}%')
+                if dup:
+                    skipped += 1
+                    ids.append(dup["id"])
+                    continue
+                ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen) VALUES(NULL,'',?,?,?,'bg',?,'bgswap',?)",
+                                  ojs, who, o["mode"], f"{title}·换背景", json.dumps(g, ensure_ascii=False)).lastrowid)
+                made += 1
+    return {"created": made, "skipped": skipped, "ids": ids}
+
+
+def _bg_prompt(g: dict) -> str:
+    from . import covers
+    scene = g.get("scene") or covers.scene("美食", g.get("idx", 0), 1)
+    return BG_KEEP + scene + BG_STYLE
+
+
+def _process_bg(j: dict):
+    """让生图模型只改背景(原图当参考,按原图比例出图),交给视频 worker 抠主体、贴回。"""
+    g = j["gen"] or {}
+    orig = imagegen.IMG_DIR / Path(g.get("orig", "")).name
+    if not orig.is_file():
+        raise RuntimeError("原图不见了,请重新上传")
+    s = {**get_settings(), "image_size": g.get("ratio") or "3:4"}
+    name = imagegen.generate_image(_bg_prompt(g), f"lvgen_{j['id']}_{int(time.time())}", s=s, refs=[orig])
+    g["edit"] = name
+    q_exec("UPDATE live_jobs SET gen=?, status='pending', stage='mask', worker='', claimed_at=NULL, error='' WHERE id=?",
+           json.dumps(g, ensure_ascii=False), j["id"])
 
 
 # ---------- 后台机器的心跳 ----------
@@ -460,12 +587,18 @@ def _beat(table: str, request: Request, name: str, done: int = 0):
     return w
 
 
-def _claim(table: str, stage: str, request: Request, worker: str):
+def _claim(table: str, stage, request: Request, worker: str):
+    """stage 可以是一个阶段,也可以是按优先级排列的几个阶段。"""
     w = _beat(table, request, worker)
+    stages = (stage,) if isinstance(stage, str) else tuple(stage)
     with conn() as c:
         c.execute("BEGIN IMMEDIATE")
         _requeue_stale(c)
-        r = c.execute("SELECT * FROM live_jobs WHERE status='pending' AND stage=? ORDER BY id LIMIT 1", (stage,)).fetchone()
+        r = None
+        for sg in stages:
+            r = c.execute("SELECT * FROM live_jobs WHERE status='pending' AND stage=? ORDER BY id LIMIT 1", (sg,)).fetchone()
+            if r:
+                break
         if not r:
             return w, None
         c.execute("UPDATE live_jobs SET status='running', worker=?, claimed_at=datetime('now'), error='' WHERE id=?", (w, r["id"]))
@@ -560,18 +693,23 @@ def w_fail(jid: int, p: FailIn, request: Request, worker: str = ""):
 @vworker_router.get("/ping")
 def v_ping(request: Request, worker: str = ""):
     w = _beat("live_vworkers", request, worker)
-    n = (q_one("SELECT COUNT(*) n FROM live_jobs WHERE status='pending' AND stage='video'") or {"n": 0})["n"]
+    n = (q_one("SELECT COUNT(*) n FROM live_jobs WHERE status='pending' AND stage IN ('video','mask')") or {"n": 0})["n"]
     return {"ok": True, "worker": w, "pending": n, "server_time": time.strftime("%Y-%m-%d %H:%M:%S")}
 
 
 @vworker_router.get("/claim")
 def v_claim(request: Request, worker: str = ""):
-    w, r = _claim("live_vworkers", "video", request, worker)
+    """先领「抠主体 + 贴回新背景」(很快),没有再领「生成视频」。"""
+    w, r = _claim("live_vworkers", ("mask", "video"), request, worker)
     if not r:
         return {"job": None}
     opts = clean_opts(json.loads(r["opts"] or "{}"))
+    if r["stage"] == "mask":
+        g = json.loads(r["gen"] or "{}")
+        return {"job": {"id": r["id"], "stage": "mask", "opts": opts, "subject": clean_subject(g.get("subject")),
+                        "orig": f"/api/live/vworker/jobs/{r['id']}/file/orig", "edit": f"/api/live/vworker/jobs/{r['id']}/file/edit"}}
     m = MOTIONS[opts["motion"] or "sway"]
-    return {"job": {"id": r["id"], "image": r["image"], "opts": opts, "motion": opts["motion"], "prompt": m["prompt"],
+    return {"job": {"id": r["id"], "stage": "video", "image": r["image"], "opts": opts, "motion": opts["motion"], "prompt": m["prompt"],
                     "seconds": opts["seconds"], "source": f"/api/live/vworker/jobs/{r['id']}/source"}}
 
 
@@ -601,4 +739,32 @@ async def v_video(jid: int, request: Request, worker: str = ""):
 @vworker_router.post("/jobs/{jid}/fail")
 def v_fail(jid: int, p: FailIn, request: Request, worker: str = ""):
     _fail("live_vworkers", jid, p.error, request, worker)
+    return {"ok": True}
+
+
+@vworker_router.get("/jobs/{jid}/file/{which}")
+def v_file(jid: int, which: str):
+    """换背景:取原图(orig)或生图模型改过背景的图(edit)。"""
+    j = _job_or_404(jid)
+    name = (j["gen"] or {}).get("orig" if which == "orig" else "edit" if which == "edit" else "", "")
+    f = imagegen.IMG_DIR / Path(name).name if name else None
+    if not f or not f.is_file():
+        raise HTTPException(404, "图片不存在")
+    return FileResponse(f)
+
+
+@vworker_router.put("/jobs/{jid}/image")
+async def v_image(jid: int, request: Request, worker: str = ""):
+    """回传合成好的新图(原图主体 + 新背景):收到后接着做 Live(真实动作 → 生成视频;慢推镜头 → Mac)。"""
+    j = _job_or_404(jid)
+    if j["status"] != "running" or j["stage"] != "mask":
+        raise HTTPException(409, "这个任务不在合成阶段(可能已被删除或退回重领)")
+    body = await request.body()
+    ext = mirror.sniff(body) if body else None
+    if not ext or ext not in ("jpg", "png", "webp") or len(body) > MAX_VIDEO:
+        raise HTTPException(400, "不是有效的图片")
+    name = _save_img(body, ext, "lvgen_")
+    nxt = "video" if (j["opts"] or {}).get("mode") == "motion" else "live"
+    q_exec("UPDATE live_jobs SET image=?, status='pending', stage=?, worker='', claimed_at=NULL, error='' WHERE id=?", name, nxt, jid)
+    _beat("live_vworkers", request, worker or j["worker"], 1)
     return {"ok": True}

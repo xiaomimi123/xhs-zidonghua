@@ -910,3 +910,10 @@ select.sm,.card-h select{min-height:30px;padding:4px 28px 4px 9px;font-size:13px
 .lv-tip{margin:8px 0 0;padding:8px 12px;border-radius:var(--r-sm);background:var(--warn-wash);color:var(--warn);font-size:12.5px;line-height:1.6;flex-basis:100%}
 .lv-tip b{font-weight:600}
 .lv-tip-up{margin:0 0 14px}
+
+.lv-chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}
+.lv-scn{max-height:132px;overflow:auto;padding:2px}
+.lv-chip{border:1px solid var(--line-2);background:var(--panel);color:var(--sub);border-radius:999px;padding:3px 11px;font-size:12px;cursor:pointer;text-align:left;line-height:1.5}
+.lv-chip:hover{border-color:var(--accent);color:var(--accent-ink)}
+.lv-chip.on{border-color:var(--accent);background:var(--accent-wash);color:var(--accent-ink);font-weight:500}
+.lv-chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}

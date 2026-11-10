@@ -1,7 +1,7 @@
 // ---------- Live 图:从成品库选图 → 排队 → (真实动作:本机显卡先生成视频)→ Mac 端做成实况 → 下载 .pvt 包 AirDrop 到 iPhone ----------
 // 服务端只管队列和文件;视频由装了 ComfyUI 的电脑生成(tools/livephoto/video_worker.py),
 // 实况的动画渲染和 .pvt 打包在 MacBook 上跑(tools/livephoto/mac_worker.py)。
-const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], up: { files: [] }, gen: { files: [], product: 0, scene: "", note: "", count: 1 }, pid: 0, todo: false, show: 60, sel: new Map(), jobs: [], st: null, timer: 0,
+const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], subjects: [], subjDefault: [], bg: { files: [], subject: null, extra: "", scenes: new Set(), custom: "" }, up: { files: [] }, gen: { files: [], product: 0, scene: "", note: "", count: 1 }, pid: 0, todo: false, show: 60, sel: new Map(), jobs: [], st: null, timer: 0,
   opts: Object.assign({ mode: "motion", motion: "sway", seconds: 5, zoom: 1.08, focus_y: 0.35, fit: "crop" }, (() => { try { return JSON.parse(localStorage.lvOpts || "{}"); } catch { return {}; } })()) };
 const LV_FIT = { crop: "裁成 3:4", blur: "完整+虚化补边" };
 const lvKey = (d, img) => `${d}:${img}`;
@@ -13,18 +13,20 @@ const lvMotionLabel = k => (LV.motions.find(m => m.key === k) || {}).label || k 
 function lvState(j) {
   const v = j.mode === "motion";
   if (j.status === "done") return ["已完成", "ok"];
-  if (j.status === "error") return [j.stage === "image" ? "场景图失败" : v && j.stage === "video" ? "视频失败" : "失败", "bad"];
-  if (j.status === "running") return [j.stage === "image" ? "生成场景图中" : j.stage === "video" ? "生成视频中" : v ? "Mac 制作实况中" : "Mac 制作中", "run"];
-  return [j.stage === "image" ? "排队 · 等待生成场景图" : j.stage === "video" ? "排队 · 等待生成视频" : v ? "视频已好 · 等待 Mac" : "排队中", "warn"];
+  if (j.status === "error") { const m = { image: "场景图失败", bg: "换背景失败", mask: "合成失败", video: "视频失败" }; return [(j.stage === "video" && !v ? "失败" : m[j.stage]) || "失败", "bad"]; }
+  if (j.status === "running") return [{ image: "生成场景图中", bg: "AI 换背景中", mask: "抠主体合成中", video: "生成视频中" }[j.stage] || (v ? "Mac 制作实况中" : "Mac 制作中"), "run"];
+  return [{ image: "排队 · 等待生成场景图", bg: "排队 · 等待换背景", mask: "排队 · 等待合成主体", video: "排队 · 等待生成视频" }[j.stage] || (v ? "视频已好 · 等待 Mac" : "排队中"), "warn"];
 }
 
 async function fLive() {
   clearTimeout(LV.timer);
-  let sc;
-  [LV.lib, LV.runs, LV.st, LV.jobs, LV.motions, sc, LV.prods] = await Promise.all([api("/api/library"), api("/api/runs").catch(() => []),
+  let sc, sj;
+  [LV.lib, LV.runs, LV.st, LV.jobs, LV.motions, sc, LV.prods, sj] = await Promise.all([api("/api/library"), api("/api/runs").catch(() => []),
     api("/api/live/status").catch(() => null), api("/api/live/jobs").catch(() => []), api("/api/live/motions").catch(() => []),
-    api("/api/live/scenes").catch(() => ({ scenes: [] })), api("/api/products").catch(() => [])]);
-  LV.scenes = sc.scenes || [];
+    api("/api/live/scenes").catch(() => ({ scenes: [] })), api("/api/products").catch(() => []),
+    api("/api/live/subjects").catch(() => ({ subjects: [], default: [] }))]);
+  LV.scenes = sc.scenes || []; LV.subjects = sj.subjects || []; LV.subjDefault = sj.default || [];
+  if (!LV.bg.subject) LV.bg.subject = new Set(LV.subjDefault);
   LV.lib = LV.lib.filter(d => d.images.length);
   if (!LV.motions.some(m => m.key === LV.opts.motion)) LV.opts.motion = (LV.motions[0] || {}).key || "sway";
   if (!LV.tab) LV.tab = LV.jobs.length ? "jobs" : "pick";   // 已经有任务就先看任务,不用翻过长长的选图列表
@@ -132,8 +134,12 @@ async function lvPick(files, bucket, max) {
     try { bucket.push({ name: f.name, url: await shrink(f) }); } catch { toast(`${f.name} 读取失败`, 1); }
   }
 }
+function lvBgBtn() {
+  const B = LV.bg, b = $("#lvbgo"); if (!b || !B.files.length) return;
+  b.textContent = `换背景并做成 Live 图(${B.files.length} 张 × ${Math.max(1, Math.min(4, B.scenes.size + (B.custom.trim() ? 1 : 0)))} 个背景)`;
+}
 function lvUpload() {
-  const sec = $("#lvup"), G = LV.gen, prod = LV.prods.find(p => p.id === G.product);
+  const sec = $("#lvup"), G = LV.gen, B = LV.bg, prod = LV.prods.find(p => p.id === G.product);
   const drop = (id, text) => `<label class="lv-drop" id="${id}" tabindex="0"><span>${text}</span><input type="file" accept="image/*" multiple hidden></label>`;
   sec.innerHTML = `<p class="lv-tip lv-tip-up">${LV_TIP}</p><div class="lv-up">
     <div class="card"><h3>① 直接上传图片做 Live 图</h3>
@@ -151,7 +157,18 @@ function lvUpload() {
         <div><label class="f">生成几张</label><select id="lvcount">${[1, 2, 3, 4].map(n => `<option value="${n}" ${G.count === n ? "selected" : ""}>${n} 张</option>`).join("")}</select></div></div>
       <label class="f">画面补充(可选)</label><input id="lvnote" maxlength="100" placeholder="例如:一只手拿着罐子、旁边有一杯刚冲好的拿铁" value="${esc(G.note)}">
       <div class="lv-ctl" data-ctl>${lvCtl()}</div>
-      <div class="row"><button class="btn" id="lvgen" ${prod || G.files.length ? "" : "disabled"}>生成场景图并做成 Live 图</button></div></div></div>`;
+      <div class="row"><button class="btn" id="lvgen" ${prod || G.files.length ? "" : "disabled"}>生成场景图并做成 Live 图</button></div></div>
+    <div class="card"><h3>③ 换背景(主体不变)</h3>
+      <p class="sub">上传一张<b>实拍图</b>(手拿产品、倒粉、搅拌等),把背景换成别的场景;手、产品、包装文字等主体<b>保持原图不变</b>。同一张图可以换多个背景,重复利用。<b>每个背景要花一次生图费用(约几毛钱)</b>。</p>
+      ${drop("lvdrop3", "点击选择实拍图,或拖到这里(最多 3 张)")}<div class="lv-pvs" id="lvpv3">${lvThumbs(B.files, "bg")}</div>
+      <label class="f">保留不动的主体 <span class="sub">(没选到的东西会被一起换掉)</span></label>
+      <div class="lv-chips" id="lvsubj">${LV.subjects.map(x => `<button type="button" class="lv-chip ${B.subject.has(x.key) ? "on" : ""}" data-subj="${esc(x.key)}">${esc(x.label)}</button>`).join("")}</div>
+      <input id="lvsubx" placeholder="补充主体(英文名词,逗号分隔,可选),例如:candle, tray" value="${esc(B.extra)}">
+      <label class="f">换成什么背景 <span class="sub">(可多选,最多 4 个;不选 = 自动挑一个生活场景)</span></label>
+      <div class="lv-chips lv-scn" id="lvscn">${LV.scenes.map(s => `<button type="button" class="lv-chip ${B.scenes.has(s) ? "on" : ""}" data-scn="${esc(s)}">${esc(s)}</button>`).join("")}</div>
+      <input id="lvscx" maxlength="80" placeholder="或自己写一个背景,例如:阳台木桌,午后阳光" value="${esc(B.custom)}">
+      <div class="lv-ctl" data-ctl>${lvCtl()}</div>
+      <div class="row"><button class="btn" id="lvbgo" ${B.files.length ? "" : "disabled"}>换背景并做成 Live 图${B.files.length ? `(${B.files.length} 张 × ${Math.max(1, Math.min(4, B.scenes.size + (B.custom.trim() ? 1 : 0)))} 个背景)` : ""}</button></div></div></div>`;
   const wireDrop = (id, bucket, max, rerender) => {
     const el = $("#" + id); if (!el) return;
     el.querySelector("input").onchange = async e => { await lvPick(e.target.files, bucket, max); rerender(); };
@@ -160,15 +177,41 @@ function lvUpload() {
     el.ondrop = async e => { e.preventDefault(); el.classList.remove("on"); await lvPick(e.dataTransfer.files, bucket, max); rerender(); };
     el.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.querySelector("input").click(); } };
   };
-  wireDrop("lvdrop1", LV.up.files, 9, lvUpload); wireDrop("lvdrop2", G.files, 3, lvUpload);
-  sec.onclick = e => { const r = e.target.closest("[data-rm]"); if (!r) return; const [k, i] = r.dataset.rm.split(":"); (k === "up" ? LV.up.files : G.files).splice(+i, 1); lvUpload(); };
+  wireDrop("lvdrop1", LV.up.files, 9, lvUpload); wireDrop("lvdrop2", G.files, 3, lvUpload); wireDrop("lvdrop3", B.files, 3, lvUpload);
+  sec.onclick = e => {
+    const r = e.target.closest("[data-rm]");
+    if (r) { const [k, i] = r.dataset.rm.split(":"); ({ up: LV.up.files, gen: G.files, bg: B.files })[k].splice(+i, 1); return lvUpload(); }
+    const sj = e.target.closest("[data-subj]");
+    if (sj) { const k = sj.dataset.subj; B.subject.has(k) ? B.subject.delete(k) : B.subject.add(k); return sj.classList.toggle("on", B.subject.has(k)); }
+    const sc = e.target.closest("[data-scn]");
+    if (sc) {
+      const k = sc.dataset.scn;
+      if (!B.scenes.has(k) && B.scenes.size >= 4) return toast("最多选 4 个背景", 1);
+      B.scenes.has(k) ? B.scenes.delete(k) : B.scenes.add(k); sc.classList.toggle("on", B.scenes.has(k)); return lvBgBtn();
+    }
+  };
   sec.onchange = e => {
     if (e.target.dataset.o) return lvCtlChange(e);
     if (e.target.id === "lvprod") { G.product = +e.target.value; return lvUpload(); }
     if (e.target.id === "lvscene") G.scene = e.target.value;
     if (e.target.id === "lvcount") G.count = +e.target.value;
   };
-  sec.oninput = e => { if (e.target.id === "lvnote") G.note = e.target.value; };
+  sec.oninput = e => {
+    if (e.target.id === "lvnote") G.note = e.target.value;
+    if (e.target.id === "lvsubx") B.extra = e.target.value;
+    if (e.target.id === "lvscx") { B.custom = e.target.value; lvBgBtn(); }
+  };
+  $("#lvbgo") && ($("#lvbgo").onclick = async () => {
+    const btn = $("#lvbgo"); btn.disabled = true;
+    try {
+      const scenes = [...B.scenes, ...(B.custom.trim() ? [B.custom.trim()] : [])].slice(0, 4);
+      const subject = [...B.subject, ...B.extra.split(/[,,]/).map(x => x.trim()).filter(Boolean)];
+      const r = await api("/api/live/jobs/bgswap", "POST", { images: B.files.map(f => f.url), names: B.files.map(f => f.name), scenes, subject,
+        opts: LV.opts, takes: LV.opts.mode === "motion" ? +LV.opts.takes || 1 : 1 });
+      toast(r.created ? `已提交 ${r.created} 个换背景任务,AI 正在改背景` : `这些已经有同样的换背景任务了`);
+      B.files = []; lvTab("jobs"); await lvRefresh(); window.scrollTo(0, 0);
+    } catch (e) { toast(e.message, 1); btn.disabled = false; }
+  });
   $("#lvup1") && ($("#lvup1").onclick = async () => {
     const btn = $("#lvup1"); btn.disabled = true;
     try {
@@ -211,7 +254,7 @@ function lvStatus() {
   const open = $("#lvhow")?.open ?? !(s.workers[0] || v.workers[0]);
   const base = location.origin;
   $("#lvst").innerHTML = lvLine("Mac(做实况)", s, s.online, `排队 ${s.pending} · 制作中 ${s.running} · 已完成 ${s.done}${s.error ? ` · 失败 ${s.error}` : ""}`)
-    + lvLine("视频生成机(真实动作)", v, v.online, `排队 ${v.pending} · 生成中 ${v.running}${im.pending + im.running ? ` · 场景图生成中 ${im.running} / 排队 ${im.pending}` : ""}`)
+    + lvLine("视频生成机(真实动作)", v, v.online, `排队 ${v.pending} · 生成中 ${v.running}${(v.mask_pending || 0) + (v.mask_running || 0) ? ` · 抠主体合成 ${v.mask_running || 0} / 排队 ${v.mask_pending || 0}` : ""}${im.pending + im.running ? ` · AI 生图 ${im.running} / 排队 ${im.pending}` : ""}`)
     + `<details class="lv-how" id="lvhow" ${open ? "open" : ""}><summary>两台机器怎么启动</summary>
       <p class="sub">任务可以先提交,会一直排队,等对应的程序启动后自动开始做。<b>Token</b> 在管理端「接口配置」里复制采集端 Token。</p>
       <ol><li><b>视频生成机</b>(装了 ComfyUI + MiniMax H3 的电脑,只有「真实动作」需要),先启动 ComfyUI,再在 <code>tools/livephoto</code> 里运行:<pre>python video_worker.py --server ${esc(base)} --token 你的Token</pre></li>
@@ -227,12 +270,12 @@ function lvJobs() {
   $("#lvjobs").innerHTML = js.length ? `<div class="lv-jobs">${js.map(j => {
     const [lab, cls] = lvState(j), o = j.opts || {}, motion = j.mode === "motion";
     const how = motion ? `真实动作 · ${esc(j.motion || lvMotionLabel(o.motion))}${o.take ? ` · 第 ${o.take} 条` : ""} · ${o.seconds || 3} 秒` : `慢推镜头 · 推近 ${Math.round(((o.zoom || 1) - 1) * 100)}% · ${o.seconds || 5} 秒`;
-    const from = j.src === "upload" ? "上传图片 · " : j.src === "gen" ? "产品场景图 · " : "";
-    return `<article class="lv-job" data-j="${j.id}">${j.image ? `<img src="/images/${esc(j.image)}" alt="" loading="lazy">` : `<div class="lv-ph" aria-hidden="true">场景图</div>`}
+    const from = j.src === "upload" ? "上传图片 · " : j.src === "gen" ? "产品场景图 · " : j.src === "bgswap" ? `换背景 · ${esc(j.scene || "自动场景")} · ` : "";
+    return `<article class="lv-job" data-j="${j.id}">${j.thumb || j.image ? `<img src="/images/${esc(j.thumb || j.image)}" alt="" loading="lazy">` : `<div class="lv-ph" aria-hidden="true">场景图</div>`}
       <div class="lv-jt"><b>${esc(j.title)}</b><span class="sub">${from}${how} · ${esc(LV_FIT[o.fit] || "")} · ${esc(when(j.created))}${j.worker ? ` · ${esc(j.worker)}` : ""}${j.size ? ` · ${(j.size / 1048576).toFixed(1)} MB` : ""}</span>
         ${j.status === "error" ? `<span class="fl-err">${esc(j.error)}</span>` : ""}</div>
       <span class="fl-pill ${cls}">${lab}</span>
-      <div class="lv-ja">${j.has_video ? `<button class="btn gray sm" data-a="video" title="生成的视频(还没做成实况)">看视频</button>` : ""}
+      <div class="lv-ja">${j.image && (j.src === "gen" || j.src === "bgswap") ? `<button class="btn gray sm" data-a="img" title="AI 生成 / 合成好的图">看新图</button>` : ""}${j.has_video ? `<button class="btn gray sm" data-a="video" title="生成的视频(还没做成实况)">看视频</button>` : ""}
         ${j.has_result ? `<button class="btn gray sm" data-a="play">预览实况</button><a class="btn gray sm" href="/api/live/jobs/${j.id}/download">下载</a>` : ""}
         ${j.status === "error" || j.status === "done" ? `<button class="btn ghost sm" data-a="retry" title="${motion && j.has_video ? "视频保留,只重做实况" : "按原参数重新生成"}">${j.status === "error" ? "重试" : "重做"}</button>` : ""}
         ${motion && j.has_video && j.status !== "running" ? `<button class="btn ghost sm" data-a="regen" title="丢掉这条视频,重新生成一条">重拍视频</button>` : ""}
@@ -244,6 +287,7 @@ async function lvJobClick(e) {
   const b = e.target.closest("[data-a]"); if (!b) return;
   const id = +b.closest("[data-j]").dataset.j, a = b.dataset.a;
   try {
+    if (a === "img") { const j = LV.jobs.find(x => x.id === id); return j && lightbox(["/images/" + j.image], 0); }
     if (a === "play") return lvPlay(id, "preview");
     if (a === "video") return lvPlay(id, "video");
     if (a === "del") { if (!confirm("删除这个任务和它的视频、成品?")) return; await api(`/api/live/jobs/${id}`, "DELETE"); }
