@@ -144,10 +144,78 @@ def run(rep, env):
         rep.check("Mac 失败重试:视频还在 → 只重做实况", user.post(f"/api/live/jobs/{r2}/retry").json()["stage"] == "live" and _video_ok(r2))
         rep.check("强制重拍视频:删掉旧视频回到视频阶段", user.post(f"/api/live/jobs/{r2}/retry?video=1").json()["stage"] == "video" and not _video_ok(r2))
         rep.check("删除任务:视频和成品文件一起删", user.delete(f"/api/live/jobs/{mid}").status_code == 200 and not (api_live.LIVE_DIR / f"{mid}.mp4").exists() and not (api_live.LIVE_DIR / f"{mid}.zip").exists())
+
+        # ---------- 上传图片 / 产品图生成场景图 ----------
+        print()
+        print("[Live 图 · 上传与生成场景图]")
+        db.q_exec("DELETE FROM live_jobs WHERE status IN ('pending','running','error')")   # 前面用例留下的排队任务清掉,免得抢在前面
+        import base64
+        png = bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]) + b"fake-png-body"
+        url = lambda b, mime="png": f"data:image/{mime};base64," + base64.b64encode(b).decode()
+        up = user.post("/api/live/jobs/upload", json={"images": [url(png)], "names": ["我的产品图.png"], "opts": {"mode": "motion", "motion": "sway"}})
+        uid = up.json()["ids"][0]
+        row = db.q_one("SELECT * FROM live_jobs WHERE id=?", uid)
+        rep.check("上传图片:建任务,没有稿子、来源是上传、真实动作先进视频阶段",
+                  up.status_code == 200 and row["src"] == "upload" and row["draft_id"] is None and row["stage"] == "video" and row["title"] == "我的产品图" and row["image"].startswith("lvup_"), up.text)
+        rep.check("上传图片:图片存进图片目录,可以直接访问", (imagegen.IMG_DIR / row["image"]).is_file())
+        rep.check("上传图片:同一张图同参数不重复", user.post("/api/live/jobs/upload", json={"images": [url(png)], "opts": {"mode": "motion", "motion": "sway"}}).json()["skipped"] == 1)
+        rep.check("上传图片:不是图片 / SVG / 没有图 都拒绝",
+                  user.post("/api/live/jobs/upload", json={"images": [url(b"not-an-image")]}).status_code == 400
+                  and user.post("/api/live/jobs/upload", json={"images": [url(b"<svg onload=alert(1)>", "svg+xml")]}).status_code == 400
+                  and user.post("/api/live/jobs/upload", json={"images": []}).status_code == 400)
+        rep.check("上传图片:视频 worker 能领到并下载这张图", col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"]["id"] == uid and col.get(f"/api/live/vworker/jobs/{uid}/source").content == (imagegen.IMG_DIR / row["image"]).read_bytes())
+        lst = {x["id"]: x for x in user.get("/api/live/jobs").json()}
+        rep.check("列表:上传任务显示自己的名称和来源", lst[uid]["title"] == "我的产品图" and lst[uid]["src"] == "upload", str(lst[uid]))
+        user.delete(f"/api/live/jobs/{uid}")
+        rep.check("删除上传任务:只有它在用的图片一起删除", not (imagegen.IMG_DIR / row["image"]).exists())
+
+        sc = user.get("/api/live/scenes").json()["scenes"]
+        rep.check("场景库:返回生活场景,没有棚拍", len(sc) >= 10 and not any("棚拍" in x for x in sc), str(sc[:3]))
+        pid2 = db.q_exec("INSERT INTO products(name,images) VALUES('测试产品','[]')").lastrowid
+        rep.check("生成场景图:产品没有图 / 什么都没选 / 张数不对 都拒绝",
+                  user.post("/api/live/jobs/generate", json={"product_id": pid2}).status_code == 400
+                  and user.post("/api/live/jobs/generate", json={}).status_code == 400
+                  and user.post("/api/live/jobs/generate", json={"images": [url(png)], "count": 9}).status_code == 400)
+        calls = []
+        _gen0 = imagegen.generate_image
+
+        def _fake_gen(prompt, name, s=None, refs=None):
+            calls.append((prompt, name, [r.name for r in (refs or [])]))
+            (imagegen.IMG_DIR / f"{name}.png").write_bytes(png + name.encode())
+            return f"{name}.png"
+        imagegen.generate_image = _fake_gen
+        try:
+            g = user.post("/api/live/jobs/generate", json={"images": [url(png)], "scene": "", "note": "一只手拿着罐子", "count": 2, "opts": {"mode": "motion", "motion": "rotate"}})
+            gids = g.json()["ids"]
+            rep.check("生成场景图:建 2 个任务,先进场景图阶段", g.status_code == 200 and len(gids) == 2 and {db.q_one("SELECT stage FROM live_jobs WHERE id=?", i)["stage"] for i in gids} == {"image"}, g.text)
+            rep.check("生成场景图:视频 worker 和 Mac 都领不到还没有图的任务", col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"] is None and col.get("/api/live/worker/claim?worker=mac-test").json()["job"] is None)
+            rep.check("场景图线程:一次处理一个", api_live.run_gen_once() is True)
+            a = db.q_one("SELECT status, stage, image, error FROM live_jobs WHERE id=?", gids[0])
+            rep.check("场景图生成成功:图片落盘,进入视频阶段", a["status"] == "pending" and a["stage"] == "video" and a["image"].startswith("lvgen_") and (imagegen.IMG_DIR / a["image"]).is_file(), str(a))
+            pr, nm, rf = calls[0]
+            rep.check("场景图提示词:保持产品外观 + 手机随手拍风格 + 自动场景 + 带参考图",
+                      pr.startswith("以参考图中的产品为主体") and "手机随手拍的生活照风格" in pr and "场景:" in pr and "一只手拿着罐子" in pr and rf and rf[0].startswith("lvref_") and "棚拍广告" not in pr.replace("不是棚拍,不是广告大片", ""), pr[:200])
+            api_live.run_gen_once()
+            rep.check("自动场景:两张换不同场景", calls[0][0] != calls[1][0] and "场景:" in calls[1][0])
+            rep.check("没有待生成的任务时返回 False", api_live.run_gen_once() is False)
+            vjob = col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"]
+            rep.check("场景图好了视频 worker 才领得到,源图就是生成的图", vjob and vjob["id"] == gids[0] and col.get(vjob["source"]).content == (imagegen.IMG_DIR / a["image"]).read_bytes(), f"{vjob} {gids} {a}")
+            # 失败 → 记录原因 → 重试回到场景图阶段
+            def _boom(prompt, name, s=None, refs=None):
+                raise RuntimeError("生图接口 401")
+            imagegen.generate_image = _boom
+            f = user.post("/api/live/jobs/generate", json={"images": [url(png + b"2")], "count": 1}).json()["ids"][0]
+            api_live.run_gen_once()
+            e = db.q_one("SELECT status, stage, error FROM live_jobs WHERE id=?", f)
+            rep.check("场景图失败:记录原因,停在场景图阶段", e["status"] == "error" and e["stage"] == "image" and "401" in e["error"], str(e))
+            rep.check("场景图失败重试:回到场景图阶段(不会误进视频阶段)", user.post(f"/api/live/jobs/{f}/retry").json()["stage"] == "image")
+        finally:
+            imagegen.generate_image = _gen0
     finally:
         api_live.LIVE_DIR, imagegen.IMG_DIR = old_live, old_img
         db.q_exec("DELETE FROM live_jobs")
         db.q_exec("DELETE FROM live_workers")
         db.q_exec("DELETE FROM live_vworkers")
+        db.q_exec("DELETE FROM products WHERE name='测试产品'")
         db.q_exec("DELETE FROM drafts WHERE project_id=?", pid)
         db.q_exec("DELETE FROM projects WHERE id=?", pid)

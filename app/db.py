@@ -87,7 +87,7 @@ DEFAULT_TRACKS = [
 ]
 
 JSON_COLS = ("keywords", "images", "tags", "note_ids", "data", "ai_tags", "checks", "stats", "review", "variant", "state", "profile", "cover_card", "images_local",
-             "alt_titles", "image_prompts", "template_ids", "opts")
+             "alt_titles", "image_prompts", "template_ids", "opts", "gen")
 
 
 # 全局笔记库:同一篇帖子只存一份(按 uid 去重),通过 project_notes 关联到多个项目
@@ -300,6 +300,14 @@ def _m006_live_motion(c):
         first_seen TEXT DEFAULT CURRENT_TIMESTAMP)""")
 
 
+def _m007_live_upload(c):
+    """Live 图:图片来源不止成品库——可以直接上传图片(upload),也可以上传产品图、由服务端先用生图模型生成一张
+    「手机随手拍」风格的场景图(gen)。stage 多了一个 image(服务端生成场景图中)。title 给没有稿子的任务显示名称。"""
+    add_column(c, "live_jobs", "title", "TEXT DEFAULT ''")
+    add_column(c, "live_jobs", "src", "TEXT DEFAULT 'draft'")
+    add_column(c, "live_jobs", "gen", "TEXT DEFAULT '{}'")
+
+
 MIGRATIONS = [
     (1, "baseline", _m001_baseline),
     (2, "staff", _m002_staff),
@@ -307,6 +315,7 @@ MIGRATIONS = [
     (4, "qf_link", _m004_qf_link),
     (5, "live", _m005_live),
     (6, "live_motion", _m006_live_motion),
+    (7, "live_upload", _m007_live_upload),
     # (2, "说明", _m002_xxx),
 ]
 

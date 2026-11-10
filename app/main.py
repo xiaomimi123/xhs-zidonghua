@@ -15,6 +15,7 @@ async def lifespan(_):
     notes.normalize_existing()  # 给已入库的笔记补做清洗(幂等)
     worker.resume()  # 接着跑上次中断的拆解、复刻,启动打标签线程
     autorun.start()  # 一键批量生成的监督线程
+    api_live.start_gen()  # Live 图:产品图 → 场景图的生成线程
     yield
 
 

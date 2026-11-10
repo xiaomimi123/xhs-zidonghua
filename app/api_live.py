@@ -7,17 +7,20 @@
 
 服务端不处理图片和视频,只管队列、状态和文件。Windows 没有可用的实况导入路径,所以最后一步必须在 Mac 上做
 (见 tools/livephoto/mac_worker.py、tools/livephoto/video_worker.py、docs/Live图_Mac端说明.md)。"""
+import hashlib
 import io
 import json
+import random
+import threading
 import time
 import zipfile
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from . import imagegen
+from . import imagegen, mirror, products
 from .auth import CURRENT, require_collector, require_user
-from .db import DATA, conn, q_all, q_exec, q_one
+from .db import DATA, conn, get_settings, q_all, q_exec, q_one
 
 router = APIRouter(prefix="/api/live", dependencies=[Depends(require_user)])
 worker_router = APIRouter(prefix="/api/live/worker", dependencies=[Depends(require_collector)])    # Mac 端:做实况
@@ -123,16 +126,17 @@ def status():
     n = lambda st, sg=None: sum(v for (s_, g_), v in counts.items() if s_ == st and (sg is None or g_ == sg))
     mac, vid = _workers("live_workers"), _workers("live_vworkers")
     return {**mac, "pending": n("pending", "live"), "running": n("running", "live"), "done": n("done"), "error": n("error"),
-            "video": {**vid, "pending": n("pending", "video"), "running": n("running", "video")}}
+            "video": {**vid, "pending": n("pending", "video"), "running": n("running", "video")},
+            "image": {"pending": n("pending", "image"), "running": n("running", "image")}}
 
 
 @router.get("/jobs")
 def list_jobs(limit: int = Query(200, le=500)):
     with conn() as c:
         _requeue_stale(c)
-    rows = q_all("SELECT j.*, d.title FROM live_jobs j LEFT JOIN drafts d ON d.id=j.draft_id ORDER BY j.id DESC LIMIT ?", limit)
-    return [{"id": j["id"], "draft_id": j["draft_id"], "title": j["title"] or f"#{j['draft_id']}", "image": j["image"], "opts": j["opts"],
-             "status": j["status"], "stage": j["stage"], "mode": j["mode"], "error": j["error"], "worker": j["worker"], "created": j["created"],
+    rows = q_all("SELECT j.*, COALESCE(NULLIF(j.title,''), d.title) AS shown FROM live_jobs j LEFT JOIN drafts d ON d.id=j.draft_id ORDER BY j.id DESC LIMIT ?", limit)
+    return [{"id": j["id"], "draft_id": j["draft_id"], "title": j["shown"] or f"#{j['id']}", "image": j["image"], "opts": j["opts"],
+             "src": j["src"], "status": j["status"], "stage": j["stage"], "mode": j["mode"], "error": j["error"], "worker": j["worker"], "created": j["created"],
              "finished_at": j["finished_at"] or "", "size": j["result_size"] or 0, "has_video": _video_path(j["id"]).is_file(),
              "motion": MOTIONS.get((j["opts"] or {}).get("motion"), {}).get("label", ""),
              "has_result": j["status"] == "done" and _result_path(j["id"]).is_file(), "by": j["created_by"]} for j in rows]
@@ -178,7 +182,9 @@ def retry(jid: int, video: int = 0):
     if j["status"] == "running":
         raise HTTPException(400, "正在生成中")
     stage = "live"
-    if j["mode"] == "motion" and (video or not _video_path(jid).is_file()):
+    if j["src"] == "gen" and not j["image"]:
+        stage = "image"
+    elif j["mode"] == "motion" and (video or not _video_path(jid).is_file()):
         stage = "video"
         _video_path(jid).unlink(missing_ok=True)
     _result_path(jid).unlink(missing_ok=True)
@@ -188,25 +194,28 @@ def retry(jid: int, video: int = 0):
 
 @router.delete("/jobs/{jid}")
 def delete(jid: int):
-    _job_or_404(jid)
+    j = _job_or_404(jid)
     _rm_files(jid)
     q_exec("DELETE FROM live_jobs WHERE id=?", jid)
+    _gc_image(j["image"])
     return {"ok": True}
 
 
 @router.post("/jobs/clear_done")
 def clear_done():
     """清掉已完成的任务和成品文件(成品传到 iPhone 以后就不需要留着了)。"""
-    ids = [r["id"] for r in q_all("SELECT id FROM live_jobs WHERE status='done'")]
-    for i in ids:
-        _rm_files(i)
+    rows = q_all("SELECT id, image FROM live_jobs WHERE status='done'")
+    for r in rows:
+        _rm_files(r["id"])
     q_exec("DELETE FROM live_jobs WHERE status='done'")
-    return {"deleted": len(ids)}
+    for r in rows:
+        _gc_image(r["image"])
+    return {"deleted": len(rows)}
 
 
 def _file_stem(jid: int) -> str:
-    j = q_one("SELECT j.id, d.title FROM live_jobs j LEFT JOIN drafts d ON d.id=j.draft_id WHERE j.id=?", jid) or {}
-    t = "".join(ch for ch in (j.get("title") or "") if ch not in '\\/:*?"<>|\r\n\t ')[:24]
+    j = q_one("SELECT j.id, COALESCE(NULLIF(j.title,''), d.title) AS shown FROM live_jobs j LEFT JOIN drafts d ON d.id=j.draft_id WHERE j.id=?", jid) or {}
+    t = "".join(ch for ch in (j.get("shown") or "") if ch not in '\\/:*?"<>|\r\n\t ')[:24]
     return f"live_{jid}_{t}" if t else f"live_{jid}"
 
 
@@ -243,6 +252,184 @@ def preview_video(jid: int):
     if not f.is_file():
         raise HTTPException(404, "视频还没有生成")
     return FileResponse(f, media_type="video/mp4", headers={"Cache-Control": "private, max-age=3600"})
+
+
+# ---------- 上传图片 / 产品图生成场景图 ----------
+UP_PREFIX = ("lvup_", "lvgen_", "lvref_")   # 这三类文件放在 data/images 里,没有任务再用时一起清理
+
+
+def _gc_image(name: str):
+    """上传 / 生成的图片,没有别的任务在用就删掉(成品库的图不动)。"""
+    if name and name.startswith(UP_PREFIX) and not q_one("SELECT 1 AS x FROM live_jobs WHERE image=?", name):
+        (imagegen.IMG_DIR / Path(name).name).unlink(missing_ok=True)
+
+
+def _save_img(b: bytes, ext: str, prefix: str) -> str:
+    name = f"{prefix}{hashlib.sha1(b).hexdigest()[:12]}.{ext}"   # 按内容命名:同一张图上传多次只存一份
+    f = imagegen.IMG_DIR / name
+    if not f.is_file():
+        f.write_bytes(b)
+    return name
+
+
+def _decode(urls: list[str]) -> list[tuple[bytes, str]]:
+    try:
+        return products.decode_images(urls)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class UploadIn(BaseModel):
+    images: list[str]              # 浏览器压好的 data URL(jpg / png / webp)
+    names: list[str] = []          # 原文件名,用来给任务起名
+    opts: dict | None = None
+
+
+@router.post("/jobs/upload")
+def create_from_upload(p: UploadIn):
+    """直接上传图片做 Live 图:图片原样作为源图,不经过生图模型,不花生图费用。"""
+    imgs = _decode(p.images)
+    opts = clean_opts(p.opts)
+    stage = "video" if opts["mode"] == "motion" else "live"
+    ojs = json.dumps(opts, sort_keys=True)
+    who = (CURRENT.get() or {}).get("name", "")
+    made, skipped, ids = 0, 0, []
+    for i, (b, ext) in enumerate(imgs):
+        name = _save_img(b, ext, "lvup_")
+        title = (Path(p.names[i]).stem[:30] if i < len(p.names) and p.names[i] else "") or "上传图片"
+        dup = q_one("SELECT id FROM live_jobs WHERE image=? AND opts=? AND status IN ('pending','running','done')", name, ojs)
+        if dup:
+            skipped += 1
+            ids.append(dup["id"])
+            continue
+        ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src) VALUES(NULL,?,?,?,?,?,?,'upload')",
+                          name, ojs, who, opts["mode"], stage, title).lastrowid)
+        made += 1
+    return {"created": made, "skipped": skipped, "ids": ids}
+
+
+@router.get("/scenes")
+def scenes():
+    """产品图生成场景图时可选的生活场景(和成品库配图用同一套场景库)。"""
+    from . import covers
+    return {"scenes": list(dict.fromkeys(covers.FOOD_SCENES + covers.GENERIC_SCENES))}
+
+
+class GenIn(BaseModel):
+    product_id: int = 0            # 用「产品」里已有的产品图做参考
+    images: list[str] = []         # 或者直接上传产品图(data URL)
+    scene: str = ""                # 空 = 自动,每张换一个生活场景;否则按这个场景
+    note: str = ""                 # 画面补充描述,如「一只手拿着罐子」
+    count: int = 1
+    opts: dict | None = None
+
+
+MAX_GEN = 4
+
+
+@router.post("/jobs/generate")
+def create_from_product(p: GenIn):
+    """上传产品图 → 服务端用生图模型生成「手机随手拍」风格的场景图(要花生图费用)→ 再做成 Live 图。"""
+    if not 1 <= p.count <= MAX_GEN:
+        raise HTTPException(400, f"一次生成 1~{MAX_GEN} 张")
+    gen = {"scene": p.scene.strip()[:80], "note": p.note.strip()[:100]}
+    title = "产品场景图"
+    if p.product_id:
+        prod = products.get(p.product_id)
+        if not prod or not products.paths(prod):
+            raise HTTPException(400, "这个产品没有可用的产品图")
+        gen["product_id"] = prod["id"]
+        title = prod["name"][:30]
+    elif p.images:
+        gen["refs"] = [_save_img(b, ext, "lvref_") for b, ext in _decode(p.images)[:3]]
+    else:
+        raise HTTPException(400, "请选一个产品,或者上传产品图")
+    opts = clean_opts(p.opts)
+    ojs = json.dumps(opts, sort_keys=True)
+    who = (CURRENT.get() or {}).get("name", "")
+    seed = random.randint(0, 99)
+    ids = []
+    for k in range(p.count):
+        g = dict(gen, idx=seed + k * 3)   # idx 用来在「自动」场景下给每张挑不同的场景
+        ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen) VALUES(NULL,'',?,?,?,'image',?,'gen',?)",
+                          ojs, who, opts["mode"], title, json.dumps(g, ensure_ascii=False)).lastrowid)
+    return {"created": len(ids), "ids": ids}
+
+
+def _gen_prompt(g: dict) -> str:
+    from . import covers, worker
+    scene = g.get("scene") or covers.scene("美食", g.get("idx", 0), 1)
+    subject = g.get("note") or "产品是画面里的主角,摆在或拿在真实生活场景中,像用户自己随手拍的分享照"
+    return worker._image_prompt("", subject, True, scene)
+
+
+def _gen_refs(g: dict) -> list[Path]:
+    if g.get("product_id"):
+        prod = products.get(g["product_id"])
+        return products.paths(prod, max(1, int(get_settings().get("product_max_refs") or 3))) if prod else []
+    return [f for f in (imagegen.IMG_DIR / Path(n).name for n in g.get("refs") or []) if f.is_file()]
+
+
+def process_gen_job(jid: int):
+    """生成一张场景图,成功后把任务交给下一阶段(真实动作 → 视频;慢推镜头 → Mac)。失败记原因,可以重试。"""
+    j = q_one("SELECT * FROM live_jobs WHERE id=? AND status='running' AND stage='image'", jid)
+    if not j:
+        return
+    try:
+        g = j["gen"] or {}
+        refs = _gen_refs(g)
+        if not refs:
+            raise RuntimeError("产品图不见了,请重新上传")
+        name = imagegen.generate_image(_gen_prompt(g), f"lvgen_{jid}_{int(time.time())}", refs=refs)
+        nxt = "video" if (j["opts"] or {}).get("mode") == "motion" else "live"
+        q_exec("UPDATE live_jobs SET image=?, status='pending', stage=?, worker='', claimed_at=NULL, error='' WHERE id=?", name, nxt, jid)
+    except Exception as e:
+        q_exec("UPDATE live_jobs SET status='error', error=?, finished_at=datetime('now') WHERE id=?", f"生成场景图失败:{e}"[:480], jid)
+
+
+def claim_gen() -> int | None:
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        r = c.execute("SELECT id FROM live_jobs WHERE status='pending' AND stage='image' ORDER BY id LIMIT 1").fetchone()
+        if not r:
+            return None
+        c.execute("UPDATE live_jobs SET status='running', worker='server', claimed_at=datetime('now'), error='' WHERE id=?", (r["id"],))
+        return r["id"]
+
+
+def run_gen_once() -> bool:
+    """领一个并同步处理(测试和线程都用它)。"""
+    jid = claim_gen()
+    if jid is None:
+        return False
+    process_gen_job(jid)
+    return True
+
+
+_gen_threads: set = set()
+
+
+def _gen_loop():
+    while True:
+        try:
+            limit = max(1, int(get_settings().get("image_concurrency") or 2))
+            _gen_threads.difference_update({t for t in _gen_threads if not t.is_alive()})
+            while len(_gen_threads) < limit:
+                jid = claim_gen()
+                if jid is None:
+                    break
+                t = threading.Thread(target=process_gen_job, args=(jid,), daemon=True)
+                _gen_threads.add(t)
+                t.start()
+        except Exception:
+            pass
+        time.sleep(3)
+
+
+def start_gen():
+    """服务启动时调用:把上次中断的场景图任务放回队列,再开监督线程。"""
+    q_exec("UPDATE live_jobs SET status='pending', worker='' WHERE status='running' AND stage='image'")
+    threading.Thread(target=_gen_loop, daemon=True, name="live-gen").start()
 
 
 # ---------- 后台机器的心跳 ----------
