@@ -1027,3 +1027,16 @@ select.sm,.card-h select{min-height:30px;padding:4px 28px 4px 9px;font-size:13px
 .pv-box .banner{margin:0}
 .fl-tf2{flex:0 0 100%;display:flex;gap:8px;flex-wrap:wrap}
 .fl-tf2 .btn{flex:1;min-width:92px}
+
+/* 复盘页:发布登记列表已经分页,不再套一层内部滚动 */
+.lp-rl{max-height:none;overflow:visible}
+/* 复盘页手机宽度:表格只留稿子 / 赞藏评 / 相对平均 / 判定,不用横向滑 */
+@media (max-width:760px){
+  .lp-tbl{display:table;width:100%}
+  .lp-tbl th:nth-child(2),.lp-tbl td:nth-child(2),.lp-tbl th:nth-child(3),.lp-tbl td:nth-child(3),.lp-tbl th:nth-child(4),.lp-tbl td:nth-child(4){display:none}
+  .lp-tt{max-width:none;white-space:normal}
+}
+@media (max-width:760px){
+  .lp-tbl td.lp-tt{white-space:normal;overflow-wrap:anywhere;min-width:0}
+  .lp-tbl th,.lp-tbl td{padding-left:8px;padding-right:8px}
+}

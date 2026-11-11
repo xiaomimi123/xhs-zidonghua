@@ -34,10 +34,11 @@ async function vQianfan() {
   <div class="row" style="justify-content:space-between;margin-bottom:12px;gap:8px;flex-wrap:wrap"><div class="seg" id="qtabs">${qfTabs().map(([k, n]) => `<button class="${k === QF.tab ? "on" : ""}" data-t="${k}">${n}</button>`).join("")}</div>
     <span class="sub">${lastAt ? `最近同步 ${lt(lastAt)}` : "还没有同步过数据"} · 自动同步${stat.enabled ? "已开启" : "未开启"}</span></div>${["account", "notes", "topics", "hot_notes", "hot_keywords"].includes(QF.tab) ? qfShopChips(o) : ""}${["account", "notes", "topics"].includes(QF.tab) ? qfAccChips(o) : ""}<div id="qbody"></div>`;
   $("#qbody").innerHTML = await body();
+  $$("[data-qnp]").forEach(b => b.onclick = () => { if (b.disabled) return; QF.np = +b.dataset.qnp; vQianfan().then(() => $("#qbody")?.scrollIntoView({ block: "start" })); });
   $$(".qacc button").forEach(b => b.onclick = () => { QF.account = b.dataset.a; vQianfan(); });
   $$(".qshop button").forEach(b => b.onclick = () => { QF.shop = b.dataset.s; QF.account = ""; vQianfan(); });
   $$("[data-pick]").forEach(r => r.onclick = () => { QF.account = r.dataset.pick; vQianfan(); });
-  $$("#qtabs button").forEach(b => b.onclick = () => { QF.tab = b.dataset.t; if (b.dataset.t.startsWith("hot_")) { QF.kind = b.dataset.t; QF.scope = ""; QF.period = ""; } vQianfan(); });
+  $$("#qtabs button").forEach(b => b.onclick = () => { QF.tab = b.dataset.t; QF.np = 1; if (b.dataset.t.startsWith("hot_")) { QF.kind = b.dataset.t; QF.scope = ""; QF.period = ""; } vQianfan(); });
   if ($("#qsync")) $("#qsync").onclick = async e => { e.target.disabled = true; try { const r = await api("/api/admin/qianfan/sync", "POST", { kinds: [] }); toast(r.created ? `已下发 ${r.created} 个同步任务,等采集端领取` : "已有同步任务在排队,不用重复下发"); } catch (x) { toast(x.message, 1) } e.target.disabled = false; };
   if ($("#qtag")) $("#qtag").onclick = async e => { e.target.disabled = true; try { await api("/api/admin/qianfan/topics/tag", "POST"); } catch (x) { toast(x.message, 1); } vQianfan(); };
   if ($("#qclr")) $("#qclr").onclick = async () => { await api("/api/admin/qianfan/sample", "DELETE"); vQianfan(); };
@@ -108,8 +109,12 @@ function qfNotes(o) {
   const multi = o.accounts.length > 1;
   const cols = [["views", "浏览"], ["likes", "点赞"], ["collects", "收藏"], ["comments", "评论"], ["shares", "分享"], ["new_fans", "涨粉"]].filter(([k]) => n.items.some(i => i[k] != null));   // 千帆没给的列不显示,不要一排 0
   const cell = v => v != null ? fmt(v) : `<span class="na">-</span>`;
+  // 笔记多了分页(用户端有 pager;管理端没加载它,还是整表显示)
+  const SZ = 25, usePg = typeof pager === "function" && n.items.length > SZ, key = `${QF.account}|${QF.shop}`;
+  if (QF.npKey !== key) { QF.npKey = key; QF.np = 1; }
+  const page = Math.min(Math.max(1, QF.np || 1), Math.max(1, Math.ceil(n.items.length / SZ))), rows = usePg ? n.items.slice((page - 1) * SZ, page * SZ) : n.items;
   return `<section class="card flush"><div class="card-h"><b>我们发布的笔记</b><span class="sub">共 ${n.total} 篇${n.items.length < n.total ? `(按互动量显示前 ${n.items.length} 篇)` : ""},其中 ${n.matched} 篇对上了工作台里生成的稿子 · 数据时间 ${lt(n.at)}</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>标题</th>${multi ? "<th>账号</th>" : ""}${cols.map(([, t]) => `<th class="num">${t}</th>`).join("")}<th>发布</th></tr></thead><tbody>
-  ${n.items.map(i => `<tr><td class="tt" title="${esc(i.title)}">${i.mine ? `<span class="st done" title="工作台生成的稿子">自产</span> ` : ""}${esc(i.title)}</td>${multi ? `<td class="sub">${esc(i.account_name || "未归属")}</td>` : ""}${cols.map(([k]) => `<td class="num">${cell(i[k])}</td>`).join("")}<td class="nowrap">${esc((i.published_at || "").slice(0, 10))}</td></tr>`).join("")}</tbody></table></div></section>`;
+  ${rows.map(i => `<tr><td class="tt" title="${esc(i.title)}">${i.mine ? `<span class="st done" title="工作台生成的稿子">自产</span> ` : ""}${esc(i.title)}</td>${multi ? `<td class="sub">${esc(i.account_name || "未归属")}</td>` : ""}${cols.map(([k]) => `<td class="num">${cell(i[k])}</td>`).join("")}<td class="nowrap">${esc((i.published_at || "").slice(0, 10))}</td></tr>`).join("")}</tbody></table></div>${usePg ? pager(page, n.items.length, SZ, "qnp") : ""}</section>`;
 }
 
 async function qfHot(o, kind) {

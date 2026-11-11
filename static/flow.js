@@ -518,7 +518,8 @@ function nbOpen(i) {
 }
 
 // ---------- 复盘:发布 → 数据回流 → 谁爆了 → 继续复刻 ----------
-const LP = { tier: "", reg: "todo", sel: new Set(), page: 1, regPage: 1 };
+const LP = { tier: "", reg: "todo", sel: new Set(), page: 1, regPage: 1, winAll: false };
+const LP_WIN = 6;   // 爆款榜默认先列几篇
 const LP_SIZE = 20;   // 复盘页每个列表每页条数
 const TIER_CLS = { winner: "bad", good: "ok", normal: "", weak: "", observing: "warn", nodata: "", unpublished: "" };
 const lpPct = r => r == null ? "-" : Math.round(r * 100) + "%";
@@ -585,7 +586,7 @@ async function fLoop() {
     <div class="lp-effs">${lpEff("普通复刻稿", se.original)}${lpEff("爆款样本复刻稿", se.spawned)}</div>
     ${se.spawned.mature < 5 ? `<p class="sub" style="margin:8px 0 0">爆款样本复刻稿的有结论数据还很少(${se.spawned.mature} 篇),数据多了再看这个对比更可靠。</p>` : ""}</section>
   <h3 class="lp-h">爆款榜 <span class="sub">${nWin} 篇${nWin > wins.length ? `(只列前 ${wins.length} 篇)` : ""} · 发布满 ${c.min_days} 天、互动 ≥ ${c.min_eng} 且 ≥ 本账号平均的 ${c.win_lift} 倍</span></h3>
-  ${wins.length ? `<div class="lp-ws">${wins.map(lpWinner).join("")}</div>` : `<div class="empty"><b>还没有判定为爆款的稿子</b>先多发布一些稿子;发布满 ${c.min_days} 天、数据回流后会出现在这里。门槛可以在管理端「接口配置 → 爆款回流」调整。</div>`}
+  ${wins.length ? `<div class="lp-ws">${(LP.winAll ? wins : wins.slice(0, LP_WIN)).map(lpWinner).join("")}</div>${wins.length > LP_WIN ? `<p style="text-align:center;margin:12px 0 0"><button class="btn gray sm" data-winall>${LP.winAll ? "收起" : `展开全部 ${wins.length} 篇`}</button></p>` : ""}` : `<div class="empty"><b>还没有判定为爆款的稿子</b>先多发布一些稿子;发布满 ${c.min_days} 天、数据回流后会出现在这里。门槛可以在管理端「接口配置 → 爆款回流」调整。</div>`}
   <h3 class="lp-h">哪类更容易爆</h3>
   <div class="lp-two"><section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按选题主题</b></div>${ov.by_topic.length ? tbl("主题", topicRows) : none}</section>
   <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按任务批次</b></div>${ov.by_project.length ? tbl("任务", projRows) : none}</section></div>
@@ -597,6 +598,7 @@ async function fLoop() {
   let lib = null;
   $("#main").onclick = async e => {
     const lt = e.target.closest("[data-lt]"); if (lt) { LP.tier = lt.dataset.lt; LP.page = 1; return fLoop(); }
+    if (e.target.closest("[data-winall]")) { LP.winAll = !LP.winAll; return fLoop(); }
     const gp = e.target.closest("[data-lpg]"); if (gp) { if (gp.disabled) return; LP.page = +gp.dataset.lpg; return fLoop(); }
     const gr = e.target.closest("[data-rpg]"); if (gr) { if (gr.disabled) return; LP.regPage = +gr.dataset.rpg; return fLoop(); }
     const rt = e.target.closest("[data-rtab]"); if (rt) { LP.reg = rt.dataset.rtab; LP.regPage = 1; LP.sel.clear(); return fLoop(); }
