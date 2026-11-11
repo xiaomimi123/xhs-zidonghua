@@ -308,8 +308,8 @@ async function fLib() {
 }
 
 // ---------- 笔记预览:左图右文,手机全屏,左右滑切换 ----------
-async function fOpen(id, list) { await fetchAccts(); FL.pv = { list, i: list.findIndex(d => d.id === id), img: 0, dirty: false }; document.body.classList.add("fl-lock"); drawPv(); }
-function closePv() { const dirty = FL.pv?.dirty; FL.pv = null; $(".fl-pv")?.remove(); document.body.classList.remove("fl-lock"); if (dirty) render(); }
+async function fOpen(id, list) { await fetchAccts(); FL.pv = { list, i: list.findIndex(d => d.id === id), img: 0, dirty: false, more: false, opener: document.activeElement }; document.body.classList.add("fl-lock"); drawPv(); }
+function closePv() { const dirty = FL.pv?.dirty, op = FL.pv?.opener; FL.pv = null; $(".fl-pv")?.remove(); document.body.classList.remove("fl-lock"); if (dirty) render(); else if (op && op.isConnected) op.focus({ preventScroll: true }); }
 // 成品预览里的发布登记:选发布日期登记;已登记但没对上千帆数据时,可以手动对上;对上的可以取消
 const todayStr = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 function pubPanel(d) {
@@ -320,8 +320,8 @@ function pubPanel(d) {
 const pvRefresh = async d => { const fresh = (await api(`/api/library?pid=${d.pid}`)).find(x => x.id === d.id); if (fresh) Object.assign(d, fresh); FL.pv && (FL.pv.dirty = true); if (FL.pv) drawPv(); };
 function drawPv() {
   const v = FL.pv, d = v.list[v.i], N = v.list.length, imgs = d.images;
-  let m = $(".fl-pv"); if (!m) { m = document.createElement("div"); m.className = "fl-pv"; document.body.appendChild(m); bindPv(m); }
-  m.innerHTML = `<div class="fl-sheet" role="dialog" aria-label="笔记预览">
+  let m = $(".fl-pv"), fresh = !m; if (!m) { m = document.createElement("div"); m.className = "fl-pv"; document.body.appendChild(m); bindPv(m); }
+  m.innerHTML = `<div class="fl-sheet" role="dialog" aria-modal="true" aria-label="笔记预览">
     <div class="fl-gal"><button class="fl-xm" data-pclose aria-label="关闭">×</button>${imgs.length ? `<div class="fl-big"><img src="/images/${esc(imgs[v.img])}" alt="第 ${v.img + 1} 张配图">${imgs.length > 1 ? `<button class="fl-ib l" data-pimg="-1" aria-label="上一张">‹</button><button class="fl-ib r" data-pimg="1" aria-label="下一张">›</button>` : ""}</div>
       <div class="fl-thumbs">${imgs.map((u, k) => `<button class="${k === v.img ? "on" : ""}" data-pto="${k}" aria-label="第 ${k + 1} 张"><img src="${esc(thumb("/images/" + u, 240))}" alt=""></button>`).join("")}</div>
       <p class="fl-hint">手机上长按图片可保存到相册</p>` : `<div class="fl-big">${noteCover(d, true)}</div>`}</div>
@@ -331,16 +331,37 @@ function drawPv() {
       <div class="fl-tb">${d.auto_ok === 0 ? `<div class="banner warn">需检查:${esc(d.auto_note)} <button class="btn ghost sm" data-pedit>去修改</button></div>` : ""}
         <h2>${esc(d.title)}</h2><div class="fl-body">${esc(d.content)}</div><div class="fl-tags">${d.tags.map(t => "#" + esc(t)).join(" ")}</div>
         <p class="sub">${esc(d.run)} · #${d.id}${d.published ? " · 已发布" : ""}</p>
+        <section class="pv-box"><h4>发布</h4>
         <div class="fl-acct"><label class="sub">发布账号 <select data-pacc>${`<option value="">未指定</option>` + (FL.accts || []).map(a => `<option value="${esc(a.account_id)}" ${d.account_id === a.account_id ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select></label></div>
         ${pubPanel(d)}
-        ${d.perf ? `<div class="banner ok" style="margin-top:10px"><b>已在千帆里对上号</b> · 发在「${esc(d.perf.account_name || "未知账号")}」${d.perf.published_at ? ` · ${esc(String(d.perf.published_at).slice(0, 10))}` : ""}${d.account_id && d.perf.account_id && d.account_id !== d.perf.account_id ? ` <span class="warn">(和指定的账号不一致)</span>` : ""}<br><span class="sub" style="color:inherit">阅读 ${fmtN(d.perf.views)} · 点赞 ${fmtN(d.perf.likes)} · 收藏 ${fmtN(d.perf.collects)} · 评论 ${fmtN(d.perf.comments)}${d.perf.shares != null ? ` · 分享 ${fmtN(d.perf.shares)}` : ""}</span></div>` : d.published ? `<p class="sub">已标记发布,千帆数据同步后会自动对上号并显示表现</p>` : ""}</div>
-      <div class="fl-tf"><button class="btn gray" data-pcopy="all">复制全文</button><button class="btn gray" data-pcopy="title">复制标题</button>
+        ${d.perf ? `<div class="banner ok" style="margin-top:10px"><b>已在千帆里对上号</b> · 发在「${esc(d.perf.account_name || "未知账号")}」${d.perf.published_at ? ` · ${esc(String(d.perf.published_at).slice(0, 10))}` : ""}${d.account_id && d.perf.account_id && d.account_id !== d.perf.account_id ? ` <span class="warn">(和指定的账号不一致)</span>` : ""}<br><span class="sub" style="color:inherit">阅读 ${fmtN(d.perf.views)} · 点赞 ${fmtN(d.perf.likes)} · 收藏 ${fmtN(d.perf.collects)} · 评论 ${fmtN(d.perf.comments)}${d.perf.shares != null ? ` · 分享 ${fmtN(d.perf.shares)}` : ""}</span></div>` : d.published ? `<p class="sub">已标记发布,千帆数据同步后会自动对上号并显示表现</p>` : ""}</section></div>
+      <div class="fl-tf">
+        <button class="btn gray" data-pcopy="all">复制全文</button>
         ${imgs.length ? `<a class="btn gray" href="/api/drafts/${d.id}/images.zip">下载图片</a>` : ""}
-        ${d.can_cover ? `<button class="btn gray" data-pcover>换封面</button>` : ""}
-        ${imgs.length ? `<button class="btn gray" data-plive title="把当前这张图做成 iPhone 实况照片(Live 图),由 Mac 端生成">做成 Live 图</button>` : ""}
-        ${imgs.length > 1 ? `<button class="btn gray" data-pre title="按正文重新策划内页配图并重画,会扣生图费用">重做内页配图</button>` : ""}
-        <button class="btn ${d.published ? "gray" : ""}" data-ppub>${d.published ? "已发布 ✓" : "标记已发布"}</button></div>
+        <button class="btn gray" data-pmore aria-expanded="${!!v.more}">更多 ${v.more ? "▴" : "▾"}</button>
+        <button class="btn ${d.published ? "gray" : ""}" data-ppub>${d.published ? "已发布 ✓" : "标记已发布"}</button>
+        ${v.more ? `<div class="fl-tf2"><button class="btn gray" data-pcopy="title">复制标题</button>
+          ${d.can_cover ? `<button class="btn gray" data-pcover>换封面</button>` : ""}
+          ${imgs.length ? `<button class="btn gray" data-plive title="把当前这张图做成 iPhone 实况照片(Live 图),由 Mac 端生成">做成 Live 图</button>` : ""}
+          ${imgs.length > 1 ? `<button class="btn gray" data-pre title="按正文重新策划内页配图并重画,会扣生图费用">重做内页配图</button>` : ""}</div>` : ""}</div>
     </div></div>`;
+  preloadPv();
+  if (fresh) m.querySelector(".fl-xm")?.focus({ preventScroll: true });   // 键盘 / 读屏用户打开后焦点进弹窗
+}
+// 只换大图和缩略图的高亮,不重绘整个弹窗
+function setPvImg(k) {
+  const v = FL.pv, d = v.list[v.i], n = d.images.length; if (!n) return;
+  v.img = (k % n + n) % n;
+  const im = $(".fl-big img"); if (!im) return drawPv();
+  im.src = "/images/" + d.images[v.img]; im.alt = `第 ${v.img + 1} 张配图`;
+  $$(".fl-thumbs button").forEach((b, i) => b.classList.toggle("on", i === v.img));
+  preloadPv();
+}
+// 提前把下一张、上一篇 / 下一篇的封面拉下来,翻起来不用等
+function preloadPv() {
+  const v = FL.pv; if (!v) return; const d = v.list[v.i], N = v.list.length;
+  const urls = [d.images[v.img + 1], v.list[(v.i + 1) % N]?.images[0], v.list[(v.i - 1 + N) % N]?.images[0]].filter(Boolean);
+  urls.forEach(u => { const im = new Image(); im.src = "/images/" + u; });
 }
 function bindPv(m) {
   m.onclick = async e => {
@@ -348,8 +369,9 @@ function bindPv(m) {
     if (e.target === m || e.target.closest("[data-pclose]")) return closePv();
     const d = v.list[v.i];
     const s = e.target.closest("[data-pstep]"); if (s) return stepPv(+s.dataset.pstep);
-    const ii = e.target.closest("[data-pimg]"); if (ii) { v.img = (v.img + +ii.dataset.pimg + d.images.length) % d.images.length; return drawPv(); }
-    const to = e.target.closest("[data-pto]"); if (to) { v.img = +to.dataset.pto; return drawPv(); }
+    const ii = e.target.closest("[data-pimg]"); if (ii) return setPvImg(v.img + +ii.dataset.pimg);
+    const to = e.target.closest("[data-pto]"); if (to) return setPvImg(+to.dataset.pto);
+    if (e.target.closest("[data-pmore]")) { v.more = !v.more; return drawPv(); }
     const cp = e.target.closest("[data-pcopy]");
     if (cp) {
       const txt = cp.dataset.pcopy === "title" ? d.title : `${d.title}\n\n${d.content}\n\n${d.tags.map(t => "#" + t).join(" ")}`;

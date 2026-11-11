@@ -23,14 +23,13 @@ def pick_width(w: int) -> int:
 
 def thumb_for(src: Path, w: int) -> Path:
     """返回缩略图路径(没有就现生成)。原图本来就比目标宽度小、格式不支持、或生成失败时,直接返回原图。"""
-    from PIL import Image, ImageOps   # 延迟导入:没装 Pillow 时只是不出缩略图,不影响别的功能
-
     w = pick_width(w)
     st = src.stat()
     dst = DIR / f"{src.name}.{int(st.st_mtime)}.{w}.webp"
     if dst.is_file():
         return dst
     try:
+        from PIL import Image, ImageOps   # 延迟导入:没装 Pillow 时只是不出缩略图(返回原图),不影响别的功能
         with Image.open(src) as im:
             if im.format not in _OK_FORMATS or im.width <= w or getattr(im, "is_animated", False):
                 return src

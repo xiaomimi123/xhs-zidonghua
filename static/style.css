@@ -1019,3 +1019,11 @@ select.sm,.card-h select{min-height:30px;padding:4px 28px 4px 9px;font-size:13px
 .sg-nav .chip{flex:none;padding:5px 12px;font-size:13px;background:var(--panel)}
 .sg-nav+.sg{padding-top:4px}
 .sg{scroll-margin-top:56px}
+
+/* 成品预览:发布区块、底部「更多」 */
+.pv-box{margin-top:6px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;gap:8px}
+.pv-box h4{margin:0;font-size:13px}
+.pv-box .pv-pub{margin:0;padding:8px 0 0;border:0;border-top:1px dashed var(--line);border-radius:0}
+.pv-box .banner{margin:0}
+.fl-tf2{flex:0 0 100%;display:flex;gap:8px;flex-wrap:wrap}
+.fl-tf2 .btn{flex:1;min-width:92px}
