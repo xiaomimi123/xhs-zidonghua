@@ -1055,3 +1055,21 @@ body.busy::before{content:"";position:fixed;top:0;left:0;height:2px;width:35%;ba
 body.busy #main{opacity:.55;transition:opacity .15s}
 @keyframes busybar{0%{left:-35%}100%{left:100%}}
 @media (prefers-reduced-motion:reduce){body.busy::before{animation:none;width:100%;opacity:.5}}
+
+/* 复盘页·发布登记:笔记卡片 */
+.lp-rcs{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.lp-rc{position:relative;display:flex;gap:10px;align-items:stretch;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel);cursor:pointer;transition:border-color .15s,background .15s}
+.lp-rc:hover{border-color:var(--line-2)}
+.lp-rc.on{border-color:var(--accent);background:var(--accent-wash)}
+.lp-rc.nd{cursor:default}
+.lp-rc input{position:absolute;top:12px;left:12px;width:18px;height:18px;margin:0;accent-color:var(--accent);z-index:1}
+.lp-cv{flex:none;width:56px;height:74px;border-radius:6px;overflow:hidden;background:var(--soft);display:grid;place-items:center}
+.lp-cv img{width:100%;height:100%;object-fit:cover;display:block}
+.lp-cv i{font-style:normal;font-size:12px;color:var(--sub);text-align:center;padding:4px;line-height:1.4}
+.lp-ci{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px;font-size:13px}
+.lp-ci b{font-weight:500;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.lp-ci .sub{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lp-ca{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto}
+@media (max-width:760px){.lp-rcs{grid-template-columns:1fr}}
+.lp-rc input{left:auto;right:10px;top:10px}
+.lp-rc:has(input) .lp-ci{padding-right:24px}

@@ -606,13 +606,15 @@ async function fLoop() {
   const ov = pg.overview, dr = { data_at: pg.data_at }, c = pg.cfg, rows = pg.rows.items, wins = pg.winners, regList = pg.reg.items;
   const nTodo = ov.tiers.unpublished ?? 0, nNodata = ov.tiers.nodata ?? 0, nWin = ov.tiers.winner ?? 0;
   const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  // 发布登记:紧凑的笔记卡片(左边封面、右边标题和账号),一屏能放下一批;待登记的整张卡片可点选
+  const regCv = r => `<span class="lp-cv">${r.cover ? `<img src="${esc(thumb("/images/" + r.cover, 240))}" alt="" loading="lazy" decoding="async">` : `<i>${esc((r.title || "").slice(0, 4))}</i>`}</span>`;
   const regRow = r => LP.reg === "todo"
-    ? `<label class="lp-rr"><input type="checkbox" data-rsel="${r.id}" ${LP.sel.has(r.id) ? "checked" : ""}><span class="lp-rt">${esc(r.title)}</span><span class="sub">${esc(r.account_name || "未指定账号")}</span></label>`
-    : `<div class="lp-rr"><span class="lp-rt">${esc(r.title)}</span><span class="sub">${esc(r.account_name || "未指定账号")} · 标了已发布${r.published_at ? `(${esc(String(r.published_at).slice(0, 10))})` : ""}</span><button class="btn gray sm" data-link="${r.id}">对上千帆笔记</button><button class="btn ghost sm" data-unpub="${r.id}" title="其实还没发,取消已发布标记">取消标记</button></div>`;
+    ? `<label class="lp-rc ${LP.sel.has(r.id) ? "on" : ""}" data-id="${r.id}"><input type="checkbox" data-rsel="${r.id}" ${LP.sel.has(r.id) ? "checked" : ""} aria-label="选择这篇">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${esc(r.account_name || "未指定账号")}</span></span></label>`
+    : `<div class="lp-rc nd">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${esc(r.account_name || "未指定账号")} · 标了已发布${r.published_at ? `(${esc(String(r.published_at).slice(0, 10))})` : ""}</span><span class="lp-ca"><button class="btn gray sm" data-link="${r.id}">对上千帆笔记</button><button class="btn ghost sm" data-unpub="${r.id}" title="其实还没发,取消已发布标记">取消标记</button></span></span></div>`;
   const regBlock = `<section class="card" style="margin-top:12px"><div class="card-h"><b>发布登记</b><span class="sub">发布后系统会按标题自动对上千帆数据;这里处理还没登记的和对不上的</span></div>
     <div class="fl-chips" style="margin-bottom:10px"><button class="chip ${LP.reg === "todo" ? "on" : ""}" data-rtab="todo">待登记发布 ${nTodo}</button><button class="chip ${LP.reg === "nodata" ? "on" : ""}" data-rtab="nodata">标了发布但没对上数据 ${nNodata}</button></div>
     ${regList.length ? `${LP.reg === "todo" ? `<div class="lp-rbar"><button class="btn gray sm" data-rall>${regList.length && regList.every(r => LP.sel.has(r.id)) ? "取消全选" : `全选本页 ${regList.length} 篇`}</button><span class="sub">已选 <b>${LP.sel.size}</b> 篇</span><label class="sub" style="margin-left:auto">发布日期 <input type="date" id="rday" value="${today}" max="${today}" style="width:auto"></label><button class="btn sm" data-rpub ${LP.sel.size ? "" : "disabled"}>标记已发布</button></div>` : `<p class="sub" style="margin:0 0 8px">一般是发布时改过标题,或千帆数据还没同步。点「对上千帆笔记」从千帆里挑一篇手动对上;确实还没发的可以取消标记。</p>`}
-    <div class="lp-rl">${regList.map(regRow).join("")}</div>${pager(LP.regPage, pg.reg.total, LP_SIZE, "rpg")}`
+    <div class="lp-rcs">${regList.map(regRow).join("")}</div>${pager(LP.regPage, pg.reg.total, LP_SIZE, "rpg")}`
       : `<div class="empty" style="border:0;padding:18px">${LP.reg === "todo" ? "所有稿子都登记过了" : "没有对不上的稿子"}</div>`}</section>`;
   const fun = ov.funnel, mx = Math.max(1, ...fun.map(f => f.n));
   const se = ov.spawn_effect;
@@ -638,6 +640,14 @@ async function fLoop() {
   <section class="card flush">${rows.length ? `<table class="tbl lp-tbl"><thead><tr><th>稿子</th><th>账号</th><th>发布</th><th class="num">阅读</th><th class="num">赞藏评</th><th class="num">相对平均</th><th>判定</th></tr></thead><tbody>${rows.map(r => `<tr data-open="${r.id}"><td class="lp-tt">${esc(r.title)}${r.generation ? ` <span class="sub">· 第${r.generation}代</span>` : ""}</td><td class="sub">${esc(r.account_name || "-")}</td><td class="sub">${esc(r.published_at || "-")}</td><td class="num">${r.views == null ? "-" : fmtN(r.views)}</td><td class="num">${r.eng == null ? "-" : r.eng}</td><td class="num">${r.lift == null ? "-" : "×" + r.lift}</td><td><span class="fl-pill ${TIER_CLS[r.tier]}">${r.tier_name}</span></td></tr>`).join("")}</tbody></table>` : `<div class="empty" style="border:0">这个筛选下没有稿子</div>`}</section>
   ${pager(LP.page, pg.rows.total, LP_SIZE, "lpg")}
   <p class="sub" style="margin:14px 2px 0">「相对平均」= 这篇的互动(赞+藏+评)÷ 该账号所有笔记的平均(去掉最高 5%);账号互动很少时改比阅读量。刚发布的稿子数据还没沉淀,标为「观察中」,不下结论。阈值由管理端调整。数据更新于 ${esc(String(dr.data_at || "-").slice(0, 16))}。</p>`;
+  // 勾选 / 全选只改界面,不用重新请求整页
+  const syncSel = () => {
+    const n = LP.sel.size, all = regList.length && regList.every(r => LP.sel.has(r.id));
+    const cnt = $(".lp-rbar b"); if (cnt) cnt.textContent = n;
+    const pub = $("[data-rpub]"); if (pub) pub.disabled = !n;
+    const ba = $("[data-rall]"); if (ba) ba.textContent = all ? "取消全选" : `全选本页 ${regList.length} 篇`;
+    $$(".lp-rc[data-id]").forEach(l => { const on = LP.sel.has(+l.dataset.id); l.classList.toggle("on", on); l.querySelector("input").checked = on; });
+  };
   let lib = null;
   $("#main").onclick = async e => {
     const lt = e.target.closest("[data-lt]"); if (lt) { LP.tier = lt.dataset.lt; LP.page = 1; return fLoop(); }
@@ -645,8 +655,8 @@ async function fLoop() {
     const gp = e.target.closest("[data-lpg]"); if (gp) { if (gp.disabled) return; LP.page = +gp.dataset.lpg; return fLoop(); }
     const gr = e.target.closest("[data-rpg]"); if (gr) { if (gr.disabled) return; LP.regPage = +gr.dataset.rpg; return fLoop(); }
     const rt = e.target.closest("[data-rtab]"); if (rt) { LP.reg = rt.dataset.rtab; LP.regPage = 1; LP.sel.clear(); return fLoop(); }
-    const rs = e.target.closest("[data-rsel]"); if (rs) { const id = +rs.dataset.rsel; LP.sel.has(id) ? LP.sel.delete(id) : LP.sel.add(id); return fLoop(); }
-    if (e.target.closest("[data-rall]")) { LP.sel = regList.length && regList.every(r => LP.sel.has(r.id)) ? new Set() : new Set([...LP.sel, ...regList.map(r => r.id)]); return fLoop(); }
+    const rs = e.target.closest("[data-rsel]"); if (rs) { const id = +rs.dataset.rsel; LP.sel.has(id) ? LP.sel.delete(id) : LP.sel.add(id); return syncSel(); }
+    if (e.target.closest("[data-rall]")) { LP.sel = regList.length && regList.every(r => LP.sel.has(r.id)) ? new Set() : new Set([...LP.sel, ...regList.map(r => r.id)]); return syncSel(); }
     if (e.target.closest("[data-rpub]")) {
       try { const r = await api("/api/drafts/publish", "POST", { ids: [...LP.sel], on: true, published_at: $("#rday").value }); toast(`已登记 ${r.n} 篇为已发布`); LP.sel.clear(); return fLoop(); } catch (err) { return toast(err.message, 1); }
     }

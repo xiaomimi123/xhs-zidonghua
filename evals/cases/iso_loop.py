@@ -91,6 +91,7 @@ def run(rep, env):
         allrows = user.get("/api/loop/drafts").json()["items"]
         rep.check("接口:复盘分页,一次取齐概览/爆款/列表", pg1["overview"]["funnel"] and pg1["rows"]["total"] == len(allrows) and len(pg1["rows"]["items"]) == min(2, len(allrows))
                   and all(w["tier"] == "winner" for w in pg1["winners"]) and pg1["reg"]["total"] == pg1["overview"]["tiers"]["unpublished"])
+        rep.check("接口:发布登记这一页的稿子带封面字段(卡片显示用)", pg1["reg"]["items"] and all("cover" in x for x in pg1["reg"]["items"]))
         rep.check("接口:复盘分页,页码越界会落到最后一页", pg9["rows"]["page"] == max(1, -(-len(allrows) // 2)) and len(pg9["rows"]["items"]) >= 1 and pg9["reg"]["page"] >= 1)
         rep.check("接口:没配 DeepSeek Key 时不能继续复刻", user.post(f"/api/drafts/{d_win}/spawn", json={"count": 3}).status_code == 400)
         db.save_settings({"deepseek_api_key": "k"})

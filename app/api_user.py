@@ -794,9 +794,13 @@ def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1
     regs = _loop_rows(ev, "unpublished" if reg == "todo" else "nodata")
     page = min(max(page, 1), max(1, -(-len(rows) // size)))
     regpage = min(max(regpage, 1), max(1, -(-len(regs) // size)))
+    reg_items = regs[(regpage - 1) * size:regpage * size]
+    if reg_items:   # 发布登记用卡片显示:只给这一页的稿子取封面
+        covers = {r["id"]: next((i for i in (r["images"] or []) if i), "") for r in autorun._in_chunks("SELECT id, images FROM drafts WHERE id IN ({})", [x["id"] for x in reg_items])}
+        reg_items = [{**x, "cover": covers.get(x["id"], "")} for x in reg_items]
     return {"overview": loop.overview(ev), "winners": _loop_rows(ev, "winner")[:max(wins, 0)],
             "rows": {"items": rows[(page - 1) * size:page * size], "total": len(rows), "page": page},
-            "reg": {"items": regs[(regpage - 1) * size:regpage * size], "total": len(regs), "page": regpage},
+            "reg": {"items": reg_items, "total": len(regs), "page": regpage},
             "size": size, "cfg": ev["cfg"], "data_at": ev["data_at"]}
 
 
