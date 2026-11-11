@@ -7,11 +7,25 @@ const lt = (s, kind = "md") => {
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const api = async (url, method = "GET", body) => {
+// GET 请求:同一时刻相同地址的请求只发一次;几乎不变的接口(赛道、动作模板、账号列表…)缓存 30 秒;任何写操作都会清掉缓存
+const _inflight = new Map(), _cache = new Map();
+const CACHEABLE = /^\/api\/(tracks|live\/(motions|scenes|bg_options)|qianfan\/(accounts|hot))(\?|$)/;
+const _fetchJson = async (url, method, body) => {
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   if (r.status === 401) { gate(); throw new Error("需要输入访问密码"); }
   if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m } catch { } throw new Error(typeof m === "string" ? m : JSON.stringify(m)); }
   return r.json();
+};
+const api = async (url, method = "GET", body) => {
+  if (method !== "GET") { _cache.clear(); return _fetchJson(url, method, body); }
+  const hit = _cache.get(url); if (hit && Date.now() - hit.t < 30000) return structuredClone(hit.v);
+  let run = _inflight.get(url);
+  if (!run) {
+    run = _fetchJson(url, "GET");
+    _inflight.set(url, run);
+    run.then(v => { if (CACHEABLE.test(url)) _cache.set(url, { t: Date.now(), v }); }, () => { }).finally(() => _inflight.delete(url));
+  }
+  return structuredClone(await run);   // 每个调用方拿自己的一份,改了不会影响别人
 };
 // 复制到剪贴板:http 局域网地址下 navigator.clipboard 不可用,退回到隐藏文本框 + execCommand
 async function copyText(t) {
@@ -140,10 +154,20 @@ document.addEventListener("click", e => {
 });
 async function render() {
   document.body.classList.remove("fl-picking");
-  clearTimeout(pollT); await loadProjects().catch(() => { }); nav(); $("#pa").innerHTML = "";
+  clearTimeout(pollT);
+  // 项目列表只有高级手动流程和侧栏的「进行中」角标要用:新版页面不等它,和页面自己的数据一起并行取,少一次串行往返
+  const projP = loadProjects().catch(() => { });
+  const flow = !!window.FLOW_VIEWS?.[state.tab];
+  if (!flow) await projP;
+  nav(); $("#pa").innerHTML = "";
   if (!window.FLOW_VIEWS?.[state.tab] && !state.advOpen) state.tab = "new";   // 高级手动流程的入口已隐藏:刷新后不要停在它上面
   const fv = window.FLOW_VIEWS?.[state.tab];
-  if (fv) return fv.fn();
+  if (fv) {
+    const seq = state.renderSeq = (state.renderSeq || 0) + 1;
+    document.body.classList.add("busy");   // 顶部进度条 + 旧内容变淡:点了马上有反馈
+    projP.then(() => { if (state.renderSeq === seq) nav(); });   // 项目列表回来后刷新侧栏角标
+    try { return await fv.fn(); } finally { if (state.renderSeq === seq) document.body.classList.remove("busy"); }
+  }
   if (!STEPS.some(x => x[0] === state.tab)) { state.tab = "new"; return window.FLOW_VIEWS.new.fn(); }
   const needP = ["crawl", "analyze", "generate", "export"].includes(state.tab);
   if (needP && !project()) {

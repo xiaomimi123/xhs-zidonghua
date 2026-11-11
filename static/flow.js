@@ -27,6 +27,13 @@ const noteCard = d => `<article class="fl-nc ${FL.picked.has(d.id) ? "picked" : 
   <div class="fl-ns"><span>${esc(d.run)}</span>${d.account_name ? `<span class="sub">→ ${esc(d.account_name)}</span>` : ""}${d.tier === "winner" ? `<span class="pub" style="background:var(--err-wash);color:var(--err)">爆款</span>` : ""}${d.published ? `<span class="pub">已发布</span>` : ""}</div>
 </article>`;
 
+// 卡片(任务、成品、爆款)能用 Tab 聚焦,也要能用回车 / 空格打开;卡片里的按钮、下拉自己处理按键
+document.addEventListener("keydown", e => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const t = e.target; if (!t.matches?.(".fl-run, .fl-mini, .fl-nc[data-note], .lp-w")) return;
+  e.preventDefault(); t.click();
+});
+
 const fmtN = n => n >= 10000 ? (n / 10000).toFixed(1) + "w" : (n ?? 0);
 
 // ---------- 按账号推荐 ----------
@@ -504,29 +511,53 @@ async function fNoteBase() {
 }
 
 function nbOpen(i) {
-  const m = document.createElement("div"); m.className = "mask";
+  // 和成品预览同一套版式:左边大图 + 缩略图,右边文字,底部操作条;手机全屏、左右滑切换
+  const m = document.createElement("div"); m.className = "fl-pv";
+  const opener = document.activeElement; let k = 0, x0 = null;
+  const picsOf = n => n.images?.length ? n.images : (n.cover ? [n.cover] : []);
+  const stat = (l, v) => `<span class="nb-st"><i>${l}</i><b>${fmtN(v)}</b></span>`;
   const draw = () => {
-    const list = NB.items, n = list[i], pics = n.images?.length ? n.images : (n.cover ? [n.cover] : []);
-    m.innerHTML = `<div class="modal" role="dialog" aria-label="笔记详情">${pics.length ? `<div class="l">${pics.map(u => `<img src="${esc(u)}" referrerpolicy="no-referrer" loading="lazy" alt="">`).join("")}</div>` : ""}
-      <div class="r"><div class="row" style="gap:6px;margin:0 0 10px"><span class="sub">${i + 1} / ${list.length}</span><button class="btn gray sm" data-step="-1" aria-label="上一篇">‹</button><button class="btn gray sm" data-step="1" aria-label="下一篇">›</button><button class="btn ghost sm" data-x style="margin-left:auto">关闭</button></div>
-        <h3 style="margin:0 0 6px;font-size:18px;line-height:1.5">${n.note_type === "video" ? `<span class="tp" style="margin-right:6px">视频</span>` : ""}${esc(n.title)}</h3>
-        <div class="sub">${esc(n.author || "-")} · ♥ ${fmtN(n.likes)} · ★ ${fmtN(n.collects)} · 💬 ${fmtN(n.comments)}${n.published_at ? " · 发布 " + esc(n.published_at) : ""} · <span class="tier ${n.tier}">${NB_TIER[n.tier] || ""}</span></div>
-        <div class="sub" style="margin-top:6px">${esc(n.track || "-")} · <b>${esc(n.topic || "待识别")}</b>${n.ai_type ? ` · ${esc(n.ai_type)}` : ""}${n.dup_of ? ` · 重复` : ""}${n.rel === "low" ? ` · <span style="color:var(--err)">弱相关</span>` : ""}</div>
-        ${n.ai_highlight ? `<div class="angle" style="margin-top:12px"><span>爆点</span>${esc(n.ai_highlight)}${n.ai_audience ? " · " + esc(n.ai_audience) : ""}</div>` : ""}
-        <p style="white-space:pre-wrap;line-height:1.85;margin:14px 0">${esc(n.content) || "(没有正文)"}</p>
-        ${n.tags?.length ? `<p class="sub">${n.tags.map(x => "#" + esc(x)).join(" ")}</p>` : ""}
-        <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:16px"><button class="btn gray sm" data-copy>复制标题和正文</button>
-          ${n.url && n.url.startsWith("http") ? `<a class="btn gray sm" href="${esc(n.url)}" target="_blank" rel="noreferrer" style="text-decoration:none">在小红书打开 ↗</a>` : ""}</div></div></div>`;
+    const list = NB.items, n = list[i], ps = picsOf(n), N = list.length;
+    m.innerHTML = `<div class="fl-sheet" role="dialog" aria-modal="true" aria-label="笔记详情">
+      <div class="fl-gal"><button class="fl-xm" data-x aria-label="关闭">×</button>${ps.length ? `<div class="fl-big"><img src="${esc(ps[k])}" referrerpolicy="no-referrer" alt="第 ${k + 1} 张配图">${ps.length > 1 ? `<button class="fl-ib l" data-img="-1" aria-label="上一张">‹</button><button class="fl-ib r" data-img="1" aria-label="下一张">›</button>` : ""}</div>
+        ${ps.length > 1 ? `<div class="fl-thumbs">${ps.map((u, q) => `<button class="${q === k ? "on" : ""}" data-to="${q}" aria-label="第 ${q + 1} 张"><img src="${esc(thumb(u, 240))}" referrerpolicy="no-referrer" alt=""></button>`).join("")}</div>` : ""}`
+        : `<div class="fl-big"><div class="fl-tc big">${esc(n.title)}</div></div>`}</div>
+      <div class="fl-txt">
+        <div class="fl-th">${n.tier && n.tier !== "normal" ? `<span class="fl-badge ${n.tier === "viral" ? "ok" : ""}">${NB_TIER[n.tier]}</span>` : ""}${n.note_type === "video" ? `<span class="fl-pill">视频</span>` : ""}
+          <span class="sub fl-cnt">${i + 1} / ${N}</span><button class="btn gray sm" data-step="-1" aria-label="上一篇">‹</button><button class="btn gray sm" data-step="1" aria-label="下一篇">›</button><button class="fl-x" data-x aria-label="关闭">×</button></div>
+        <div class="fl-tb">
+          <h2>${esc(n.title)}</h2>
+          <div class="nb-stats">${stat("赞", n.likes)}${stat("藏", n.collects)}${stat("评", n.comments)}</div>
+          <p class="sub">${esc(n.author || "-")}${n.published_at ? ` · 发布 ${esc(n.published_at)}` : ""}</p>
+          <p class="sub">${esc(n.track || "-")} · <b>${esc(n.topic || "待识别")}</b>${n.ai_type ? ` · ${esc(n.ai_type)}` : ""}${n.dup_of ? " · 重复" : ""}${n.rel === "low" ? ` · <span style="color:var(--err)">弱相关</span>` : ""}</p>
+          ${n.ai_highlight ? `<div class="angle"><span>爆点</span>${esc(n.ai_highlight)}${n.ai_audience ? " · " + esc(n.ai_audience) : ""}</div>` : ""}
+          <div class="fl-body">${esc(n.content) || "(没有正文)"}</div>
+          ${n.tags?.length ? `<div class="fl-tags">${n.tags.map(x => "#" + esc(x)).join(" ")}</div>` : ""}</div>
+        <div class="fl-tf"><button class="btn gray" data-copy>复制标题和正文</button>
+          ${n.url && n.url.startsWith("http") ? `<a class="btn gray" href="${esc(n.url)}" target="_blank" rel="noreferrer">在小红书打开 ↗</a>` : ""}</div>
+      </div></div>`;
   };
-  const close = () => { m.remove(); document.removeEventListener("keydown", key); };
-  const step = d => { i = (i + d + NB.items.length) % NB.items.length; draw(); m.querySelector(".r")?.scrollTo(0, 0); };
+  const setImg = q => {   // 只换大图和缩略图高亮
+    const ps = picsOf(NB.items[i]), n = ps.length; if (!n) return;
+    k = (q % n + n) % n;
+    const im = m.querySelector(".fl-big img"); if (!im) return draw();
+    im.src = ps[k]; im.alt = `第 ${k + 1} 张配图`;
+    m.querySelectorAll(".fl-thumbs button").forEach((b, t) => b.classList.toggle("on", t === k));
+  };
+  const close = () => { m.remove(); document.body.classList.remove("fl-lock"); document.removeEventListener("keydown", key); if (opener && opener.isConnected) opener.focus({ preventScroll: true }); };
+  const step = d => { const N = NB.items.length; i = (i + d + N) % N; k = 0; draw(); m.querySelector(".fl-tb")?.scrollTo(0, 0); };
   const key = e => { if (e.key === "Escape") close(); else if (e.key === "ArrowRight") step(1); else if (e.key === "ArrowLeft") step(-1); };
   m.onclick = async e => {
     if (e.target === m || e.target.closest("[data-x]")) return close();
     const s = e.target.closest("[data-step]"); if (s) return step(+s.dataset.step);
+    const im = e.target.closest("[data-img]"); if (im) return setImg(k + +im.dataset.img);
+    const to = e.target.closest("[data-to]"); if (to) return setImg(+to.dataset.to);
     if (e.target.closest("[data-copy]")) { const n = NB.items[i]; try { await copyText(`${n.title}\n\n${n.content || ""}`); toast("已复制"); } catch { toast("复制失败,请手动选中文字复制", 1); } }
   };
-  document.addEventListener("keydown", key); draw(); document.body.appendChild(m);
+  m.addEventListener("touchstart", e => { x0 = e.touches[0].clientX; }, { passive: true });
+  m.addEventListener("touchend", e => { if (x0 == null) return; const dx = e.changedTouches[0].clientX - x0; x0 = null; if (Math.abs(dx) > 70) step(dx < 0 ? 1 : -1); });
+  document.addEventListener("keydown", key); draw(); document.body.classList.add("fl-lock"); document.body.appendChild(m);
+  m.querySelector(".fl-xm")?.focus({ preventScroll: true });
 }
 
 // ---------- 复盘:发布 → 数据回流 → 谁爆了 → 继续复刻 ----------
@@ -537,7 +568,7 @@ const TIER_CLS = { winner: "bad", good: "ok", normal: "", weak: "", observing: "
 const lpPct = r => r == null ? "-" : Math.round(r * 100) + "%";
 const lpEff = (name, e) => `<div class="lp-eff"><span class="sub">${name}</span><b>${lpPct(e.rate)}</b><span class="sub">${e.winners} 爆 / ${e.mature} 篇有结论${e.lift_avg ? ` · 平均 ×${e.lift_avg}` : ""}</span></div>`;
 function lpWinner(r) {
-  return `<article class="lp-w" data-open="${r.id}">
+  return `<article class="lp-w" data-open="${r.id}" tabindex="0">
     <div class="lp-wt"><span class="fl-pill bad">爆款 ×${r.lift ?? "-"}</span>${r.generation ? `<span class="fl-pill">第 ${r.generation} 代</span>` : ""}${r.spawned ? `<span class="fl-pill ok">已复刻 ${r.spawned} 轮</span>` : ""}</div>
     <b class="lp-title">${esc(r.title)}</b>
     <div class="sub">${esc(r.account_name || "未指定账号")} · ${esc(r.published_at || "")}${r.days != null ? ` · 发布 ${r.days} 天` : ""}</div>

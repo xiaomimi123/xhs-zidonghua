@@ -181,5 +181,29 @@ def gc() -> int:
     return n
 
 
-def disk_mb() -> float:
-    return round(sum(f.stat().st_size for f in DIR.iterdir() if f.is_file()) / 1048576, 1)
+_DISK = {"mb": 0.0, "at": 0.0, "busy": False}
+_DISK_TTL = 120
+
+
+def _disk_scan() -> None:
+    try:
+        _DISK["mb"] = round(sum(f.stat().st_size for f in DIR.iterdir() if f.is_file()) / 1048576, 1)
+        _DISK["at"] = time.time()
+    except OSError:
+        pass
+    finally:
+        _DISK["busy"] = False
+
+
+def disk_mb(wait: bool = True) -> float:
+    """图片目录的大小。要逐个文件 stat,挂载盘上一千多个文件就要 2 秒,管理端概览和采集监控每次刷新都在调:
+    缓存 2 分钟,过期后后台刷新、这次先给旧值;从来没算过时才同步算一次(wait=False 则只触发后台计算,先返回 0)。"""
+    if _DISK["at"] and time.time() - _DISK["at"] < _DISK_TTL:
+        return _DISK["mb"]
+    if not _DISK["busy"]:
+        _DISK["busy"] = True
+        if _DISK["at"] or not wait:
+            threading.Thread(target=_disk_scan, daemon=True, name="disk-scan").start()
+        else:
+            _disk_scan()
+    return _DISK["mb"]

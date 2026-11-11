@@ -143,6 +143,24 @@ def run(rep, env):
               and all({k: v for k, v in f.items() if k not in api_user._LIB_HEAVY} == b for f, b in zip(full_lib, brief_lib)))
     rep.check("成品库单篇:返回完整内容;不存在的 id 报错", (one is None or (one["content"] is not None and "tags" in one and one["id"] == full_lib[0]["id"]))
               and _raises2(lambda: api_user.library_one(99999999)))
+    # 图片目录大小(管理端概览用):缓存 + 过期后台刷新,不能每次刷新都逐个文件 stat
+    from app import mirror
+    mirror.DIR.mkdir(parents=True, exist_ok=True)
+    probe = mirror.DIR / "_perf_probe.bin"
+    mirror._DISK.update(mb=0.0, at=0.0, busy=False)
+    base = mirror.disk_mb()
+    probe.write_bytes(b"x" * 3 * 1048576)
+    cached = mirror.disk_mb()
+    mirror._DISK["at"] -= mirror._DISK_TTL + 1   # 模拟过期
+    stale = mirror.disk_mb()                      # 过期:立刻返回旧值,后台刷新
+    for _ in range(100):
+        if not mirror._DISK["busy"]:
+            break
+        time.sleep(0.05)
+    fresh = mirror.disk_mb()
+    probe.unlink()
+    mirror._DISK.update(mb=0.0, at=0.0, busy=False)
+    rep.check("图片目录大小:缓存期内不重新扫描;过期后先返回旧值、后台刷新出新值", cached == base and stale == base and fresh >= base + 2.9, f"{base} {cached} {stale} {fresh}")
     off = api_user.list_runs(limit=2, offset=1)
     full = api_user.list_runs(limit=500)
     rep.check("任务页分页:offset 跳过前 N 个,总数接口和列表一致", [x["id"] for x in off] == [x["id"] for x in full[1:3]] and api_user.runs_count()["total"] == len(full))

@@ -18,6 +18,7 @@ async def lifespan(_):
     autorun.start()  # 一键批量生成的监督线程
     api_live.start_gen()  # Live 图:产品图 → 场景图的生成线程
     thumbs.warm_dirs([imagegen.IMG_DIR, mirror.DIR])  # 后台补齐已有图片的缩略图(只补缺的)
+    mirror.disk_mb(wait=False)  # 后台先算好图片目录大小(管理端概览要用,算一次要几秒)
     yield
 
 

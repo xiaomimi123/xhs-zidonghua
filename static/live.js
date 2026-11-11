@@ -70,7 +70,7 @@ async function fLive() {
     lvBar();
   };
   $("#lvjobs").onclick = lvJobClick;
-  lvGrid(); lvStatus(); lvJobs(); lvTab(LV.tab); lvRefresh();
+  lvGrid(); lvStatus(); lvJobs(); lvTab(LV.tab); LV.timer = setTimeout(lvRefresh, 3000);   // 刚取过状态和任务,不用马上再取一遍
 }
 
 function lvTab(t) {
