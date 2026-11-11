@@ -32,7 +32,7 @@ function lvFlow(j) {
 async function fLive() {
   clearTimeout(LV.timer);
   let sc, sj;
-  [LV.lib, LV.runs, LV.st, LV.jobs, LV.motions, sc, LV.prods, sj] = await Promise.all([api("/api/library"), api("/api/runs?limit=200").catch(() => []),
+  [LV.lib, LV.runs, LV.st, LV.jobs, LV.motions, sc, LV.prods, sj] = await Promise.all([api("/api/library?brief=1"), api("/api/runs?limit=200").catch(() => []),
     api("/api/live/status").catch(() => null), api("/api/live/jobs").catch(() => []), api("/api/live/motions").catch(() => []),
     api("/api/live/scenes").catch(() => ({ scenes: [] })), api("/api/products").catch(() => []),
     api("/api/live/bg_options").catch(() => ({ items: [], default: [] }))]);

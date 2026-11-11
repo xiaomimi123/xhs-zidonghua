@@ -218,7 +218,7 @@ async function fRun() {
   if (!state.runId) return go("runs");
   let r;
   try { r = await api(`/api/runs/${state.runId}`); } catch { return go("runs"); }
-  const ds = r.drafts.total ? await api(`/api/library?pid=${r.id}`) : [];
+  const ds = r.drafts.total ? await api(`/api/library?pid=${r.id}&brief=1`) : [];
   $("#pt").textContent = r.name;
   if (FL.runPageId !== r.id) { FL.runPageId = r.id; FL.runPage = 1; }   // 换了任务从第 1 页看起
   const runPage = Math.min(Math.max(1, FL.runPage || 1), Math.max(1, Math.ceil(ds.length / LIB_SIZE)));
@@ -245,7 +245,7 @@ async function fRun() {
 // ---------- 成品库 ----------
 const LIB_SIZE = 36;   // 成品库每页篇数
 async function fLib() {
-  const [all, runs] = await Promise.all([api(`/api/library${FL.pid ? `?pid=${FL.pid}` : ""}`), api("/api/runs?limit=200").catch(() => [])]);
+  const [all, runs] = await Promise.all([api(`/api/library?brief=1${FL.pid ? `&pid=${FL.pid}` : ""}`), api("/api/runs?limit=200").catch(() => [])]);
   const by = { all: () => true, todo: d => !d.published, ok: d => d.auto_ok === 1, warn: d => d.auto_ok === 0 };
   const accOpts = [...new Map(all.filter(d => d.account_id).map(d => [d.account_id, d.account_name])).entries()];
   if (FL.acc && FL.acc !== "_none" && !accOpts.some(([id]) => id === FL.acc)) FL.acc = "";
@@ -308,7 +308,13 @@ async function fLib() {
 }
 
 // ---------- 笔记预览:左图右文,手机全屏,左右滑切换 ----------
-async function fOpen(id, list) { await fetchAccts(); FL.pv = { list, i: list.findIndex(d => d.id === id), img: 0, dirty: false, more: false, opener: document.activeElement }; document.body.classList.add("fl-lock"); drawPv(); }
+// 列表只带精简字段(没有正文),预览要的完整内容按需取;取到后并回列表里的那一项
+const pvFull = async d => { if (d.content !== undefined) return d; try { Object.assign(d, await api(`/api/library/${d.id}`)); } catch { d.content = d.content ?? ""; d.tags = d.tags || []; } return d; };
+async function fOpen(id, list) {
+  await fetchAccts();
+  FL.pv = { list, i: list.findIndex(d => d.id === id), img: 0, dirty: false, more: false, opener: document.activeElement };
+  document.body.classList.add("fl-lock"); await pvFull(list[FL.pv.i]); if (FL.pv) drawPv();
+}
 function closePv() { const dirty = FL.pv?.dirty, op = FL.pv?.opener; FL.pv = null; $(".fl-pv")?.remove(); document.body.classList.remove("fl-lock"); if (dirty) render(); else if (op && op.isConnected) op.focus({ preventScroll: true }); }
 // 成品预览里的发布登记:选发布日期登记;已登记但没对上千帆数据时,可以手动对上;对上的可以取消
 const todayStr = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -317,7 +323,7 @@ function pubPanel(d) {
   return `<div class="pv-pub"><b>发布登记</b><span class="sub">已登记发布${d.published_at ? ` · ${esc(d.published_at)}` : ""}${d.linked ? " · 已手动对上千帆笔记" : d.perf ? " · 已自动对上千帆笔记" : ""}</span>
     <div class="pv-pr">${d.perf ? "" : `<button class="btn gray sm" data-plink>对上千帆笔记</button>`}${d.linked ? `<button class="btn ghost sm" data-punlink>取消对应</button>` : ""}<label class="sub">发布日期 <input type="date" id="pvday" value="${esc(d.published_at || todayStr())}" max="${todayStr()}" style="width:auto"></label><button class="btn gray sm" data-ppubd>修改日期</button></div></div>`;
 }
-const pvRefresh = async d => { const fresh = (await api(`/api/library?pid=${d.pid}`)).find(x => x.id === d.id); if (fresh) Object.assign(d, fresh); FL.pv && (FL.pv.dirty = true); if (FL.pv) drawPv(); };
+const pvRefresh = async d => { const fresh = await api(`/api/library/${d.id}`).catch(() => null); if (fresh) Object.assign(d, fresh); FL.pv && (FL.pv.dirty = true); if (FL.pv) drawPv(); };
 function drawPv() {
   const v = FL.pv, d = v.list[v.i], N = v.list.length, imgs = d.images;
   let m = $(".fl-pv"), fresh = !m; if (!m) { m = document.createElement("div"); m.className = "fl-pv"; document.body.appendChild(m); bindPv(m); }
@@ -398,7 +404,7 @@ function bindPv(m) {
         await api(`/api/drafts/${d.id}/cover`, "POST"); toast("正在换封面,稍等几秒");
         for (let k = 0; k < 40 && FL.pv; k++) {
           await new Promise(r => setTimeout(r, 2500));
-          const fresh = (await api(`/api/library?pid=${d.pid}`)).find(x => x.id === d.id);
+          const fresh = await api(`/api/library/${d.id}`).catch(() => null);
           if (fresh && fresh.images[0] && fresh.images[0] !== old && !["queued", "drawing"].includes(fresh.status)) { Object.assign(d, fresh); v.img = 0; v.dirty = true; drawPv(); return; }
         }
         toast("封面还没换好,稍后刷新看看", 1); drawPv();
@@ -413,7 +419,7 @@ function bindPv(m) {
         await api(`/api/drafts/${d.id}/replan_images`, "POST"); toast("正在按正文重做配图,约需几分钟");
         for (let k = 0; k < 120 && FL.pv; k++) {
           await new Promise(r => setTimeout(r, 4000));
-          const fresh = (await api(`/api/library?pid=${d.pid}`)).find(x => x.id === d.id);
+          const fresh = await api(`/api/library/${d.id}`).catch(() => null);
           if (fresh && !["queued", "drawing"].includes(fresh.status)) { Object.assign(d, fresh); v.img = 1; v.dirty = true; drawPv(); toast(fresh.images.slice(1).join() !== old ? "内页配图已更新" : "没有更新,请看错误提示", fresh.images.slice(1).join() === old); return; }
         }
         toast("还没画完,稍后刷新看看", 1); drawPv();
@@ -435,7 +441,13 @@ function bindPv(m) {
   m.addEventListener("touchstart", e => { x0 = e.touches[0].clientX; }, { passive: true });
   m.addEventListener("touchend", e => { if (x0 == null || !FL.pv) return; const dx = e.changedTouches[0].clientX - x0; x0 = null; if (Math.abs(dx) > 70) stepPv(dx < 0 ? 1 : -1); });
 }
-function stepPv(k) { const v = FL.pv; v.i = (v.i + k + v.list.length) % v.list.length; v.img = 0; drawPv(); $(".fl-tb") && ($(".fl-tb").scrollTop = 0); }
+async function stepPv(k) {
+  const v = FL.pv, N = v.list.length; v.i = (v.i + k + N) % N; v.img = 0; const d = v.list[v.i];
+  if (d.content === undefined) await pvFull(d);
+  if (!FL.pv || FL.pv.list[FL.pv.i] !== d) return;   // 取的过程中又翻了页 / 关了弹窗
+  drawPv(); $(".fl-tb") && ($(".fl-tb").scrollTop = 0);
+  [1, -1].forEach(o => pvFull(v.list[(v.i + o + N) % N]));   // 提前取相邻两篇,连着翻不用等
+}
 document.addEventListener("keydown", e => { if (!FL.pv) return; if (e.key === "Escape") closePv(); if (e.key === "ArrowRight") stepPv(1); if (e.key === "ArrowLeft") stepPv(-1); });
 
 
@@ -622,7 +634,7 @@ async function fLoop() {
     }
     if (e.target.closest("select")) return;
     const o = e.target.closest("[data-open]"); if (!o) return;
-    lib = lib || await api("/api/library"); fOpen(+o.dataset.open, lib);
+    lib = lib || await api("/api/library?brief=1"); fOpen(+o.dataset.open, lib);
   };
 }
 

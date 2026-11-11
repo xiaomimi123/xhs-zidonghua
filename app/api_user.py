@@ -339,18 +339,23 @@ def run_detail(pid: int):
     return info
 
 
-@router.get("/api/library")
-def library(pid: int = 0):
-    """成品库:写好的笔记(跨任务),带任务名称、发布标记、发布账号,以及发布后在千帆里对上号的表现数据。"""
+# 列表里不要的大字段:正文、备选标题、标签、检查说明、千帆表现。点开预览时再按需取(/api/library/{id})
+_LIB_HEAVY = ("alt_titles", "content", "tags", "auto_note", "perf")
+
+
+def _library(pid: int = 0, did: int = 0, brief: bool = False) -> list[dict]:
+    where = " AND d.project_id=?" if pid else ""
+    args = [pid] if pid else []
+    if did:
+        where += " AND d.id=?"; args.append(did)
     rows = q_all("SELECT d.*, p.track, p.keywords, p.product_id FROM drafts d JOIN projects p ON p.id=d.project_id "
-                 "WHERE d.title!='' AND d.status NOT IN ('queued','writing','reviewing','drawing')"
-                 + (" AND d.project_id=?" if pid else "") + " ORDER BY d.id DESC LIMIT 500", *([pid] if pid else []))
+                 "WHERE d.title!='' AND d.status NOT IN ('queued','writing','reviewing','drawing')" + where + " ORDER BY d.id DESC LIMIT 500", *args)
     names = {r["id"]: r["name"] for r in q_all("SELECT id, name FROM products")}
     items, data_at = qianfan.notes_all()
     perf = qianfan.match_drafts(items)   # 只算一次(evaluate 里也要用,原来各算一遍)
     tiers = {r["id"]: r for r in loop.evaluate(register=False, pre=(items, data_at, perf))["rows"]}
     perf_keys = ("views", "likes", "collects", "comments", "shares", "new_fans", "published_at", "account_id", "account_name", "note_id")
-    return [{"id": d["id"], "pid": d["project_id"],
+    out = [{"id": d["id"], "pid": d["project_id"],
              "run": names.get(d["product_id"]) or f"{d['track']} · {(d['keywords'] or [''])[0]}".strip(" ·"),
              "title": d["title"], "alt_titles": d["alt_titles"], "content": d["content"], "tags": d["tags"],
              "images": [i for i in d["images"] if i], "auto_ok": d["auto_ok"], "auto_note": d["auto_note"],
@@ -360,6 +365,27 @@ def library(pid: int = 0):
              "account_id": d["account_id"] or "", "account_name": d["account_name"] or "",
              "tier": (tiers.get(d["id"]) or {}).get("tier", ""), "lift": (tiers.get(d["id"]) or {}).get("lift"),
              "perf": {k: perf[d["id"]].get(k) for k in perf_keys if perf[d["id"]].get(k) not in (None, "")} if d["id"] in perf else None} for d in rows]
+    if brief:
+        for it in out:
+            for k in _LIB_HEAVY:
+                it.pop(k, None)
+    return out
+
+
+@router.get("/api/library")
+def library(pid: int = 0, brief: bool = False):
+    """成品库:写好的笔记(跨任务),带任务名称、发布标记、发布账号,以及发布后在千帆里对上号的表现数据。
+    brief=1 时去掉正文 / 备选标题 / 标签 / 检查说明 / 千帆表现,列表页用(体积小很多)。"""
+    return _library(pid, brief=brief)
+
+
+@router.get("/api/library/{did}")
+def library_one(did: int):
+    """一篇成品的完整内容(预览弹窗用)。"""
+    r = _library(did=did)
+    if not r:
+        raise HTTPException(404, "没有这篇稿子")
+    return r[0]
 
 
 class AccountIn(BaseModel):

@@ -8,6 +8,7 @@ import random
 import tempfile
 import time
 from pathlib import Path
+from ..common import _raises2
 
 
 def _old_match(drafts, items):
@@ -134,6 +135,14 @@ def run(rep, env):
               r0["tasks"] == [1, 3] and r0["drafts"]["total"] == 3 and r0["drafts"]["passed"] == 1 and r0["drafts"]["failed"] == 1 and r0["cover"] == f"/images/cov0_0.png" and r0["kind"] == "product" and r0["name"] == "性能产品", str(r0))
     lim = api_user.list_runs(limit=2)
     rep.check("任务页:limit 只返回最近 N 个", len(lim) == 2 and lim[0]["id"] > lim[1]["id"] or lim[0]["id"] != lim[1]["id"], str([x["id"] for x in lim]))
+    full_lib = api_user.library()
+    brief_lib = api_user.library(brief=True)
+    one = api_user.library_one(full_lib[0]["id"]) if full_lib else None
+    rep.check("成品库精简列表:去掉正文 / 备选标题 / 标签 / 检查说明 / 千帆表现,其余字段和完整版一致",
+              len(brief_lib) == len(full_lib) and all(not (set(api_user._LIB_HEAVY) & set(b)) for b in brief_lib)
+              and all({k: v for k, v in f.items() if k not in api_user._LIB_HEAVY} == b for f, b in zip(full_lib, brief_lib)))
+    rep.check("成品库单篇:返回完整内容;不存在的 id 报错", (one is None or (one["content"] is not None and "tags" in one and one["id"] == full_lib[0]["id"]))
+              and _raises2(lambda: api_user.library_one(99999999)))
     off = api_user.list_runs(limit=2, offset=1)
     full = api_user.list_runs(limit=500)
     rep.check("任务页分页:offset 跳过前 N 个,总数接口和列表一致", [x["id"] for x in off] == [x["id"] for x in full[1:3]] and api_user.runs_count()["total"] == len(full))
