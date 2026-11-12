@@ -666,6 +666,12 @@ def w_claim(request: Request, worker: str = ""):
     return {"job": job}
 
 
+@worker_router.get("/owners")
+def w_owners():
+    """{任务号: 发起人}:Mac 上的整理脚本据此把已有成品按发起人分文件夹。"""
+    return {str(r["id"]): r["created_by"] or "管理员" for r in q_all("SELECT id, created_by FROM live_jobs")}
+
+
 @worker_router.get("/jobs/{jid}/source")
 def w_source(jid: int):
     return _source(jid)

@@ -43,6 +43,10 @@ def run(rep, env):
     rep.check("任务记录发起人账号", db.q_one("SELECT created_by FROM projects WHERE id=?", pj)["created_by"] == "zhangsan")
     lst = aa.staff_list()
     rep.check("人员管理列表带上发起任务数", lst["items"][0]["projects"] == 1 and lst["items"][0]["username"] == "zhangsan", str(lst["items"]))
+    sid0 = lst["items"][0]["id"]
+    jid = db.q_exec("INSERT INTO live_jobs(image,opts,created_by,mode,stage,owner_id) VALUES('x.png','{}','张三','zoom','bg',?)", sid0).lastrowid
+    rep.check("人员管理列表带上 Live 任务数", next(i for i in aa.staff_list()["items"] if i["id"] == sid0)["live"] == 1)
+    db.q_exec("DELETE FROM live_jobs WHERE id=?", jid)
 
     # 停用:立刻失效,不能登录;启用后旧会话仍然无效,要重新登录
     aa.staff_edit(sid, aa.StaffPatch(enabled=False))

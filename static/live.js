@@ -1,7 +1,7 @@
 // ---------- Live 图:从成品库选图 / 上传图片 → 排队 →(真实动作:本机显卡先生成视频)→ Mac 端做成实况 → 下载 .pvt 包 AirDrop 到 iPhone ----------
 // 服务端只管队列和文件;视频由装了 ComfyUI 的电脑生成(tools/livephoto/video_worker.py),
 // 实况的动画渲染和 .pvt 打包在 MacBook 上跑(tools/livephoto/mac_worker.py)。
-const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], bgItems: [], bgDefault: [], upMode: "up", jf: "all", showHow: null,
+const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], bgItems: [], bgDefault: [], upMode: "up", jf: "all", who: "", showHow: null,
   bg: { files: [], items: null, extra: "", scenes: new Set(), custom: "" }, up: { files: [] }, gen: { files: [], product: 0, scene: "", note: "", count: 1 },
   pid: 0, todo: false, page: 1, sel: new Map(), jobs: [], st: null, timer: 0,
   opts: Object.assign({ mode: "motion", motion: "sway", seconds: 5, zoom: 1.08, focus_y: 0.35, fit: "crop" }, (() => { try { return JSON.parse(localStorage.lvOpts || "{}"); } catch { return {}; } })()) };
@@ -60,7 +60,7 @@ async function fLive() {
     if (!confirm("清除全部已完成的任务和成品文件?(已经传到 iPhone 的就不需要留着了)")) return;
     try { const r = await api("/api/live/jobs/clear_done", "POST"); toast(`已清除 ${r.deleted} 个`); lvRefresh(); } catch (e) { toast(e.message, 1); }
   };
-  $("#lvfilter").onclick = e => { const b = e.target.closest("[data-jf]"); if (b) { LV.jf = b.dataset.jf; lvJobs(); } };
+  $("#lvfilter").onclick = e => { const b = e.target.closest("[data-jf]"), w = e.target.closest("[data-jw]"); if (b) { LV.jf = b.dataset.jf; lvJobs(); } else if (w) { LV.who = w.dataset.jw; lvJobs(); } };
   $("#lvgrid").onclick = e => {
     const pg = e.target.closest("[data-pg]"); if (pg) { if (pg.disabled) return; LV.page = +pg.dataset.pg; lvGrid(); return $("#lvgrid").scrollIntoView({ behavior: "smooth", block: "start" }); }
     const t = e.target.closest("[data-k]"); if (!t) return;
@@ -310,14 +310,17 @@ function lvJobs() {
   $("#lvfilter").innerHTML = all.length ? [["all", "全部"], ["run", "进行中"], ["done", "已完成"], ["err", "失败"]].map(([k, l]) => `<button class="chip ${LV.jf === k ? "on" : ""}" data-jf="${k}" ${cnt[k] ? "" : "disabled"}>${l} ${cnt[k]}</button>`).join("") : "";
   const by = { all: () => true, run: j => j.status === "pending" || j.status === "running", done: j => j.status === "done", err: j => j.status === "error" };
   if (!cnt[LV.jf]) LV.jf = "all";
-  const js = all.filter(by[LV.jf]);
+  const who = [...new Set(all.map(j => j.by || "管理员"))];   // 管理员能看到所有人的任务:有多个发起人时,每条标出是谁做的,并能按人筛选
+  if (!who.includes(LV.who)) LV.who = "";
+  const js = all.filter(by[LV.jf]).filter(j => !LV.who || (j.by || "管理员") === LV.who);
+  $("#lvfilter").innerHTML += who.length > 1 ? `<span class="sub" style="margin-left:8px">发起人</span>` + [["", "全部"], ...who.map(w => [w, w])].map(([k, l]) => `<button class="chip ${LV.who === k ? "on" : ""}" data-jw="${esc(k)}">${esc(l)}</button>`).join("") : "";
   $("#lvjobs").innerHTML = js.length ? `<div class="lv-jobs">${js.map(j => {
     const [lab, cls] = lvState(j), o = j.opts || {}, motion = j.mode === "motion";
     const how = motion ? `真实动作 · ${esc(j.motion || lvMotionLabel(o.motion))}${o.take ? ` · 第 ${o.take} 条` : ""} · ${o.seconds || 3} 秒` : `慢推镜头 · 推近 ${Math.round(((o.zoom || 1) - 1) * 100)}% · ${o.seconds || 5} 秒`;
     const from = j.src === "upload" ? "上传图片 · " : j.src === "gen" ? "产品场景图 · " : j.src === "bgswap" ? `换背景 · ${esc(j.scene || "自动场景")} · ` : "";
     const flow = lvFlow(j);
     return `<article class="lv-job" data-j="${j.id}">${j.thumb || j.image ? `<img src="${esc(thumb("/images/" + (j.thumb || j.image), 240))}" alt="" loading="lazy" decoding="async">` : `<div class="lv-ph" aria-hidden="true">场景图</div>`}
-      <div class="lv-jt"><b>${esc(j.title)}</b><span class="sub">${from}${how} · ${esc(LV_FIT[o.fit] || "")} · ${esc(when(j.created))}${j.worker ? ` · ${esc(j.worker)}` : ""}${j.size ? ` · ${(j.size / 1048576).toFixed(1)} MB` : ""}</span>
+      <div class="lv-jt"><b>${esc(j.title)}</b><span class="sub">${from}${how} · ${esc(LV_FIT[o.fit] || "")} · ${esc(when(j.created))}${who.length > 1 ? ` · 发起:${esc(j.by || "管理员")}` : ""}${j.worker ? ` · ${esc(j.worker)}` : ""}${j.size ? ` · ${(j.size / 1048576).toFixed(1)} MB` : ""}</span>
         ${flow.length > 1 ? `<div class="lv-flow" aria-label="进度">${flow.map(f => `<span class="${f.cls}"><i></i>${f.name}</span>`).join("")}</div>` : ""}
         ${j.status === "error" ? `<span class="fl-err">${esc(j.error)}</span>` : ""}</div>
       <span class="fl-pill ${cls}">${lab}</span>

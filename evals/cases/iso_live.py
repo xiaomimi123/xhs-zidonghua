@@ -62,6 +62,23 @@ def run(rep, env):
         rep.check("状态:还没有 Mac 连接时显示离线", not st["online"] and st["pending"] == 2, str(st))
         c = col.get("/api/live/worker/claim?worker=mac-test").json()["job"]
         rep.check("领任务:先进先出,返回参数和原图地址", c and c["id"] == jid and c["opts"]["zoom"] == 1.08 and c["source"].endswith(f"/{jid}/source"), str(c))
+        rep.check("领任务:带上发起人(Mac 端按它分文件夹),没有记录的归管理员", c.get("by") == (db.q_one("SELECT created_by FROM live_jobs WHERE id=?", jid)["created_by"] or "管理员"), str(c))
+        ow = col.get("/api/live/worker/owners")
+        rep.check("发起人对照表:需要 Token,按任务号给出发起人", anon.get("/api/live/worker/owners").status_code == 401 and ow.status_code == 200 and ow.json()[str(jid)] == c["by"], str(ow.text[:120]))
+        import sys
+        from pathlib import Path as _P
+        sys.path.insert(0, str(_P(__file__).resolve().parents[2] / "tools" / "livephoto"))
+        if (_P(__file__).resolve().parents[2] / "tools" / "livephoto" / "sort_by_owner.py").is_file():   # Mac 端脚本不打进镜像(.dockerignore),容器里跑测试时没有,只在项目目录里直接跑才检查
+            import sort_by_owner as sbo
+            rep.check("分文件夹的名字:去掉路径符号,空的归管理员", sbo.owner_dir("丽/敏:") == "丽敏" and sbo.owner_dir("") == "管理员" and sbo.owner_dir(None) == "管理员")
+            with tempfile.TemporaryDirectory() as td:
+                root = _P(td)
+                (root / "IMG_L1_LIVE.pvt").mkdir(); (root / "IMG_L2_LIVE.pvt").mkdir(); (root / "IMG_L9_LIVE.pvt").mkdir(); (root / "别的文件.txt").write_text("x")
+                (root / "丽敏").mkdir(); (root / "丽敏" / "IMG_L3_LIVE.pvt").mkdir(); (root / "冰玲").mkdir(); (root / "冰玲" / "IMG_L2_LIVE.pvt").mkdir()
+                mv, okn = sbo.plan(root, {"1": "丽敏", "2": "冰玲", "3": "丽敏"})
+                names = {(a.parent.name, b.parent.name, a.name) for a, b in mv}
+                rep.check("整理旧文件:按任务号归到发起人文件夹,已在正确位置的不动,查不到的归「未知」,别的文件不碰",
+                          okn == 2 and names == {(root.name, "丽敏", "IMG_L1_LIVE.pvt"), (root.name, "冰玲", "IMG_L2_LIVE.pvt"), (root.name, "未知", "IMG_L9_LIVE.pvt")}, str((mv, okn)))
         rep.check("领任务后 Mac 在线", user.get("/api/live/status").json()["online"])
         rep.check("下载原图", col.get(c["source"]).content == b"png-a")
         rep.check("回传:不是 zip / 缺视频 / 缺图片 都拒绝",

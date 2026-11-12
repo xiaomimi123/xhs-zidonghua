@@ -646,10 +646,10 @@ async function vStaff() {
   $("#main").innerHTML = `${items.length ? "" : `<div class="banner warn">还没有员工账号,前端目前<b>任何人都能打开</b>。新增第一个员工账号后,前端就需要登录了。</div>`}
   ${r.legacy_password ? `<div class="banner warn">前端还在使用旧的「通用访问密码」。创建员工账号后它不再生效。<button class="btn ghost sm" id="slegacy">取消通用密码</button></div>` : ""}
   <p class="sub" style="margin:0 0 12px">员工用自己的账号登录前端(新建任务、看成品和数据看板)。任务会记下是谁发起的;停用、重置密码或「踢下线」后,对方已登录的页面立刻失效。共 ${items.length} 人,启用 ${on} 人。</p>
-  <section class="card flush">${items.length ? `<table class="tbl"><thead><tr><th>姓名</th><th>账号</th><th>状态</th><th class="num">发起任务</th><th class="num">成品稿</th><th>最近登录</th><th></th></tr></thead><tbody>${items.map(x => `<tr data-id="${x.id}">
+  <section class="card flush">${items.length ? `<table class="tbl"><thead><tr><th>姓名</th><th>账号</th><th>状态</th><th class="num">发起任务</th><th class="num">成品稿</th><th class="num">Live 任务</th><th>最近登录</th><th></th></tr></thead><tbody>${items.map(x => `<tr data-id="${x.id}">
     <td><b>${esc(x.name || x.username)}</b></td><td class="sub">${esc(x.username)}</td>
     <td>${x.enabled ? `<span class="st done">启用</span>` : `<span class="st">已停用</span>`}</td>
-    <td class="num">${x.projects}</td><td class="num">${x.drafts}</td>
+    <td class="num">${x.projects}</td><td class="num">${x.drafts}</td><td class="num">${x.live}</td>
     <td class="sub">${x.last_login ? esc(x.last_login.slice(0, 16)) + (x.last_ip ? ` · ${esc(x.last_ip)}` : "") : "从未登录"}</td>
     <td class="nowrap"><button class="btn gray sm" data-act="name">改名</button> <button class="btn gray sm" data-act="pw">重置密码</button> <button class="btn gray sm" data-act="kick">踢下线</button> <button class="btn gray sm" data-act="toggle">${x.enabled ? "停用" : "启用"}</button> <button class="btn ghost sm danger" data-act="del">删除</button></td></tr>`).join("")}</tbody></table>` : `<div class="empty" style="border:0">还没有员工</div>`}</section>`;
   const dlg = (title, body, okText, onOk) => {

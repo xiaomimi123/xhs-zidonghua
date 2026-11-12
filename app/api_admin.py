@@ -124,13 +124,14 @@ class StaffPatch(BaseModel):
 
 
 def _staff_row(r):
-    return {k: r[k] for k in ("id", "username", "name", "enabled", "created", "last_login", "last_ip", "projects", "drafts")}
+    return {k: r[k] for k in ("id", "username", "name", "enabled", "created", "last_login", "last_ip", "projects", "drafts", "live")}
 
 
 @router.get("/staff")
 def staff_list():
     rows = q_all("""SELECT s.*, (SELECT COUNT(*) FROM projects p WHERE p.owner_id=s.id) AS projects,
-        (SELECT COUNT(*) FROM drafts d JOIN projects p ON p.id=d.project_id WHERE p.owner_id=s.id AND d.title!='') AS drafts
+        (SELECT COUNT(*) FROM drafts d JOIN projects p ON p.id=d.project_id WHERE p.owner_id=s.id AND d.title!='') AS drafts,
+        (SELECT COUNT(*) FROM live_jobs j WHERE j.owner_id=s.id) AS live
         FROM staff s ORDER BY s.id""")
     return {"items": [_staff_row(r) for r in rows], "legacy_password": bool(get_settings()["user_password_hash"])}
 
