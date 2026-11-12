@@ -176,7 +176,9 @@ def run(rep, env):
         rep.check("生成场景图:产品没有图 / 什么都没选 / 张数不对 都拒绝",
                   user.post("/api/live/jobs/generate", json={"product_id": pid2}).status_code == 400
                   and user.post("/api/live/jobs/generate", json={}).status_code == 400
-                  and user.post("/api/live/jobs/generate", json={"images": [url(png)], "count": 9}).status_code == 400)
+                  and user.post("/api/live/jobs/generate", json={"images": [url(png)], "count": 11}).status_code == 400)
+        from app import api_live as _al
+        rep.check("产品图生成场景:一次最多 10 张", _al.MAX_GEN == 10)
         calls = []
         _gen0 = imagegen.generate_image
 

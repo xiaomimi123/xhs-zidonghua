@@ -729,24 +729,19 @@ async function vExport() {
   };
 }
 
-// ---------- 访问密码 ----------
+// ---------- 登录(左右分屏,见 login.js) ----------
 async function gate() {
   if ($(".gate")) return;
   clearTimeout(pollT);
   let sm = false; try { sm = (await (await fetch("/api/session")).json()).staff_mode; } catch { }
   if ($(".gate")) return;
   let last = ""; try { last = localStorage.getItem("xhs_user") || ""; } catch { }
-  const g = document.createElement("div"); g.className = "gate";
-  g.innerHTML = `<form class="card"><span class="logo">书</span><h2>小红书流水线</h2><p class="sub">${sm ? "请登录" : "请输入访问密码"}</p>
-    ${sm ? `<input id="guser" placeholder="账号" autocomplete="username" value="${esc(last)}" required>` : ""}
-    <input type="password" id="gpw" placeholder="${sm ? "密码" : "访问密码"}" autocomplete="current-password" required><button class="btn lg">${sm ? "登录" : "进入"}</button><p class="gerr"></p></form>`;
-  document.body.appendChild(g); (sm && !last ? $("#guser") : $("#gpw")).focus();
-  g.querySelector("form").onsubmit = async e => {
-    e.preventDefault();
-    const username = sm ? $("#guser").value.trim() : "";
-    const r = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password: $("#gpw").value }) });
-    if (r.ok) { try { if (sm) localStorage.setItem("xhs_user", username); } catch { } g.remove(); loadWho(); render(); } else { g.querySelector(".gerr").textContent = (await r.json().catch(() => ({}))).detail || "登录失败"; }
-  };
+  loginScreen({ staffMode: sm, lastUser: last, submit: async ({ username, password, remember }) => {
+    const r = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "登录失败");
+    try { if (sm) remember ? localStorage.setItem("xhs_user", username) : localStorage.removeItem("xhs_user"); } catch { }
+    setTimeout(() => { loadWho(); render(); });
+  } });
 }
 
 // 侧栏底部:当前登录的员工和退出按钮(管理员预览或没开登录时不显示)
@@ -756,9 +751,29 @@ async function loadWho() {
     const s = await (await fetch("/api/session")).json();
     if (!s.user) { el.hidden = true; return; }
     el.hidden = false;
-    el.innerHTML = `<span class="who-n" title="${esc(s.user.username)}">${esc(s.user.name)}</span><button class="who-x" id="logoutBtn">退出</button>`;
+    el.innerHTML = `<span class="who-n" title="${esc(s.user.username)}">${esc(s.user.name)}</span><span><button class="who-x" id="pwBtn">改密码</button><button class="who-x" id="logoutBtn">退出</button></span>`;
     $("#logoutBtn").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.reload(); };
+    $("#pwBtn").onclick = myPassword;
   } catch { }
+}
+
+// 员工改自己的密码:改完别的设备上的登录会失效,这台保持登录
+function myPassword() {
+  const m = document.createElement("div"); m.className = "mask";
+  m.innerHTML = `<form class="card lp-dlg" style="max-width:380px"><div class="card-h"><b>修改密码</b><button type="button" class="btn ghost sm" data-x>关闭</button></div>
+    <label class="f" for="pwo" style="margin-top:0">原密码</label><input id="pwo" type="password" autocomplete="current-password" required>
+    <label class="f" for="pwn">新密码 <span class="sub">至少 6 位</span></label><input id="pwn" type="password" autocomplete="new-password" minlength="6" required>
+    <label class="f" for="pwn2">再输一次新密码</label><input id="pwn2" type="password" autocomplete="new-password" minlength="6" required>
+    <p class="sub" style="margin:10px 0 0">改完后,你在其他电脑、手机上的登录会自动退出。</p>
+    <div class="row" style="margin-top:14px;justify-content:flex-end;gap:8px"><button type="button" class="btn gray" data-x>取消</button><button class="btn">保存</button></div></form>`;
+  m.style.zIndex = 60; document.body.appendChild(m); $("#pwo").focus();
+  m.onclick = e => { if (e.target === m || e.target.closest("[data-x]")) m.remove(); };
+  m.querySelector("form").onsubmit = async e => {
+    e.preventDefault();
+    if ($("#pwn").value !== $("#pwn2").value) return toast("两次输入的新密码不一样", 1);
+    try { await api("/api/me/password", "POST", { old: $("#pwo").value, new: $("#pwn").value }); m.remove(); toast("密码已修改"); }
+    catch (err) { toast(err.message, 1); }
+  };
 }
 
 fetch("/api/session").then(r => r.ok ? r.json() : Promise.reject()).then(s => s.ok ? (loadWho(), render()) : gate())

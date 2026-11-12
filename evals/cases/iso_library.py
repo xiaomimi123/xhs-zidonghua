@@ -113,8 +113,26 @@ def run(rep, env):
         w4._run_images(d21)
         r21 = q("SELECT images,status,cover_card FROM drafts WHERE id=?", d21)[0]
         rep.check("封面 + 2 张内页:封面 1 张实拍背景 + 排版,内页 2 张 AI 图,都带产品参考图", len(gen3) == 3 and len(ren3) == 1 and all(c[1] for c in gen3) and r21["status"] == "ready"
-                  and len(r21["images"]) == 3 and r21["cover_card"].get("photo", "").startswith(f"d{d21}_0_") and "场景:" in gen3[1][0] and "不要出现任何文字" in gen3[0][0], str(gen3)[:200])
-        rep.check("封面的实拍图不带文字要求之外的字", "「" not in gen3[0][0])
+                  and len(r21["images"]) == 3 and r21["cover_card"].get("photo", "").startswith(f"d{d21}_0_") and any("场景:" in g[0] for g in gen3) and any("不要出现任何文字" in g[0] for g in gen3), str(gen3)[:200])
+        rep.check("封面的实拍图不带文字要求之外的字", all("「" not in g[0] for g in gen3))
+        # 一篇里的图并行生成:4 张各要 0.3 秒,总共远小于 1.2 秒;位置不错位;某一张失败不影响其它
+        import threading as _th, time as _tm
+        gate_peak = []
+        def slow_gen(prompt, name, s=None, refs=None):
+            _tm.sleep(0.3)
+            if "第三张" in prompt:
+                raise RuntimeError("服务商报错")
+            (ig12.IMG_DIR / f"{name}.png").write_bytes(b"x"); return f"{name}.png"
+        ig12.generate_image = slow_gen
+        d22 = db.q_exec("INSERT INTO drafts(project_id,title,image_prompts,images,cover_card,status,with_images) VALUES(?,?,?,'[]','{}','queued',1)", ppj, "标题",
+                        json.dumps(["封面一", "内页第二张", "内页第三张", "内页第四张"])).lastrowid
+        t0 = _tm.time()
+        w4._run_images(d22)
+        el = _tm.time() - t0
+        r22 = q("SELECT images,status,error FROM drafts WHERE id=?", d22)[0]
+        rep.check("一篇里的图并行生成:4 张(各 0.3 秒)总耗时远小于串行", el < 0.9, f"{el:.2f}s")
+        rep.check("并行时位置不错位、失败的那张留空并说明是第几张,其它照常出图", r22["images"][2] == "" and all(r22["images"][i] for i in (0, 1, 3)) and r22["status"] == "error" and "第3张" in r22["error"] and "1 张图没生成成功" in r22["error"], str(r22))
+        ig12.generate_image = fake_gen3
         w4.submit_images = lambda did, redo_all=False: None
         before_layout = r21["cover_card"]["layout"]
         w4.change_cover(d21)

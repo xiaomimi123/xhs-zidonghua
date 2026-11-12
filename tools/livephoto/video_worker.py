@@ -37,7 +37,7 @@ MODELS = {   # ComfyUI 里的模型文件名(models/diffusion_models、loras、t
     "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
     "sam3": "sam3.1_multiplex_fp16.safetensors",   # 换背景抠主体用(checkpoints 目录)
 }
-WAIT_MAX = 25 * 60   # 一条视频最多等多少秒;超过就中断,避免卡死显卡
+WAIT_MAX = 8 * 60   # 一条视频最多等多少秒(正常约 85 秒);超过就中断并报错放行,避免卡死显卡。要小于服务端「领走后多久没回传就退回重领」的 20 分钟
 
 
 class Http:

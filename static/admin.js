@@ -531,7 +531,7 @@ async function vSettings() {
   const G = [
     ["DeepSeek", "负责拆解爆款、规划角度、写标题正文和生图提示词", { deepseek_base_url: "接口地址", deepseek_model: "模型", deepseek_api_key: "API Key" }],
     ["生图模型", "按 OpenAI 兼容的 /images/generations 调用,如 https://xxx/v1;同时支持「直接返回图片」和「返回任务号、轮询取图」两种。格式不同的服务商需要改 app/imagegen.py", { image_base_url: "接口地址", image_model: "模型名", image_api_key: "API Key", image_size: "图片尺寸", image_resolution: "清晰度" }],
-    ["复刻", "并发是同时处理的篇数,太大可能触发接口限流;自动修正:成稿命中高风险词时让 DeepSeek 按扫描结果改一次;超长自动压缩:正文明显超过爆款组字数且基准可信时压缩一次,原稿保留可切换;自动审稿:成稿后对照拆解卡打分并给出修改版;模拟评论区会多用一些 token(均为 1 开 / 0 关)", { text_concurrency: "写文案并发", image_concurrency: "生图并发", auto_fix: "自动修正(1/0)", auto_compress: "超长自动压缩(1/0)", image_count_weights: "每篇图片张数比例(1/2/3/4 张,逗号分隔)", auto_review: "自动审稿(1/0)", review_comments: "审稿附模拟评论区(1/0)" }],
+    ["复刻", "并发是同时处理的篇数,太大可能触发接口限流;一篇里的几张图会并行生成,所有生图请求共用「生图接口同时请求数」这个上限(默认 4,遇到 429 限流就调小);自动修正:成稿命中高风险词时让 DeepSeek 按扫描结果改一次;超长自动压缩:正文明显超过爆款组字数且基准可信时压缩一次,原稿保留可切换;自动审稿:成稿后对照拆解卡打分并给出修改版;模拟评论区会多用一些 token(均为 1 开 / 0 关)", { text_concurrency: "写文案并发", image_concurrency: "生图并发(同时处理的稿子数)", image_api_concurrency: "生图接口同时请求数(所有生图共用,遇到限流就调小)", auto_fix: "自动修正(1/0)", auto_compress: "超长自动压缩(1/0)", image_count_weights: "每篇图片张数比例(1/2/3/4 张,逗号分隔)", auto_review: "自动审稿(1/0)", review_comments: "审稿附模拟评论区(1/0)" }],
     ["产品图", "员工上传产品图后:系统用「看图模型」识别产品、定赛道和搜索词;配图时把产品图作为参考,保证产品外观一致;可以让最后几张直接用产品原图(包装 100% 真实,默认 0 = 全部 AI 生成)。看图接口按 OpenAI 兼容的 /chat/completions 调用:用千问填 https://dashscope.aliyuncs.com/compatible-mode/v1 和 qwen-vl-max;地址和 Key 留空则沿用生图接口的", {
       vision_base_url: "看图接口地址", vision_api_key: "看图接口 API Key", vision_model: "看图模型", product_real_slots: "最后几张直接用产品原图(0 = 不用)", product_max_refs: "AI 生图最多参考几张产品图" }],
     ["批量自动化", "员工点「一键生成」后后台自动跑完整条流水线的参数。合格线:审稿总分达到多少才算合格;不合格的稿子自动重写(次数见「重写次数」),仍不合格会标成「需检查」", {
@@ -540,6 +540,8 @@ async function vSettings() {
       auto_library_min: "笔记库已有几篇相关笔记就跳过采集", auto_min_notes: "采到少于几篇就停下提示", auto_min_relevant: "相关笔记少于几篇就补充搜索词", auto_enough_relevant: "相关笔记够多就提前结束采集(0 = 不提前)", auto_collect_wait_min: "最多等采集端(分钟)", auto_write_wait_min: "写稿配图最多等(分钟)" }],
     ["爆款回流", "发出去的稿子和千帆里的笔记表现按标题自动对上号,按下面的门槛判定谁爆了,员工在「复盘」里一键以爆款为样本继续复刻。爆款 = 发布满 N 天、互动(赞+藏+评)不少于下限、且达到本账号平均的 X 倍。「自动继续复刻」打开后,新出现的爆款会自动复刻(每个爆款最多连续复刻 3 代),会消耗文案和生图额度,每天有篇数上限,默认关闭",
       { loop_win_lift: "爆款倍数(≥ 账号平均的几倍)", loop_min_eng: "爆款互动下限(赞+藏+评 ≥)", loop_min_days: "发布满几天才下结论", loop_spawn_count: "继续复刻默认篇数", loop_auto: "自动继续复刻(1/0)", loop_daily_cap: "自动复刻每天最多几篇" }],
+    ["达人采集", "联系方式:员工在达人库里点「获取联系方式」,采集端才会像人一样在千帆买手广场打开那位达人的邀约弹窗、点眼睛读手机号 / 微信号(绝不点弹窗里的「发起邀约」提交按钮),每天有上限,默认关闭,联系方式只用于洽谈合作。让采集端去千帆「买手广场」采集合作达人的公开信息(昵称、粉丝、合作品类、历史合作、场均销售额、客单价、合作意愿),员工在「达人库」里筛选和记录建联。需要同时打开「千帆数据同步」的总开关。不采集手机号和微信号。采集品类写买手广场「合作品类」一级品类名的前几个字就行(如 保健食品、粮油调味),留空就用目标品类;达人历史合作品类命中目标品类 = 高适配,只有内容分类命中相关内容分类 = 一般(改完自动重算)。每个品类按列表顺序最多取「翻页数 × 20」位",
+      { kol_enabled: "自动采集(1/0)", kol_hours: "多久更新一次(小时)", kol_cats: "采集的合作品类(逗号分隔,留空 = 目标品类)", kol_targets: "我们的目标品类关键词(逗号分隔,对应达人历史合作品类的一级品类名)", kol_content: "相关内容分类关键词(逗号分隔,如 美食)", kol_pages: "每个品类最多翻几页", kol_contact_enabled: "允许员工获取达人联系方式(1/0,默认关)", kol_contact_cap: "每天最多获取几位的联系方式", kol_contact_paused: "自动暂停原因(遇到风控时自动写入;重新打开前清空)" }],
     ["采集", "新建项目或追加任务时,记在任务上交给采集端:抓多少条、只要近多少天发布的、什么类型、怎么排序。默认只采近半年(180 天)的图文;太旧的笔记即使采集端漏过滤,工作台收到时也会丢掉", { collect_limit: "每个任务采集条数", collect_max_age_days: "只采近多少天的笔记(0 = 不限)", collect_note_type: "笔记类型(image 只要图文 / all 不限)", collect_sort: "排序(popularity 最热 / general 综合 / latest 最新)" }],
     ["帖子分类", "入库后由 DeepSeek 自动打内容标签(1 开 / 0 关);分级按 赞+藏+评 计算,改阈值立即生效", { auto_tag: "自动打标签(1/0)", tier_viral: "爆款阈值(互动量 ≥)", tier_hot: "热门阈值(互动量 ≥)" }],
     ["图片转存", "采集端回传的图片链接带签名、会过期。开启后收到笔记就立即下载到服务器本地,页面都用本地副本(1 开 / 0 关)", { mirror_images: "自动转存(1/0)", mirror_concurrency: "同一篇同时下载几张图" }],
@@ -558,6 +560,7 @@ async function vSettings() {
   };
   const TESTS = {
     "DeepSeek": `<div class="testrow"><button class="btn gray sm" data-test="deepseek">测试连通</button><span class="sub">用上面填的内容发一条很短的消息,几乎不花钱,不用先保存</span><div class="tres"></div></div>`,
+    "达人采集": `<div class="testrow"><button class="btn gray sm" data-kolsync>立即采集</button><span class="sub">先保存上面的设置,再点:给采集端下发买手广场采集任务(采集端需要在线,并且已升级到支持达人采集的版本)</span><div class="tres"></div></div>`,
     "产品图": `<div class="testrow"><button class="btn gray sm" data-test="vision">测试看图</button><span class="sub">用一张自带的小图问模型是什么颜色,几乎不花钱,不用先保存</span><div class="tres"></div></div>`,
     "生图模型": `<div class="testrow"><button class="btn gray sm" data-test="image">测试连通</button><button class="btn gray sm" data-test="image_generate">试生成一张图</button><span class="sub">「测试连通」免费;「试生成一张图」会真实生图并按 1 张计费</span><div class="tres"></div></div>`,
   };
@@ -585,6 +588,12 @@ async function vSettings() {
     </div></div>`;
   if ($("#img-size")) $("#img-size").onchange = e => { $("#img-size-custom").style.display = e.target.value === "__custom__" ? "" : "none"; };
   $("#main").onclick = async e => {
+    const ks = e.target.closest("[data-kolsync]");
+    if (ks) {
+      const out = ks.closest(".testrow").querySelector(".tres"); ks.disabled = true;
+      try { const r = await api("/api/admin/kol/sync", "POST"); out.innerHTML = `<span class="st done">${r.created ? `已下发 ${r.created} 个采集任务` : "已有未完成的采集任务,不重复下发"}</span>`; } catch (err) { out.innerHTML = `<span class="st error">失败</span> ${esc(err.message)}`; }
+      ks.disabled = false; return;
+    }
     const b = e.target.closest("[data-test]"); if (!b) return;
     const kind = b.dataset.test, row = b.closest(".testrow"), out = row.querySelector(".tres");
     if (kind === "image_generate" && !confirm("会用上面填的配置真实生成 1 张图,按 1 张图计费。继续?")) return;
@@ -677,19 +686,15 @@ async function vStaff() {
   };
 }
 
-// ---------- 登录 ----------
+// ---------- 登录(左右分屏,见 login.js) ----------
 function gate() {
   if ($(".gate")) return;
   clearTimeout(pollT);
-  const g = document.createElement("div"); g.className = "gate";
-  g.innerHTML = `<form class="card"><span class="logo">书</span><h2>管理端登录</h2><p class="sub">小红书流水线工作台</p>
-    <input type="password" id="gpw" placeholder="管理员密码" autocomplete="current-password" required><button class="btn lg">登录</button><p class="gerr"></p></form>`;
-  document.body.appendChild(g); $("#gpw").focus();
-  g.querySelector("form").onsubmit = async e => {
-    e.preventDefault();
-    const r = await fetch("/api/admin/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: $("#gpw").value }) });
-    if (r.ok) { g.remove(); render(); } else { g.querySelector(".gerr").textContent = (await r.json().catch(() => ({}))).detail || "登录失败"; }
-  };
+  loginScreen({ admin: true, submit: async ({ password }) => {
+    const r = await fetch("/api/admin/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "登录失败");
+    setTimeout(render);
+  } });
 }
 
 fetch("/api/admin/session").then(r => r.ok ? r.json() : Promise.reject()).then(s => s.ok ? render() : gate())

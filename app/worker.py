@@ -8,7 +8,7 @@ import time
 from itertools import combinations
 from concurrent.futures import ThreadPoolExecutor
 from . import thumbs
-from . import llm, imagegen, compliance, stats, review, mirror, lengthcap, products, cards, covers
+from . import ptype, llm, imagegen, compliance, stats, review, mirror, lengthcap, products, cards, covers
 from .db import conn, row_to_dict, get_settings
 
 _lock = threading.Lock()
@@ -104,8 +104,9 @@ def plan_and_submit(project_id: int, playbook_id: int, count: int, extra: str, w
     with conn() as c:
         pj = c.execute("SELECT account_id, account_name FROM projects WHERE id=?", (project_id,)).fetchone()
         acc = (pj["account_id"] or "", pj["account_name"] or "") if pj else ("", "")   # 任务指定了发布账号,稿子继承它
-        ids = [c.execute("INSERT INTO drafts(project_id,playbook_id,extra,with_images,status,account_id,account_name) VALUES(?,?,?,?,'queued',?,?)",
-                         (project_id, playbook_id, extra, int(with_images), *acc)).lastrowid for _ in range(count)]
+        kind = (c.execute("SELECT kind FROM playbooks WHERE id=?", (playbook_id,)).fetchone() or [""])[0] or ""   # 这张拆解卡对应的帖子类型,稿子照这个类型写
+        ids = [c.execute("INSERT INTO drafts(project_id,playbook_id,extra,with_images,status,account_id,account_name,ptype) VALUES(?,?,?,?,'queued',?,?,?)",
+                         (project_id, playbook_id, extra, int(with_images), *acc, kind)).lastrowid for _ in range(count)]
     _pool("text").submit(_plan, project_id, playbook_id, ids, extra)
     return ids
 
@@ -143,7 +144,9 @@ def _run_text(did):
         pblock = products.block(prod) + image_block(n_img)
         if prod and prod.get("forbid"):
             banned += f"\n- 作者禁用:{prod['forbid']}"
-        out = llm.write_note(project, pb["data"], refs, d["angle"], d["extra"] + pblock, kb, banned)
+        rule = ("\n\n" + ptype.RULES[pb["kind"]]) if pb.get("kind") in ptype.RULES else ""   # 按帖子类型写
+        out = llm.write_note(project, pb["data"], refs, d["angle"], d["extra"] + pblock + rule, kb, banned)
+        out = _match_ptype(project, pb, refs, d, out, pblock + rule, kb, banned)
         rt = _ref_texts(refs)
         bad = forced_pairs(project["keywords"], f"{out.get('title', '')}{out.get('content', '')}", rt)
         if bad:  # 把不相关的词写进了同一篇:带着反馈重写一次
@@ -155,7 +158,8 @@ def _run_text(did):
         _exec("UPDATE drafts SET status='error', error=? WHERE id=?", f"写文案失败:{e}", did)
         return
     out.setdefault("title", ""); out.setdefault("content", ""); out.setdefault("alt_titles", []); out.setdefault("tags", [])
-    prompts, cc = covers.plan(did, out, project["track"], prod["name"] if prod else project["track"], n_img, _safe_text)
+    idx = _one("SELECT COUNT(*) AS n FROM drafts WHERE project_id=? AND id<?", d["project_id"], did)["n"]   # 这篇是任务里的第几篇:封面版式 / 配色按它轮换
+    prompts, cc = covers.plan(did, out, project["track"], prod["name"] if prod else project["track"], n_img, _safe_text, d["project_id"] or 0, idx, bool(prod), prod)
     out["image_prompts"], out["cover_card"] = prompts, cc
     out, variant = _maybe_compress(out, pb["stats"], d["angle"], get_settings().get("auto_compress") == "1")
     out, checks = _check_and_fix(out, auto=get_settings().get("auto_fix") == "1")
@@ -164,11 +168,29 @@ def _run_text(did):
     _exec("UPDATE drafts SET title=?,alt_titles=?,content=?,tags=?,image_prompts=?,cover_card=?,checks=?,variant=?,status=?,error='',review='{}' WHERE id=?",
           out["title"], json.dumps(out["alt_titles"], ensure_ascii=False), out["content"],
           json.dumps(out["tags"], ensure_ascii=False), json.dumps(out.get("image_prompts", []), ensure_ascii=False),
-          json.dumps(out.get("cover_card") or {}, ensure_ascii=False), json.dumps(checks, ensure_ascii=False), json.dumps(variant, ensure_ascii=False), "reviewing" if auto_review else "text_done", did)
-    if auto_review:
-        _run_review(did, "text_done")
+          json.dumps(out.get("cover_card") or {}, ensure_ascii=False), json.dumps(checks, ensure_ascii=False), json.dumps(variant, ensure_ascii=False), "text_done", did)
     if d["with_images"]:
-        submit_images(did)
+        submit_images(did)   # 先排上生图(慢,30~60 秒一张),审稿只看文字,和它同时做,每篇少等一次审稿的时间
+    if auto_review:
+        _run_review(did, None)
+
+
+def _match_ptype(project, pb, refs, d, out, tail, kb, banned) -> dict:
+    """写完后给稿子判一次帖子类型:和拆解卡的类型不一致就带着反馈重写一次;结果记在 drafts.ptype_got。判类型出错不影响出稿。"""
+    kind = pb.get("kind") or ""
+    if kind not in ptype.RULES:
+        return out
+    got = ""
+    try:
+        got = ptype.check(out.get("title", ""), out.get("content", ""))
+        if got and got != kind:
+            hint = f"上一版被判成了「{got}」,但这篇要写成「{kind}」。严格按上面的帖子类型要求重写,类型特征要写足。"
+            out = llm.write_note(project, pb["data"], refs, d["angle"], f"{d['extra']} {hint}{tail}".strip(), kb, banned)
+            got = ptype.check(out.get("title", ""), out.get("content", "")) or got
+    except Exception:
+        pass
+    _exec("UPDATE drafts SET ptype_got=? WHERE id=?", got, d["id"])
+    return out
 
 
 def image_block(n: int) -> str:
@@ -287,7 +309,10 @@ def _run_review(did, prev_status):
                        get_settings().get("review_comments") == "1")
     except Exception as e:
         r = {"error": str(e)[:300]}
-    _exec("UPDATE drafts SET review=?, status=? WHERE id=?", json.dumps(r, ensure_ascii=False), prev_status, did)
+    if prev_status is None:   # 和生图同时跑:只写审稿结果,状态归生图那边管
+        _exec("UPDATE drafts SET review=? WHERE id=?", json.dumps(r, ensure_ascii=False), did)
+    else:
+        _exec("UPDATE drafts SET review=?, status=? WHERE id=?", json.dumps(r, ensure_ascii=False), prev_status, did)
 
 
 def submit_images(did: int, redo_all: bool = False):
@@ -305,7 +330,7 @@ def replan_images(did: int):
     pr = _one("SELECT product_id, track FROM projects WHERE id=?", d["project_id"])
     prod = products.get(pr["product_id"]) if pr else None
     raw = llm.inner_image_prompts(d["title"], d["content"], k, (prod or {}).get("name", ""))
-    new = covers.inner_prompts(raw, k, pr["track"] if pr else "", did, d["title"])
+    new = covers.inner_prompts(raw, k, pr["track"] if pr else "", did, d["title"], prod)
     ps = [d["image_prompts"][0], *new]
     names = list(d["images"])
     if names:
@@ -343,6 +368,7 @@ def change_cover(did: int):
     cc = d["cover_card"] or {}
     has_photo = bool(cc.get("photo")) and (imagegen.IMG_DIR / cc["photo"]).is_file()
     cc["layout"], cc["theme"] = covers.next_style(cc, has_photo)
+    cc["kind"] = covers.kind_of(cc["layout"])
     prompts, names = list(d["image_prompts"]), list(d["images"])
     if prompts:
         prompts[0] = covers.cover_line(cc)
@@ -369,7 +395,12 @@ def _run_images(did, redo_all=False):
     first_real = len(prompts) - real
     # 图片列表和提示词按位置一一对应,没生成成功的位置是空串;旧数据长度对不上就当作都还没生成
     names = [""] * len(prompts) if redo_all or len(d["images"]) != len(prompts) else list(d["images"])
-    errs = []
+    lock, errs, todo = threading.Lock(), {}, []
+
+    def save():   # 出一张显示一张(多张并行时用同一把锁,避免互相覆盖)
+        with lock:
+            _exec("UPDATE drafts SET images=?, cover_card=? WHERE id=?", json.dumps(names), json.dumps(cc, ensure_ascii=False), did)
+
     for i, p in enumerate(prompts):
         if names[i] and (imagegen.IMG_DIR / names[i]).is_file():
             continue
@@ -377,22 +408,34 @@ def _run_images(did, redo_all=False):
         if real and i >= first_real:  # 产品原图:不花钱,包装和实物完全一致
             src = ppaths[i - first_real]
             dst = imagegen.IMG_DIR / f"d{did}_{i + 1}_{int(time.time())}{src.suffix}"
-            shutil.copy2(src, dst)
+            imagegen.fit_ratio(src, dst)   # 产品原图常是手机竖拍(9:16),裁成和生图一致的比例(默认 3:4),不然同一篇里的图忽高忽矮
             names[i] = dst.name
-            _exec("UPDATE drafts SET images=? WHERE id=?", json.dumps(names), did)
+            save()
             continue
-        if i == 0 and cc.get("layout"):  # 程序排版的封面:文字不让 AI 画,需要实拍背景的版式只生成一张无字实拍图
-            try:
-                names[0] = _render_cover(did, cc, refs)
-            except Exception as e:
-                errs.append(f"第1张(封面):{e}")
-            _exec("UPDATE drafts SET images=?, cover_card=? WHERE id=?", json.dumps(names), json.dumps(cc, ensure_ascii=False), did)
-            continue
+        todo.append(i)
+
+    def draw(i):
+        p = prompts[i]
         try:
-            names[i] = imagegen.generate_image(_image_prompt(d["title"], p, bool(refs), covers.scene(pr["track"] if pr else "", did, i) if cc.get("layout") else ""), f"d{did}_{i + 1}_{int(time.time())}", **({"refs": refs} if refs else {}))
+            if i == 0 and cc.get("layout"):  # 程序排版的封面:文字不让 AI 画,需要实拍背景的版式只生成一张无字实拍图
+                nm = _render_cover(did, cc, refs)
+            else:
+                nm = imagegen.generate_image(_image_prompt(d["title"], p, bool(refs), covers.scene(pr["track"] if pr else "", did, i, prod) if cc.get("layout") else ""), f"d{did}_{i + 1}_{int(time.time())}", **({"refs": refs} if refs else {}))
+            with lock:
+                names[i] = nm
         except Exception as e:
-            errs.append(f"第{i + 1}张:{e}")
-        _exec("UPDATE drafts SET images=? WHERE id=?", json.dumps(names), did)  # 出一张显示一张
+            with lock:
+                errs[i] = e
+        save()
+
+    # 一篇里的几张图互相独立,同时生成(真正同时发出多少个请求由 imagegen.GATE 统一限制,所有生图共用)
+    if len(todo) <= 1:
+        for i in todo:
+            draw(i)
+    else:
+        with ThreadPoolExecutor(len(todo), thread_name_prefix=f"draw{did}") as ex:
+            list(ex.map(draw, todo))
+    errs = [f"第{i + 1}张{'(封面)' if i == 0 and cc.get('layout') else ''}:{e}" for i, e in sorted(errs.items())]
     if errs:
         _exec("UPDATE drafts SET status='error', error=? WHERE id=?",
               f"{len(errs)} 张图没生成成功,点「补全缺失的图」只重试这几张(已成功的不会重复扣费)。" + ";".join(errs)[:400], did)
@@ -445,6 +488,33 @@ def _tag_batch() -> bool:
     return True
 
 
+def _kind_batch() -> bool:
+    """处理一批(最多 8 篇)还没分帖子类型的笔记(商业硬文 / 产品软文 / 教程 / 测评 / 其他)。返回 True 表示还可以继续取下一批。"""
+    s = get_settings()
+    if s.get("auto_tag") != "1" or not s.get("deepseek_api_key"):
+        return False
+    with conn() as c:
+        rows = [dict(r) for r in c.execute("SELECT id,title,content FROM notes WHERE kind_status='pending' ORDER BY id LIMIT 8")]
+        if not rows:
+            return False
+        c.executemany("UPDATE notes SET kind_status='running' WHERE id=?", [(r["id"],) for r in rows])
+    try:
+        res = ptype.classify(rows)
+    except Exception as e:
+        with conn() as c:
+            c.executemany("UPDATE notes SET kind_status='error', kind_why=? WHERE id=?", [(str(e)[:120], r["id"]) for r in rows])
+        return False   # 出错(Key、余额、网络)就停,下次唤醒再试,不空转
+    with conn() as c:
+        for r in rows:
+            t = res.get(r["id"])
+            if t:
+                c.execute("UPDATE notes SET kind=?, kind_sub=?, kind_conf=?, kind_why=?, kind_rel=?, kind_status='done' WHERE id=?",
+                          (t["kind"], t["sub"], t["conf"], t["why"], int(t["related"]), r["id"]))
+            else:
+                c.execute("UPDATE notes SET kind_status='error', kind_why='模型未返回该篇结果' WHERE id=?", (r["id"],))
+    return True
+
+
 def _track_batch() -> bool:
     """给没有赛道的笔记(笔记库沉淀的、导入时没选赛道的)补赛道:从赛道列表里让模型选最合适的,都不合适记「未分类」。
     返回 True 表示还可以继续取下一批。"""
@@ -474,6 +544,8 @@ def _tagger_loop():
             while _tag_batch():
                 pass
             while _track_batch():
+                pass
+            while _kind_batch():
                 pass
         except Exception:
             time.sleep(5)

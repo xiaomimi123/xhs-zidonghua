@@ -21,6 +21,11 @@ THEMES = {
     "lemon":  {"bg": "#FFF3B0", "paper": "#FFFBE6", "ink": "#1D1B12", "sub": "#6B6447", "accent": "#1D1B12", "on": "#FFF3B0", "line": "#E9D97A"},
     "forest": {"bg": "#E7EEE4", "paper": "#F7FAF4", "ink": "#1E2B22", "sub": "#5D6E61", "accent": "#2F6B45", "on": "#FFFFFF", "line": "#C9D6C5"},
     "tomato": {"bg": "#FFE7DF", "paper": "#FFF7F3", "ink": "#2A1410", "sub": "#7D5A50", "accent": "#E2402B", "on": "#FFFFFF", "line": "#F2C8BC"},
+    "mint":   {"bg": "#DDF3EC", "paper": "#F4FCF9", "ink": "#12312B", "sub": "#4F7A70", "accent": "#0F9D82", "on": "#FFFFFF", "line": "#BFE3D9"},
+    "lilac":  {"bg": "#ECE6F8", "paper": "#F8F5FE", "ink": "#231A3D", "sub": "#6B5F8A", "accent": "#6B4FD8", "on": "#FFFFFF", "line": "#D3C9EE"},
+    "ocean":  {"bg": "#DCEBFA", "paper": "#F3F8FE", "ink": "#0F2238", "sub": "#52708F", "accent": "#1E7BD8", "on": "#FFFFFF", "line": "#BCD4EE"},
+    "sand":   {"bg": "#E9DDD0", "paper": "#F7F1E9", "ink": "#2A2018", "sub": "#7A6A5A", "accent": "#8A5A2B", "on": "#FFFFFF", "line": "#D6C7B5"},
+    "rose":   {"bg": "#FADADD", "paper": "#FFF3F4", "ink": "#3A1620", "sub": "#8A5A64", "accent": "#D6336C", "on": "#FFFFFF", "line": "#F0BFC6"},
 }
 
 
@@ -41,6 +46,13 @@ def _pts(d, n=4):
 # ---------- 版式 ----------
 def l_photo_top(d, t, img):
     fs = _fs(d["title"], 940, 2, 72, 150)
+    if d.get("variant") == 1:   # 变体:标题压在画面下方
+        return f"""<img class="full" src="{img}">
+<div style="position:absolute;left:0;right:0;bottom:0;padding:260px 70px 84px;background:linear-gradient(to top,rgba(0,0,0,.74),rgba(0,0,0,0))">
+  {f'<span class="pill" style="background:{t["accent"]};color:{t["on"]}">{_e(d["tag"])}</span>' if d.get("tag") else ""}
+  <h1 style="font:900 {fs}px/1.12 {SANS};color:#fff;margin:22px 0 0;letter-spacing:.02em">{_e(d["title"])}</h1>
+  {f'<p style="font:500 40px/1.4 {SANS};color:rgba(255,255,255,.9);margin:18px 0 0">{_e(d["sub"])}</p>' if d.get("sub") else ""}
+</div>"""
     return f"""<img class="full" src="{img}">
 <div style="position:absolute;left:0;right:0;top:0;padding:80px 70px 60px;background:rgba(0,0,0,.28)">
   {f'<span class="pill" style="background:{t["accent"]};color:{t["on"]}">{_e(d["tag"])}</span>' if d.get("tag") else ""}
@@ -116,11 +128,45 @@ def l_editorial(d, t, img):
 
 def l_sticker(d, t, img):
     fs = _fs(d["title"], 940, 2, 66, 118)
+    if d.get("variant") == 1:   # 变体:文字面板在上,贴纸挪到右下
+        return f"""<img class="full" src="{img}">
+<div style="position:absolute;left:0;right:0;top:0;background:{t['paper']};padding:64px 70px 50px">
+  <h1 style="font:900 {fs}px/1.15 {SANS};color:{t['ink']};margin:0">{_e(d["title"])}</h1>
+  {f'<p style="font:500 38px/1.4 {SANS};color:{t["sub"]};margin:16px 0 0">{_e(d["sub"])}</p>' if d.get("sub") else ""}
+</div>
+<div style="position:absolute;right:60px;bottom:90px;transform:rotate(-8deg);background:{t['accent']};color:{t['on']};font:900 52px/1 {SANS};padding:26px 36px;border-radius:999px;border:6px solid #fff">{_e(d.get("tag") or "亲测")}</div>"""
     return f"""<img class="full" src="{img}">
 <div style="position:absolute;right:60px;top:90px;transform:rotate(8deg);background:{t['accent']};color:{t['on']};font:900 52px/1 {SANS};padding:26px 36px;border-radius:999px;border:6px solid #fff">{_e(d.get("tag") or "亲测")}</div>
 <div style="position:absolute;left:0;right:0;bottom:0;background:{t['paper']};padding:50px 70px 64px">
   <h1 style="font:900 {fs}px/1.15 {SANS};color:{t['ink']};margin:0">{_e(d["title"])}</h1>
   {f'<p style="font:500 38px/1.4 {SANS};color:{t["sub"]};margin:16px 0 0">{_e(d["sub"])}</p>' if d.get("sub") else ""}
+</div>"""
+
+
+def l_photo_only(d, t, img):
+    """纯产品图封面:一整张实拍图,不排任何字(靠图本身抓眼球)。"""
+    return f"""<img class="full" src="{img}">"""
+
+
+def l_quote(d, t, img):
+    fs = _fs(d["title"], 800, 2.2, 66, 128)
+    return f"""<div style="position:absolute;inset:0;background:{t['bg']}"></div>
+<div style="position:absolute;left:70px;top:70px;font:900 380px/1 {SERIF};color:{t['accent']};opacity:.9">&ldquo;</div>
+<div style="position:absolute;left:90px;right:90px;top:500px">
+  <h1 style="font:900 {fs}px/1.22 {SERIF};color:{t['ink']};margin:0">{_e(d["title"])}</h1>
+  {f'<p style="font:400 40px/1.5 {SERIF};color:{t["sub"]};margin:26px 0 0">{_e(d["sub"])}</p>' if d.get("sub") else ""}
+  <div style="width:140px;height:10px;background:{t['accent']};margin-top:46px"></div>
+</div>
+<span style="position:absolute;left:90px;bottom:70px;font:500 30px/1 {SANS};color:{t['sub']}">{_e(d.get("brand") or "")}</span>"""
+
+
+def l_stripe(d, t, img):
+    fs = _fs(d["title"], 700, 2.3, 60, 116)
+    return f"""<div style="position:absolute;inset:0;background:{t['bg']};background-image:repeating-linear-gradient(45deg,{t['line']} 0 3px,transparent 3px 36px)"></div>
+<div style="position:absolute;left:110px;right:110px;top:400px;background:{t['paper']};padding:96px 64px 84px;transform:rotate(-3deg);box-shadow:14px 18px 0 {t['accent']}">
+  <div style="position:absolute;left:50%;top:-30px;width:200px;height:60px;margin-left:-100px;background:{t['accent']};opacity:.85;transform:rotate(2deg)"></div>
+  <h1 style="font:900 {fs}px/1.18 {SANS};color:{t['ink']};margin:0">{_e(d["title"])}</h1>
+  {f'<p style="font:500 38px/1.45 {SANS};color:{t["sub"]};margin:24px 0 0">{_e(d["sub"])}</p>' if d.get("sub") else ""}
 </div>"""
 
 
@@ -149,7 +195,7 @@ def l_polaroid(d, t, img):
     return f"""<div style="position:absolute;inset:0;background:{t['bg']};background-image:radial-gradient({t['line']} 3px,transparent 3px);background-size:44px 44px"></div>
 <div style="position:absolute;left:70px;right:70px;top:90px">
   <h1 style="font:900 {fs}px/1.15 {SANS};color:{t['ink']};margin:0">{_e(d["title"])}</h1></div>
-<div style="position:absolute;left:150px;top:470px;width:780px;background:#fff;padding:36px 36px 120px;transform:rotate(-4deg);box-shadow:0 18px 40px rgba(0,0,0,.18)">
+<div style="position:absolute;left:{150 if d.get("variant") != 1 else 130}px;top:470px;width:780px;background:#fff;padding:36px 36px 120px;transform:rotate({-4 if d.get("variant") != 1 else 4}deg);box-shadow:0 18px 40px rgba(0,0,0,.18)">
   <img style="display:block;width:100%;height:700px;object-fit:cover" src="{img}">
   <p style="position:absolute;left:0;right:0;bottom:36px;text-align:center;font:500 44px/1 {SERIF};color:#3A332B;margin:0">{_e(d.get("sub") or d.get("tag") or "")}</p>
 </div>"""
@@ -182,6 +228,9 @@ LAYOUTS = {
     "big_number": ("大数字", False, l_big_number),
     "question": ("问句封面", False, l_question),
     "swiss": ("瑞士网格", False, l_swiss),
+    "photo_only": ("纯产品图", True, l_photo_only),
+    "quote": ("引言大字", False, l_quote),
+    "stripe": ("便签纸", False, l_stripe),
 }
 
 BASE_CSS = f"""*{{box-sizing:border-box}}html,body{{margin:0;width:{W}px;height:{H}px;overflow:hidden}}

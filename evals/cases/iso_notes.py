@@ -83,6 +83,28 @@ def run(rep, env):
     finally:
         llm4.write_note = orig_w
 
+    # 自动审稿和生图并行:先排生图再审稿;审稿不改状态
+    db.save_settings({"auto_review": "1", "auto_fix": "0", "auto_compress": "0"})
+    order, orig_rv, orig_si = [], w4.review.run, w4.submit_images
+    w4.review.run = lambda *a, **k: (order.append("review"), {"overall": 81})[1]
+    w4.submit_images = lambda did, redo_all=False: (order.append("images"), db.q_exec("UPDATE drafts SET status='queued' WHERE id=?", did))[0]
+    llm4.write_note = lambda *a, **k: {**base, "title": "咖啡的三种冲法", "content": "冻干咖啡冲泡"}
+    try:
+        d3 = db.q_exec("INSERT INTO drafts(project_id,playbook_id,angle,extra,status,with_images) VALUES(?,?,?,?,'queued',1)", pid, pbid, "主题:咖啡", "").lastrowid
+        w4._run_text(d3)
+        r3 = q("SELECT status, review FROM drafts WHERE id=?", d3)[0]
+        rep.check("自动审稿和生图并行:文案一写好先排生图,再审稿", order == ["images", "review"], str(order))
+        rep.check("审稿只写审稿结果,不改状态(状态归生图管,不会把「生图中」盖回「文案已出」)", r3["review"].get("overall") == 81 and r3["status"] == "queued", str(r3))
+        order.clear()
+        d4 = db.q_exec("INSERT INTO drafts(project_id,playbook_id,angle,extra,status,with_images) VALUES(?,?,?,?,'queued',0)", pid, pbid, "主题:咖啡", "").lastrowid
+        w4._run_text(d4)
+        r4 = q("SELECT status, review FROM drafts WHERE id=?", d4)[0]
+        rep.check("不配图的稿子:只审稿,写完审完就是终态", order == ["review"] and r4["status"] == "text_done" and r4["review"].get("overall") == 81, f"{order} {r4}")
+    finally:
+        w4.review.run, w4.submit_images = orig_rv, orig_si
+        llm4.write_note = orig_w
+        db.save_settings({"auto_review": "0", "auto_fix": "0"})
+
     print("\n[笔记库备份]")
     import tempfile as _t2, zipfile as _zf
     from app import archive as ar, mirror as mr

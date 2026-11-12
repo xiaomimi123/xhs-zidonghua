@@ -14,7 +14,7 @@ def run(rep, env):
     t1_nb = all_nb["items"][0]["title"]
     rep.check("员工端笔记库:按标题搜索;每页最多 60 篇", any(i["title"] == t1_nb for i in au_nb.notebase(q=t1_nb[:6])["items"]) and len(au_nb.notebase(limit=9999)["items"]) <= 60)
     fa_nb = au_nb.notebase_facets()
-    rep.check("员工端笔记库:筛选项不含空值", set(fa_nb) == {"tracks", "topics", "types", "tiers"} and all(x["k"] for v in fa_nb.values() for x in v))
+    rep.check("员工端笔记库:筛选项不含空值", set(fa_nb) == {"tracks", "topics", "types", "tiers", "kinds"} and all(x["k"] for v in fa_nb.values() for x in v))
     # 多店铺:数据按店铺分开存;第一个店铺认领以前没分店铺的数据;任务按店铺下发和领取
     db.q_exec("DELETE FROM qf_snapshots")
     db.q_exec("DELETE FROM qf_shops")

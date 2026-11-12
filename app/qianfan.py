@@ -173,6 +173,10 @@ def ingest(body: dict) -> dict:
     """保存一份快照,并把对应的同步任务标成完成(带了 error 就标成失败)。
     account 类可以一次回传多个账号:{"kind":"account","accounts":[{account_id,name,fans,...}, ...]},每个账号各存一份快照。"""
     kind = str(body.get("kind") or "")
+    if kind == "buyers":   # 买手广场达人:进达人库(按达人去重累积),不走快照
+        return _ingest_buyers(body)
+    if kind == "buyer_contact":   # 某位达人的联系方式(员工在达人库里点了「获取联系方式」)
+        return _ingest_contact(body)
     if kind not in KINDS:
         raise ValueError(f"kind 必须是 {' / '.join(KINDS)} 之一")
     tid = int(body.get("task_id") or 0)
@@ -211,6 +215,39 @@ def ingest(body: dict) -> dict:
     if kind == "notes" and not body.get("sample"):
         start_tagging()   # 新笔记自动在后台归类,选题分析里直接能看
     return {"ok": True, "stored": n, "snapshot": snap}
+
+
+def _ingest_contact(body: dict) -> dict:
+    from . import kol
+    tid, err = int(body.get("task_id") or 0), str(body.get("error") or "").strip()
+    cid = str(body.get("creator_id") or "")
+    if not cid:
+        raise ValueError("缺少 creator_id")
+    kol.save_contact(cid, str(body.get("phone") or ""), str(body.get("wechat") or ""), err)
+    if err.startswith("风控"):   # 千帆出现风控 / 频率限制提示:立刻停止获取联系方式,排队的任务作废,等管理员确认
+        kol.pause_contact(err)
+    if tid:
+        if err:
+            q_exec("UPDATE crawl_tasks SET status='failed', error=?, finished_at=datetime('now') WHERE id=? AND type='qianfan'", err[:300], tid)
+        else:
+            q_exec("UPDATE crawl_tasks SET status='done', error='', note_count=1, finished_at=datetime('now') WHERE id=? AND type='qianfan'", tid)
+    return {"ok": True, "stored": 0 if err else 1}
+
+
+def _ingest_buyers(body: dict) -> dict:
+    from . import kol
+    tid, err = int(body.get("task_id") or 0), str(body.get("error") or "").strip()
+    if err:
+        if tid:
+            q_exec("UPDATE crawl_tasks SET status='failed', error=?, finished_at=datetime('now') WHERE id=? AND type='qianfan'", err[:300], tid)
+        return {"ok": True, "stored": 0, "error": err}
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        raise ValueError("items 不能为空")
+    r = kol.upsert(items, str(body.get("category") or body.get("scope") or ""))
+    if tid:
+        q_exec("UPDATE crawl_tasks SET status='done', error='', note_count=?, new_count=?, finished_at=datetime('now') WHERE id=? AND type='qianfan'", len(items), r["new"], tid)
+    return {"ok": True, "stored": len(items), **r}
 
 
 # ---------- 查询 ----------
@@ -542,6 +579,9 @@ def _wanted(s: dict) -> list[tuple[str, str, str, float]]:
     periods = [p.strip() for p in (s.get("qf_periods") or "7d").split(",") if p.strip()] or ["7d"]
     acc_h, hot_h = float(s.get("qf_account_hours") or 24), float(s.get("qf_hot_hours") or 12)
     out = []
+    if s.get("kol_enabled") == "1":   # 达人库:每个采集品类一个任务
+        from . import kol
+        out += [("buyers", c, "", float(s.get("kol_hours") or 72)) for c in kol.collect_cats()]
     for k in kinds:
         if k in HOT:
             out += [(k, c, p, hot_h) for c in cats for p in periods]
@@ -550,7 +590,7 @@ def _wanted(s: dict) -> list[tuple[str, str, str, float]]:
     return out
 
 
-SHOP_FREE = ("hot_topics",)   # 不分店铺的数据(平台经典话题):只下发一份,谁有登录谁做
+SHOP_FREE = ("hot_topics", "buyers")   # 不分店铺的数据(平台经典话题):只下发一份,谁有登录谁做
 
 
 def _task_params(r: dict) -> dict:
@@ -569,7 +609,13 @@ def _has_open_task(kind: str, scope: str, period: str, shop: str = "") -> bool:
 
 
 def add_task(kind: str, scope: str = "", period: str = "", shop: str = "") -> int:
-    params = json.dumps({"period": period, "category": scope, "shop": shop}, ensure_ascii=False)
+    p = {"period": period, "category": scope, "shop": shop}
+    if kind == "buyers":   # 达人采集:每个品类最多翻几页
+        try:
+            p["pages"] = max(1, min(int(get_settings().get("kol_pages") or 30), 100))
+        except ValueError:
+            p["pages"] = 30
+    params = json.dumps(p, ensure_ascii=False)
     return q_exec("INSERT INTO crawl_tasks(project_id,type,query,lim,purpose,label,params) VALUES(NULL,'qianfan',?,0,'qianfan',?,?)", kind, scope, params).lastrowid
 
 
@@ -588,7 +634,9 @@ def schedule(force: bool = False, kinds: list[str] | None = None) -> int:
             if _has_open_task(kind, scope, period, shop):
                 continue
             if not force:
-                if kind in SHOP_FREE:   # 不分店铺的数据,快照存在哪个店铺名下都算(谁的采集端做的就记在谁名下)
+                if kind == "buyers":   # 达人库不存快照:看最近一次成功的任务
+                    snap = q_one("SELECT finished_at AS snap_at FROM crawl_tasks WHERE type='qianfan' AND query='buyers' AND label=? AND status='done' ORDER BY id DESC LIMIT 1", scope)
+                elif kind in SHOP_FREE:   # 不分店铺的数据,快照存在哪个店铺名下都算(谁的采集端做的就记在谁名下)
                     snap = q_one("SELECT snap_at FROM qf_snapshots WHERE kind=? AND scope=? AND period=? ORDER BY id DESC LIMIT 1", kind, scope, period)
                 else:
                     snap = q_one("SELECT snap_at FROM qf_snapshots WHERE kind=? AND scope=? AND period=? AND shop_id=? ORDER BY id DESC LIMIT 1", kind, scope, period, shop)

@@ -127,8 +127,10 @@ def run(rep):
     print("\n[选题与封面]")
     from app import worker as w2, llm as llm2
     import random as _rd2, shutil as _sh2, tempfile as _tf2
+    from pathlib import Path as _Path
+    from app import db
     from app import covers as cv2, cards as cd2
-    rep.check("封面:12 种版式、6 套配色,实拍/纯文字各 6 种", len(cd2.LAYOUTS) == 12 and len(cd2.THEMES) == 6 and set(cv2.TEXT_LAYOUTS + cv2.PHOTO_LAYOUTS) == set(cd2.LAYOUTS)
+    rep.check("封面:15 种版式(实拍加字 6 种、纯文字 8 种、纯产品图 1 种)、11 套配色", len(cd2.LAYOUTS) == 15 and len(cd2.THEMES) == 11 and set(cv2.TEXT_LAYOUTS + cv2.PHOTO_LAYOUTS + [cv2.PHOTO_ONLY]) == set(cd2.LAYOUTS)
               and all(cd2.LAYOUTS[k][1] for k in cv2.PHOTO_LAYOUTS) and not any(cd2.LAYOUTS[k][1] for k in cv2.TEXT_LAYOUTS))
     for k in cd2.LAYOUTS:  # 每种版式都能生成页面;需要实拍图的没给图时报错
         try:
@@ -149,11 +151,103 @@ def run(rep):
     rep.check("封面文字:限制长度,要点最多 4 条,数字取数字,画面描述里的文字去掉", len(cc2["title"]) <= 16 and len(cc2["points"]) == 4 and cc2["num"] == "3" and len(cc2["unit"]) <= 6 and "错字" not in cc2["scene"], str(cc2))
     cc3 = cv2.clean_cover({}, {"title": "腐乳的3种吃法", "content": "① 配粥:四分之一块\n② 拌面,加汤汁\n③ 炒空心菜\n结尾提问"})
     rep.check("封面文字:模型没给时,用标题和正文补(数字、要点)", cc3["title"] == "腐乳的3种吃法" and cc3["num"] == "3" and cc3["points"] == ["配粥", "拌面", "炒空心菜"], str(cc3))
-    lay = lambda c, t="": cv2.choose(1, c, t)[0]
-    rep.check("版式按内容挑:有要点用清单类,有数字用大数字,问句用问句封面", cv2.choose(0, {"points": ["a", "b", "c"]})[0] == "checklist"
-              and "big_number" in [cv2.choose(i, {"num": "3", "points": []})[0] for i in range(5)] and "question" in [cv2.choose(i, {"title": "腐乳养胃吗"})[0] for i in range(5)])
-    rep.check("版式轮换:相邻的稿子版式不同", len({cv2.choose(i, {"title": "普通标题", "points": []})[0] for i in range(5)}) == 5)
-    rep.check("换封面:换成和现在不同的版式,没有实拍图时只用纯文字版式", all(cv2.next_style({"layout": "statement", "theme": "cream", "points": []}, False, _rd2.Random(i))[0] in ("question",) for i in range(20))
+    plain = {"title": "普通标题", "points": []}
+    ten = [cv2.choose(1000 + i, plain, "", 7, i) for i in range(10)]
+    rep.check("版式按批次轮换:10 篇里相邻不同、至少 7 种版式、图版式和字版式各一半", all(ten[i][0] != ten[i + 1][0] for i in range(9)) and len({x[0] for x in ten}) >= 7
+              and sum(x[0] in cv2.PHOTO_LAYOUTS for x in ten) == 5, str([x[0] for x in ten]))
+    rep.check("配色按批次轮换:10 篇里相邻不同、至少 8 种", all(ten[i][1] != ten[i + 1][1] for i in range(9)) and len({x[1] for x in ten}) >= 8 and len(cv2.THEME_KEYS) >= 10, str([x[1] for x in ten]))
+    rep.check("不同任务的轮换顺序不一样(不是所有任务都从同一个版式开始)", len({cv2.choose(1, plain, "", pid, 0)[0] for pid in range(1, 12)}) >= 3)
+    pts = {"title": "x", "points": ["a", "b", "c"], "num": "3"}
+    ten2 = [cv2.choose(2000 + i, pts, "", 3, i)[0] for i in range(14)]
+    rep.check("封面信息够时清单类和大数字也会轮到;不够时不会出(没要点不出清单类,没数字不出大数字)", {"checklist", "memo", "big_number"} & set(ten2) and
+              all(x not in ("checklist", "memo", "swiss", "big_number") for x in [cv2.choose(i, plain, "", 3, i)[0] for i in range(14)]), str(ten2))
+    rep.check("选出来的版式都满足封面信息的要求", all(cv2.choose(i, c, "", p, i)[0] in cv2.compatible(c, True) for c in (plain, pts, {"title": "腐乳怎么吃", "points": ["a", "b"]}) for p in (1, 2, 3) for i in range(12)))
+    vs = [cv2.plan(5000 + i, {"title": "标题", "content": "", "cover": {"title": "标题"}, "image_prompts": []}, "美食", "品牌", 2, pid=4, idx=i)[1] for i in range(8)]
+    rep.check("版式变体:同批里变体 0 / 1 都有,变体 1 的封面能渲染(标题在下 / 面板在上 / 拍立得反向)", {c["variant"] for c in vs} == {0, 1}
+              and all("</div>" in cv2.cards.build_html(lay, "cream", {**vs[0], "variant": 1}, "x.png") for lay in ("photo_top", "sticker", "polaroid")))
+    # 生图全局闸门:同时发出的请求数不超过设置(复刻配图和 Live 场景图共用)
+    import threading as _thr, time as _tm2
+    from app import imagegen as _ig2
+    inflight, peak, lock2 = [0], [0], _thr.Lock()
+    def fake_once(prompt, name, s=None, refs=None):
+        with lock2:
+            inflight[0] += 1; peak[0] = max(peak[0], inflight[0])
+        _tm2.sleep(0.12)
+        with lock2:
+            inflight[0] -= 1
+        return name
+    o_once, o_get = _ig2._generate_once, _ig2.get_settings
+    _ig2._generate_once, _ig2.get_settings = fake_once, lambda: {"image_api_concurrency": "3"}
+    try:
+        ths = [_thr.Thread(target=_ig2.generate_image, args=("p", f"n{i}")) for i in range(10)]
+        t_a = _tm2.time(); [x.start() for x in ths]; [x.join() for x in ths]; el2 = _tm2.time() - t_a
+    finally:
+        _ig2._generate_once, _ig2.get_settings = o_once, o_get
+    rep.check("生图全局闸门:10 个并发请求最多同时 3 个在途,且确实用满了 3 个", peak[0] == 3 and el2 < 0.12 * 10, f"峰值 {peak[0]} 耗时 {el2:.2f}")
+    # 429 退避:按服务商 Retry-After 等,带抖动;等待期间不占名额
+    class _R:
+        status_code = 429; headers = {"retry-after": "7"}
+        def json(self): return {"error": {"message": "slow down"}}
+        text = ""
+    e429 = _ig2._explain(_R())
+    rep.check("429:读出服务商要求的等待秒数(Retry-After),最多 60 秒", isinstance(e429, _ig2.Transient) and e429.retry_after == 7)
+    waits, tries = [], [0]
+    def flaky(prompt, name, s=None, refs=None):
+        tries[0] += 1
+        if tries[0] < 3:
+            ex = _ig2.Transient("限流"); ex.retry_after = 9; raise ex
+        return "ok.png"
+    o_once2, o_sleep, o_rw = _ig2._generate_once, _ig2.time.sleep, _ig2.RETRY_WAITS
+    _ig2._generate_once, _ig2.time.sleep, _ig2.RETRY_WAITS = flaky, waits.append, (0, 4, 10, 25)
+    try:
+        got = _ig2.generate_image("p", "x")
+    finally:
+        _ig2._generate_once, _ig2.time.sleep, _ig2.RETRY_WAITS = o_once2, o_sleep, o_rw
+    rep.check("限流自动退避重试:第 3 次成功;等待时间不短于服务商要求的 9 秒,闸门名额已还回", got == "ok.png" and tries[0] == 3 and len(waits) == 2 and all(w >= 9 for w in waits) and _ig2.GATE.n == 0, f"{waits} {_ig2.GATE.n}")
+    rep.check("单张生图最多等 4 分钟,重试 4 次", _ig2.POLL_MAX == 240 and len(_ig2.RETRY_WAITS) == 4)
+    from PIL import Image as _Img
+    from app import imagegen as _ig
+    _d = _Path(_tf2.mkdtemp())
+    for nm, size in (("tall", (900, 1600)), ("wide", (1600, 900)), ("ok", (900, 1200))):
+        _Img.new("RGB", size, (200, 120, 80)).save(_d / f"{nm}.png")
+        _ig.fit_ratio(_d / f"{nm}.png", _d / f"{nm}_o.png", 0.75)
+    sz = {nm: _Img.open(_d / f"{nm}_o.png").size for nm in ("tall", "wide", "ok")}
+    rep.check("产品原图裁成 3:4:竖拍 9:16 裁上下、横图裁左右、已经是 3:4 的原样", sz["tall"] == (900, 1200) and abs(sz["wide"][0] / sz["wide"][1] - 0.75) < 0.01 and sz["ok"] == (900, 1200), str(sz))
+    rep.check("生图比例解析:3:4 / 9:16 / 像素 / 认不出来按 3:4", _ig.target_ratio("3:4") == 0.75 and abs(_ig.target_ratio("9:16") - 0.5625) < 1e-6 and abs(_ig.target_ratio("1024x1536") - 2 / 3) < 1e-6 and _ig.target_ratio("auto") == 0.75)
+    rep.check("生图比例默认是小红书的 3:4", db.DEFAULT_SETTINGS["image_size"] == "3:4")
+    # 场景和产品匹配:咖啡不放在灶台炒锅边,零食不放厨房烹饪场景,两用的不放灶台;产品资料里写的场景优先
+    coffee = {"name": "冻干咖啡", "category": "冻干咖啡", "profile": {"scenes": ["居家下午茶", "自制咖啡角", "早餐搭配", "办公提神"]}}
+    cinn = {"name": "肉桂粉", "category": "肉桂粉", "profile": {"scenes": ["制作锡兰肉桂拿铁", "烘焙甜点调味", "冲泡热饮", "烹饪肉类菜肴"]}}
+    brn = {"name": "布朗尼可可坚果脆", "category": "布朗尼饼干", "profile": {"scenes": ["办公桌面下午茶", "追剧休闲零食"]}}
+    fur = {"name": "豆腐乳", "category": "腐乳", "profile": {"scenes": ["早餐佐餐", "米饭拌饭", "配粥下饭"]}}
+    oil = {"name": "花生油", "category": "食用油", "profile": {"scenes": ["厨房烹饪"]}}
+    allsc = lambda pr: {cv2.scene("美食", d, i, pr) for d in range(30) for i in range(1, 5)}
+    bad = ("灶台", "锅", "油渍")
+    rep.check("产品类型:冲泡饮品 / 零食 / 两用 / 烹饪调味 / 一般食品", [cv2.product_kind(x) for x in (coffee, brn, cinn, oil, fur, None)] == ["drink", "snack", "mixed", "cook", "food", "food"],
+              str([cv2.product_kind(x) for x in (coffee, brn, cinn, oil, fur, None)]))
+    rep.check("场景匹配:咖啡 / 零食 / 肉桂粉(两用) / 腐乳 / 不知道产品的,都不会出现灶台和锅", all(not any(b in sc for b in bad) for x in (coffee, brn, cinn, fur, None) for sc in allsc(x)))
+    rep.check("场景匹配:只有烹饪调味类产品才会出现灶台", any("灶台" in sc for sc in allsc(oil)) and not any("灶台" in sc for sc in allsc(coffee)))
+    rep.check("产品资料里写的场景优先:办公提神 → 办公场景、早餐搭配 → 早餐桌,同一篇每张换场景", any("办公" in sc for sc in allsc(coffee)) and any("早餐" in sc for sc in allsc(coffee))
+              and len({cv2.scene("美食", 9, k, coffee) for k in range(1, 4)}) == 3)
+    rep.check("非美食赛道不受影响;没传产品时和以前一样可用", cv2.scene("穿搭", 3, 1, coffee) in cv2.GENERIC_SCENES and cv2.scene("美食", 3, 1) in cv2.FOOD_SCENES)
+    rep.check("补齐的内页提示词也按产品挑场景(不会是灶台)", all("灶台" not in p for d in range(20) for p in cv2.inner_prompts([], 3, "美食", d, "咖啡", coffee)))
+    from app import products as _pd
+    rep.check("写作时告诉模型:饮品不放灶台炒锅,只有烹饪调味类才出现厨房灶台", "不要放在灶台" in _pd.block({"name": "咖啡", "profile": {}}) and "烹饪调味类产品才出现厨房灶台" in _pd.block({"name": "咖啡", "profile": {}}))
+    # 纯产品图封面(第 2 类封面):任务有产品时和另外两类轮着来
+    twelve = [cv2.choose(3000 + i, plain, "", 5, i, True)[0] for i in range(12)]
+    kinds12 = [cv2.kind_of(x) for x in twelve]
+    rep.check("有产品:三类封面(实拍加字 / 纯文字 / 纯产品图)轮着来,相邻类型不同,每类约 1/3", set(kinds12) == {"photo_text", "html", "photo"} and all(kinds12[i] != kinds12[i + 1] for i in range(11))
+              and kinds12.count("photo") == 4, str(kinds12))
+    rep.check("没有产品:不出纯产品图,和以前一样图 / 字交替", "photo_only" not in [cv2.choose(3000 + i, plain, "", 5, i)[0] for i in range(12)] and "photo_only" not in cv2.compatible(plain, True)
+              and "photo_only" in cv2.compatible(plain, True, True) and "photo_only" not in cv2.compatible(plain, False, True))
+    rep.check("封面类型:纯产品图 / 实拍加字 / 纯文字", cv2.kind_of("photo_only") == "photo" and cv2.kind_of("split_top") == "photo_text" and cv2.kind_of("quote") == "html" and cv2.kind_of("question") == "html")
+    ppl, pcc = cv2.plan(6000, {"title": "白粥配腐乳", "content": "", "cover": {"title": "白粥配腐乳", "sub": "早餐"}, "image_prompts": []}, "美食", "国圣", 2, pid=5, idx=2, has_product=True)
+    cc_photo = {**pcc, "layout": "photo_only", "kind": "photo"}
+    rep.check("纯产品图封面:记下类型,封面说明里没有字(过图上文字扫描也没有),渲染出来只有一张图", pcc["kind"] == cv2.kind_of(pcc["layout"]) and pcc["product"] is True
+              and "文字" not in cv2.cover_line(cc_photo) and not compliance.image_texts([cv2.cover_line(cc_photo)]) and "<h1" not in cv2.cards.build_html("photo_only", "cream", cc_photo, "x.png") and "x.png" in cv2.cards.build_html("photo_only", "cream", cc_photo, "x.png"))
+    rep.check("换封面:有产品又有现成实拍图时能换到纯产品图;没有产品时不会", "photo_only" in {cv2.next_style({"layout": "statement", "theme": "cream", "points": [], "product": True}, True, _rd2.Random(i))[0] for i in range(60)}
+              and "photo_only" not in {cv2.next_style({"layout": "statement", "theme": "cream", "points": []}, True, _rd2.Random(i))[0] for i in range(60)})
+    rep.check("换封面:换成和现在不同的版式,没有实拍图时只用纯文字版式", all(cv2.next_style({"layout": "statement", "theme": "cream", "points": []}, False, _rd2.Random(i))[0] in ("quote", "stripe") for i in range(20))
               and cv2.next_style({"layout": "statement", "theme": "cream", "points": ["a", "b", "c"], "num": "3"}, True, _rd2.Random(1))[0] != "statement")
     pl2, pc2 = cv2.plan(5, {"title": "腐乳怎么吃", "content": "", "cover": {"title": "腐乳怎么吃", "sub": "三种"}, "image_prompts": ["桌面上的腐乳罐,画面中不要出现任何文字", "手持腐乳,大字「不该有」"]}, "美食", "国圣", 4)
     rep.check("图片规划:共 n 条,第 1 条是封面说明(带封面文字),内页无字、不够的补齐", len(pl2) == 4 and pl2[0].startswith("封面·") and compliance.image_texts(pl2[:1]) and not compliance.image_texts(pl2[1:]) and all("不要出现任何文字" in p for p in pl2[1:]), str(pl2))

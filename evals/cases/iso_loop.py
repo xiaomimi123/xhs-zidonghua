@@ -58,6 +58,14 @@ def run(rep, env):
     fun = {f["key"]: f["n"] for f in ov["funnel"]}
     rep.check("复盘漏斗:已发布 / 数据回流 / 爆款", fun["data"] >= 5 and fun["winner"] >= 2 and fun["published"] >= fun["data"], str(ov["funnel"]))
     rep.check("复盘:按主题汇总爆款率", any(x["name"] == "黄金奶做法" and x["winners"] >= 2 for x in ov["by_topic"]), str(ov["by_topic"]))
+    db.q_exec("UPDATE drafts SET cover_card=? WHERE id=?", json.dumps({"layout": "photo_only", "kind": "photo"}), d_win)
+    db.q_exec("UPDATE drafts SET cover_card=? WHERE id=?", json.dumps({"layout": "split_top"}), d_win2)   # 老稿没记 kind:按版式推出来
+    db.q_exec("UPDATE drafts SET cover_card=? WHERE id=?", json.dumps({"layout": "quote", "kind": "html"}), d_good)
+    ev_c = {r["id"]: r for r in loop.evaluate(register=False)["rows"]}
+    ov_c = loop.overview()
+    rep.check("复盘:每篇稿子带封面类型(新稿记的 / 老稿按版式推)", ev_c[d_win]["cover_kind"] == "photo" and ev_c[d_win2]["cover_kind"] == "photo_text" and ev_c[d_good]["cover_kind"] == "html"
+              and ev_c[d_weak]["cover_name"] == "(旧稿没记录)", str({k: ev_c[k]["cover_kind"] for k in (d_win, d_win2, d_good, d_weak)}))
+    rep.check("复盘:按封面类型统计爆款率", {x["name"] for x in ov_c["by_cover"]} >= {"纯产品图", "实拍图 + 排字"} and next(x for x in ov_c["by_cover"] if x["name"] == "纯产品图")["winners"] == 1, str(ov_c["by_cover"]))
     rep.check("复盘:继续复刻对比有两组", set(ov["spawn_effect"]) == {"original", "spawned"} and ov["spawn_effect"]["original"]["winners"] >= 2)
 
     # 继续复刻:新项目 + 样本进笔记库 + 拆解卡 + 流水线从「拆解」阶段开始

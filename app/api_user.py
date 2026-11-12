@@ -11,12 +11,13 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from . import llm, worker, exporter, imagegen, compliance, mirror, lengthcap, autorun, products, qianfan, loop, thumbs
+from . import llm, worker, exporter, imagegen, compliance, mirror, lengthcap, autorun, products, qianfan, loop, thumbs, ptype
 from .auth import (require_user, user_ok, is_admin, check_pw, hash_pw, make_token, make_staff_token, current_staff, staff_mode, login_required,
                    throttle, CURRENT, SESSION_DAYS)
 from .api_collector import collector_summary
 from .notes import annotate, localize
 from .db import get_settings, q_all, q_one, q_exec, conn, tier_sql
+from .scope import check as own, my_id, owner_sql, visible
 
 public = APIRouter(prefix="/api")
 router = APIRouter(dependencies=[Depends(require_user)])
@@ -77,6 +78,32 @@ def logout(response: Response):
     return {"ok": True}
 
 
+class MyPw(BaseModel):
+    old: str
+    new: str
+
+
+@router.post("/api/me/password")
+def change_my_password(d: MyPw, request: Request, response: Response):
+    """员工改自己的密码:要输对原密码;改完其他设备上的登录全部失效,当前这台换新会话继续用。"""
+    st = current_staff(request)
+    if not st:
+        raise HTTPException(400, "只有员工账号可以在这里改密码")
+    throttle(request, None)
+    row = q_one("SELECT * FROM staff WHERE id=?", st["id"])
+    ok = check_pw(d.old, row["password_hash"])
+    throttle(request, ok)
+    if not ok:
+        raise HTTPException(400, "原密码不正确")
+    if len(d.new) < 6:
+        raise HTTPException(400, "新密码至少 6 位")
+    if d.new == d.old:
+        raise HTTPException(400, "新密码不能和原密码一样")
+    q_exec("UPDATE staff SET password_hash=?, token_ver=token_ver+1 WHERE id=?", hash_pw(d.new), st["id"])
+    response.set_cookie("usr", make_staff_token(q_one("SELECT * FROM staff WHERE id=?", st["id"])), max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax")
+    return {"ok": True}
+
+
 # ---------- 赛道(只读,由管理端维护) ----------
 @router.get("/api/tracks")
 def tracks():
@@ -110,7 +137,7 @@ def list_projects():
         (SELECT COUNT(*) FROM drafts WHERE project_id=p.id) AS draft_count,
         (SELECT status FROM autoruns WHERE project_id=p.id) AS auto_status,
         (SELECT COUNT(*) FROM crawl_tasks WHERE project_id=p.id AND status IN ('pending','running')) AS crawling
-        FROM projects p ORDER BY id DESC""")
+        FROM projects p WHERE 1=1""" + owner_sql()[0] + " ORDER BY id DESC", *owner_sql()[1])
 
 
 def _pick_account(account_id: str) -> tuple[str, str]:
@@ -138,8 +165,8 @@ def _new_project(track: str, kws: list[str], direction: str, with_tasks: bool = 
     pref, style = _account_pref(account, angles or [])
     with conn() as c:
         who = (CURRENT.get() or {}).get("username", "")
-        pid = c.execute("INSERT INTO projects(track,keywords,direction,account_id,account_name,angle_pref,account_style,created_by) VALUES(?,?,?,?,?,?,?,?)",
-                        (track, json.dumps(kws, ensure_ascii=False), direction, *account, pref, style, who)).lastrowid
+        pid = c.execute("INSERT INTO projects(track,keywords,direction,account_id,account_name,angle_pref,account_style,created_by,owner_id) VALUES(?,?,?,?,?,?,?,?,?)",
+                        (track, json.dumps(kws, ensure_ascii=False), direction, *account, pref, style, who, my_id())).lastrowid
         for k in kws if with_tasks else []:
             c.execute("INSERT INTO crawl_tasks(project_id,type,query,lim,max_age_days,note_type,sort) VALUES(?,?,?,?,?,?,?)",
                       (pid, "keyword", k, lim, *task_opts()))
@@ -172,6 +199,7 @@ class AutoIn(BaseModel):
     product: ProductIn | None = None
     account_id: str = ""   # 这批稿子打算发到哪个账号(千帆账号),可不选
     angles: list[str] = []   # 选题角度偏好(固定的 9 类之一),通常是页面按账号数据推荐、用户确认过的
+    mix: dict[str, int] = {}   # 帖子类型比例 {"产品软文": 6, "测评": 4};不填就按默认(有产品:软文+测评)
 
 
 @router.post("/api/auto")
@@ -196,9 +224,10 @@ def auto_start(a: AutoIn):
             except ValueError as e:
                 raise HTTPException(400, str(e))
         pref, style = _account_pref(acc, a.angles)
-        pid = q_exec("INSERT INTO projects(track,keywords,direction,product_id,account_id,account_name,angle_pref,account_style) VALUES(?,?,?,?,?,?,?,?)",
-                     track, json.dumps(split_keywords(a.keywords), ensure_ascii=False), a.direction.strip()[:500], ppid, *acc, pref, style).lastrowid
-        autorun.new_run(pid, count, "profiling")
+        pid = q_exec("INSERT INTO projects(track,keywords,direction,product_id,account_id,account_name,angle_pref,account_style,created_by,owner_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                     track, json.dumps(split_keywords(a.keywords), ensure_ascii=False), a.direction.strip()[:500], ppid, *acc, pref, style,
+                     (CURRENT.get() or {}).get("username", ""), my_id()).lastrowid
+        autorun.new_run(pid, count, "profiling", mix=ptype.parse_mix(a.mix))
         return {"id": pid, "keywords": [], "count": count, "product_id": ppid}
     if not track:
         raise HTTPException(400, "请先选择赛道")
@@ -213,7 +242,7 @@ def auto_start(a: AutoIn):
         raise HTTPException(400, "这个赛道没有预设关键词,请至少填写一个")
     pid = _new_project(track, kws, a.direction.strip()[:500], with_tasks=False, account=acc, angles=a.angles)
     src = autorun.source(pid, kws, s)  # 笔记库优先:够了就不采集
-    autorun.new_run(pid, count, "collecting", autorun.source_msg(src), library=src["library"])
+    autorun.new_run(pid, count, "collecting", autorun.source_msg(src), library=src["library"], mix=ptype.parse_mix(a.mix))
     return {"id": pid, "keywords": kws, "count": count, "library": src["library"], "collect": src["collect"]}
 
 
@@ -308,12 +337,14 @@ def list_runs(limit: int = 100, offset: int = 0):
     """最近的任务,从 offset 起取 limit 个(默认 100,最多 500)。任务页按页取,不一次取全部。"""
     limit = min(max(int(limit or 100), 1), 500)
     offset = max(int(offset or 0), 0)
-    return _runs_info(q_all("SELECT p.* FROM projects p JOIN autoruns a ON a.project_id=p.id ORDER BY a.id DESC LIMIT ? OFFSET ?", limit, offset))
+    w, a = owner_sql()
+    return _runs_info(q_all("SELECT p.* FROM projects p JOIN autoruns a ON a.project_id=p.id WHERE 1=1" + w + " ORDER BY a.id DESC LIMIT ? OFFSET ?", *a, limit, offset))
 
 
 @router.get("/api/runs/count")
 def runs_count():
-    return {"total": q_one("SELECT COUNT(*) c FROM autoruns")["c"]}
+    w, a = owner_sql()
+    return {"total": q_one("SELECT COUNT(*) c FROM autoruns x JOIN projects p ON p.id=x.project_id WHERE 1=1" + w, *a)["c"]}
 
 
 @router.post("/api/runs/{pid}/rerun")
@@ -344,8 +375,10 @@ _LIB_HEAVY = ("alt_titles", "content", "tags", "auto_note", "perf")
 
 
 def _library(pid: int = 0, did: int = 0, brief: bool = False) -> list[dict]:
-    where = " AND d.project_id=?" if pid else ""
-    args = [pid] if pid else []
+    where, args = owner_sql()
+    if pid:
+        own("project", pid)
+        where += " AND d.project_id=?"; args.append(pid)
     if did:
         where += " AND d.id=?"; args.append(did)
     rows = q_all("SELECT d.*, p.track, p.keywords, p.product_id FROM drafts d JOIN projects p ON p.id=d.project_id "
@@ -362,7 +395,7 @@ def _library(pid: int = 0, did: int = 0, brief: bool = False) -> list[dict]:
              "published": bool(d["published"]), "published_at": (d["published_at"] or "")[:10], "linked": bool(d["qf_note_id"]), "grade": (d["review"] or {}).get("grade"), "score": (d["review"] or {}).get("overall"),
              "high": (d["checks"] or {}).get("high", 0), "holes": len((d["checks"] or {}).get("placeholders") or []),
              "status": d["status"], "can_cover": bool((d["cover_card"] or {}).get("layout")),
-             "account_id": d["account_id"] or "", "account_name": d["account_name"] or "",
+             "account_id": d["account_id"] or "", "account_name": d["account_name"] or "", "ptype": d["ptype"] or "", "ptype_got": d["ptype_got"] or "",
              "tier": (tiers.get(d["id"]) or {}).get("tier", ""), "lift": (tiers.get(d["id"]) or {}).get("lift"),
              "perf": {k: perf[d["id"]].get(k) for k in perf_keys if perf[d["id"]].get(k) not in (None, "")} if d["id"] in perf else None} for d in rows]
     if brief:
@@ -403,14 +436,14 @@ def set_draft_account(did: int, p: AccountIn):
 
 # ---------- 笔记库(员工端只读):采集到的笔记,按赛道 / 主题 / 内容类型 / 分级找参考 ----------
 NB_FIELDS = ("id", "title", "content", "author", "likes", "collects", "comments", "published_at", "cover", "images", "tags", "track", "topic",
-             "ai_type", "ai_highlight", "ai_audience", "ai_tags", "tier", "note_type", "url", "rel", "old", "dup_of")
+             "ai_type", "ai_highlight", "ai_audience", "ai_tags", "tier", "note_type", "url", "rel", "old", "dup_of", "kind", "kind_sub", "kind_why", "kind_rel")
 
 
 @router.get("/api/notebase")
-def notebase(track: str = "", topic: str = "", ai_type: str = "", tier: str = "", q: str = "", sort: str = "new", offset: int = 0, limit: int = 36):
+def notebase(track: str = "", topic: str = "", ai_type: str = "", tier: str = "", q: str = "", sort: str = "new", offset: int = 0, limit: int = 36, kind: str = "", kind_sub: str = ""):
     """员工端笔记库:和管理端同一份笔记,只给看笔记需要的字段(不含原始数据、采集端信息、AI 状态)。"""
     from .api_admin import all_notes
-    r = all_notes(track=track, topic=topic, ai_type=ai_type, tier=tier, q=q.strip()[:60], sort=sort, offset=offset, limit=min(max(limit, 1), 60))
+    r = all_notes(track=track, topic=topic, ai_type=ai_type, tier=tier, q=q.strip()[:60], sort=sort, offset=offset, limit=min(max(limit, 1), 60), kind=kind, kind_sub=kind_sub)
     return {"total": r["total"], "items": [{k: n.get(k) for k in NB_FIELDS} for n in r["items"]]}
 
 
@@ -418,7 +451,7 @@ def notebase(track: str = "", topic: str = "", ai_type: str = "", tier: str = ""
 def notebase_facets(track: str = ""):
     from .api_admin import note_facets
     f = note_facets(track)
-    return {k: [x for x in f[k] if x["k"]] for k in ("tracks", "topics", "types", "tiers")}
+    return {k: [x for x in f[k] if x["k"]] for k in ("tracks", "topics", "types", "tiers", "kinds")}
 
 
 class PubIn(BaseModel):
@@ -482,6 +515,15 @@ def edit_project(pid: int, e: ProjectEdit):
     _one("SELECT id FROM projects WHERE id=?", pid)
     q_exec("UPDATE projects SET keywords=?, direction=? WHERE id=?", json.dumps(kws, ensure_ascii=False), e.direction.strip()[:500], pid)
     return {"ok": True, "keywords": kws}
+
+
+@router.delete("/api/runs/{pid}")
+def delete_run(pid: int):
+    """任务页的「删除」:连同这个任务的采集任务、拆解卡、稿子(成品)一起删,笔记库里的笔记保留。还在跑的任务要先取消。"""
+    run = _one("SELECT status FROM autoruns WHERE project_id=?", pid)
+    if run["status"] in autorun.ACTIVE:
+        raise HTTPException(409, "任务还在进行中,先取消再删除")
+    return del_project(pid)
 
 
 @router.delete("/api/projects/{pid}")
@@ -713,9 +755,10 @@ def publish_batch(p: PublishBatch):
         raise HTTPException(400, "发布日期格式不对,应为 YYYY-MM-DD")
     day = day or time.strftime("%Y-%m-%d")
     with conn() as c:
-        for i in p.ids[:200]:
+        ids = visible("draft", p.ids[:200])
+        for i in ids:
             c.execute("UPDATE drafts SET published=?, published_at=? WHERE id=?", (int(p.on), day if p.on else "", i))
-    return {"ok": True, "n": len(p.ids[:200])}
+    return {"ok": True, "n": len(ids)}
 
 
 @router.get("/api/loop/notes")
@@ -723,6 +766,8 @@ def loop_notes(draft_id: int = 0, q: str = ""):
     """手动对号时的候选:千帆里还没对上任何稿子的笔记。给了 draft_id 时,同账号的、标题更像的排前面。"""
     items, _ = qianfan.notes_all()
     taken = {str(v.get("note_id")) for v in qianfan.match_drafts(items).values()}
+    if draft_id:
+        own("draft", draft_id)
     d = q_one("SELECT title, account_id FROM drafts WHERE id=?", draft_id) if draft_id else None
     key = qianfan._norm_title(q)
     gd = qianfan._grams(qianfan._norm_title(d["title"])) if d else set()
@@ -765,9 +810,18 @@ def link_note(did: int, p: LinkIn):
 
 
 # ---------- 爆款回流:复盘 + 继续复刻 ----------
+def _my_eval() -> dict:
+    """复盘只算自己的稿子(管理员看全部)。"""
+    ev = loop.evaluate()
+    sid = my_id()
+    if sid is not None:
+        ev["rows"] = [r for r in ev["rows"] if r.get("owner_id") == sid]
+    return ev
+
+
 @router.get("/api/loop/overview")
 def loop_overview():
-    return loop.overview()
+    return loop.overview(_my_eval())
 
 
 _TIER_ORDER = {"winner": 0, "good": 1, "normal": 2, "weak": 3, "observing": 4, "nodata": 5, "unpublished": 6}
@@ -781,7 +835,7 @@ def _loop_rows(ev: dict, tier: str = "", account_id: str = "") -> list[dict]:
 
 @router.get("/api/loop/drafts")
 def loop_drafts(tier: str = "", account_id: str = ""):
-    ev = loop.evaluate()
+    ev = _my_eval()
     return {"items": _loop_rows(ev, tier, account_id), "cfg": ev["cfg"], "data_at": ev["data_at"]}
 
 
@@ -789,7 +843,7 @@ def loop_drafts(tier: str = "", account_id: str = ""):
 def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1, size: int = 20, wins: int = 12):
     """复盘页一次取齐:只算一次对号,各个列表按页切(原来要请求 5 次,每次都重算,稿子多了很慢)。"""
     size = min(max(size, 1), 100)
-    ev = loop.evaluate()
+    ev = _my_eval()
     rows = _loop_rows(ev, tier)
     regs = _loop_rows(ev, "unpublished" if reg == "todo" else "nodata")
     page = min(max(page, 1), max(1, -(-len(rows) // size)))
@@ -849,7 +903,7 @@ JOBS: dict[str, dict] = {}   # 导出任务的进度(只在内存里,进程重�
 def _export_job(job_id: str, ids: list[int]):
     j = JOBS[job_id]
     try:
-        j["zip"] = exporter.export(ids, lambda n, t, stage: j.update(done=n, total=t, stage=stage))
+        j["zip"] = exporter.export(ids, lambda n, t, stage: j.update(done=n, total=t, stage=stage), owner_id=j["owner_id"])
         j["state"] = "done"
     except Exception as e:
         j["state"], j["error"] = "error", str(e)[:200] or e.__class__.__name__
@@ -859,13 +913,13 @@ def _export_job(job_id: str, ids: list[int]):
 @router.post("/api/export/start")
 def export_start(req: "ExportReq"):
     """开始导出:立刻返回任务号,在后台整理文件和压缩;页面用 GET /api/export/{job} 查进度。"""
-    ids = list(dict.fromkeys(req.ids))[:300]
+    ids = visible("draft", list(dict.fromkeys(req.ids))[:300])
     if not ids:
         raise HTTPException(400, "请先选择要导出的笔记")
     for k in [k for k, v in JOBS.items() if v.get("finished") and time.time() - v["finished"] > 3600]:
         JOBS.pop(k, None)  # 清掉一小时前的旧任务
     job_id = secrets.token_hex(6)
-    JOBS[job_id] = {"state": "running", "done": 0, "total": len(ids), "stage": "copy", "zip": "", "error": "", "started": time.time()}
+    JOBS[job_id] = {"state": "running", "done": 0, "total": len(ids), "stage": "copy", "zip": "", "error": "", "started": time.time(), "owner_id": my_id()}
     threading.Thread(target=_export_job, args=(job_id, ids), daemon=True, name=f"export-{job_id}").start()
     return {"job": job_id, "total": len(ids)}
 
@@ -873,14 +927,14 @@ def export_start(req: "ExportReq"):
 @router.get("/api/export/{job_id}")
 def export_status(job_id: str):
     j = JOBS.get(job_id)
-    if not j:
+    if not j or (my_id() is not None and j["owner_id"] != my_id()):
         raise HTTPException(404, "导出任务不存在(服务重启过?请重新导出)")
     return {k: j[k] for k in ("state", "done", "total", "stage", "zip", "error")}
 
 
 @router.post("/api/export")
 def do_export(req: ExportReq):
-    return {"zip": exporter.export(req.ids)}
+    return {"zip": exporter.export(visible("draft", req.ids), owner_id=my_id())}
 
 
 @router.get("/download/{name}")

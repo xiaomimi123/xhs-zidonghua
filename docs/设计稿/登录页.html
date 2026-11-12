@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>登录 · 小红书流水线</title>
+<style>
+/* 与 static/style.css 同一套变量 */
+:root{
+  --bg:oklch(97.6% .004 60);--panel:#fff;--soft:oklch(95.8% .006 55);--line:oklch(91% .006 55);
+  --ink:oklch(24% .01 50);--sub:oklch(54% .01 50);--faint:oklch(70% .008 50);
+  --accent:oklch(60% .22 22);--accent-ink:oklch(50% .2 22);--accent-wash:oklch(96% .025 22);
+  --err:oklch(52% .2 25);--r:10px;--ease:cubic-bezier(.22,1,.36,1);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+
+.split{min-height:100%;display:grid;grid-template-columns:55fr 45fr}
+
+/* ---------- 左:品牌区 ---------- */
+.brandside{position:relative;overflow:hidden;color:#fff;padding:48px 56px;display:flex;flex-direction:column;
+  background:radial-gradient(120% 90% at 0% 0%,oklch(68% .2 30) 0%,transparent 60%),
+             radial-gradient(90% 80% at 100% 100%,oklch(45% .19 15) 0%,transparent 65%),
+             var(--accent)}
+.brandside::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:radial-gradient(oklch(100% 0 0 / .09) 1px,transparent 1px);background-size:22px 22px}
+.bhead{display:flex;align-items:center;gap:12px;position:relative;z-index:1}
+.logo{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;font-weight:700;font-size:19px;
+  background:#fff;color:var(--accent)}
+.bhead b{font-size:17px;letter-spacing:.5px}
+.pitch{position:relative;z-index:1;margin-top:auto;max-width:460px}
+.pitch h1{font-size:34px;line-height:1.3;margin:0 0 12px;font-weight:700;letter-spacing:.5px}
+.pitch p{margin:0;font-size:15px;opacity:.86}
+
+.loop{position:relative;z-index:1;list-style:none;padding:0;margin:32px 0 0;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-width:520px}
+.loop li{background:oklch(100% 0 0 / .13);border:1px solid oklch(100% 0 0 / .22);border-radius:var(--r);
+  padding:12px 12px 10px;backdrop-filter:blur(6px);position:relative}
+.loop li em{font-style:normal;font-size:11px;opacity:.75;display:block}
+.loop li span{font-size:13.5px;font-weight:600}
+.loop li:not(:last-child)::after{content:"→";position:absolute;right:-9px;top:50%;transform:translateY(-50%);font-size:12px;opacity:.7;z-index:2}
+.loop li:last-child{background:#fff;color:var(--accent-ink);border-color:#fff}
+
+/* 装饰:错落的笔记卡片 */
+.cards{position:absolute;right:-30px;top:90px;width:330px;height:330px;z-index:0}
+.nc{position:absolute;width:150px;background:#fff;border-radius:12px;padding:8px;color:var(--ink);
+  box-shadow:0 18px 40px oklch(25% .08 20 / .28)}
+.nc i{display:block;height:150px;border-radius:8px}
+.nc b{display:block;font-size:12px;line-height:1.4;margin:7px 2px 4px}
+.nc small{display:flex;justify-content:space-between;font-size:11px;color:var(--sub);margin:0 2px}
+.nc.c1{left:0;top:30px;transform:rotate(-7deg)}
+.nc.c1 i{background:linear-gradient(160deg,oklch(88% .07 70),oklch(76% .1 45))}
+.nc.c2{left:120px;top:0;transform:rotate(5deg);z-index:2}
+.nc.c2 i{background:linear-gradient(160deg,oklch(90% .05 150),oklch(74% .09 170))}
+.nc.c3{left:70px;top:150px;transform:rotate(-1deg);opacity:.9}
+.nc.c3 i{background:linear-gradient(160deg,oklch(90% .05 280),oklch(75% .09 300));height:110px}
+.hot{color:var(--accent);font-weight:600}
+
+.bfoot{position:relative;z-index:1;margin-top:40px;font-size:12px;opacity:.7}
+
+/* ---------- 右:表单 ---------- */
+.formside{display:grid;place-items:center;padding:48px 32px;background:var(--panel)}
+.form{width:100%;max-width:360px}
+.form h2{font-size:24px;margin:0 0 6px}
+.form .lead{color:var(--sub);margin:0 0 28px}
+.field{margin-bottom:16px}
+.field label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+.inp{position:relative}
+.inp input{width:100%;height:44px;border:1px solid var(--line);border-radius:var(--r);padding:0 14px 0 40px;
+  font:inherit;font-size:15px;background:var(--bg);color:var(--ink);transition:border-color .15s,box-shadow .15s,background .15s}
+.inp input:focus{outline:none;border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-wash)}
+.inp svg{position:absolute;left:13px;top:50%;transform:translateY(-50%);width:17px;height:17px;color:var(--faint)}
+.inp .eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:none;color:var(--sub);
+  width:34px;height:34px;border-radius:8px;cursor:pointer;display:grid;place-items:center}
+.inp .eye:hover{background:var(--soft)}
+.inp .eye svg{position:static;transform:none;color:currentColor}
+.row{display:flex;justify-content:space-between;align-items:center;margin:4px 0 20px;font-size:13px;color:var(--sub)}
+.row label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.row input{accent-color:var(--accent);width:15px;height:15px;margin:0}
+.btn{width:100%;height:46px;border:0;border-radius:var(--r);background:var(--accent);color:#fff;font:inherit;font-size:15px;
+  font-weight:600;cursor:pointer;transition:background .15s,transform .1s var(--ease)}
+.btn:hover{background:var(--accent-ink)}
+.btn:active{transform:scale(.99)}
+.gerr{min-height:22px;margin:10px 0 0;color:var(--err);font-size:13px;text-align:center}
+.ffoot{margin-top:36px;padding-top:18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--faint);display:flex;justify-content:space-between}
+.ffoot a{color:var(--sub);text-decoration:none}
+.ffoot a:hover{color:var(--accent-ink)}
+
+/* 效果稿切换条(正式版不需要) */
+.demo{position:fixed;right:14px;bottom:14px;z-index:9;display:flex;gap:6px;background:#fff;border:1px solid var(--line);
+  border-radius:999px;padding:4px;box-shadow:0 4px 16px oklch(30% .02 50 / .1);font-size:12px}
+.demo button{border:0;background:none;border-radius:999px;padding:5px 12px;cursor:pointer;color:var(--sub);font:inherit}
+.demo button.on{background:var(--ink);color:#fff}
+
+/* 管理端:换深色品牌区,一眼区分 */
+body.admin .brandside{background:radial-gradient(110% 90% at 0% 0%,oklch(38% .03 260) 0%,transparent 60%),oklch(24% .02 260)}
+body.admin .logo{color:oklch(24% .02 260)}
+body.admin .loop li:last-child{color:oklch(24% .02 260)}
+body.admin .btn{background:oklch(28% .02 260)}
+body.admin .btn:hover{background:oklch(20% .02 260)}
+
+/* ---------- 窄屏:品牌区收成顶部横幅 ---------- */
+@media (max-width:900px){
+  .split{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+  .brandside{padding:22px 20px 24px;min-height:0}
+  .cards,.loop,.bfoot{display:none}
+  .pitch{margin-top:18px}
+  .pitch h1{font-size:21px;margin-bottom:4px}
+  .pitch p{font-size:13px}
+  .formside{place-items:start center;padding:32px 16px 40px}
+  .form h2{font-size:21px}
+}
+</style>
+</head>
+<body>
+<div class="split">
+  <section class="brandside" aria-hidden="true">
+    <div class="bhead"><span class="logo">书</span><b id="bname">小红书流水线</b></div>
+
+    <div class="cards">
+      <div class="nc c1"><i></i><b>早八通勤妆 5 分钟出门,手残党也能学会</b><small><span>@小鹿</span><span class="hot">♥ 3.2w</span></small></div>
+      <div class="nc c2"><i></i><b>减脂期一周早餐不重样,附采购清单</b><small><span>@阿柚</span><span class="hot">♥ 1.8w</span></small></div>
+      <div class="nc c3"><i></i><b>租房改造前后对比</b><small><span>@木木</span><span>♥ 9821</span></small></div>
+    </div>
+
+    <div class="pitch">
+      <h1 id="bh">从爆款到成稿,<br>一条流水线跑完</h1>
+      <p id="bp">选赛道、定篇数,采集、拆解、复刻、配图自动完成。</p>
+    </div>
+    <ol class="loop">
+      <li><em>01</em><span>批量复刻</span></li>
+      <li><em>02</em><span>发帖测试</span></li>
+      <li><em>03</em><span>数据归集</span></li>
+      <li><em>04</em><span>爆款再复刻</span></li>
+    </ol>
+    <div class="bfoot">发布仍由你在小红书手动完成 · 数据只在公司服务器</div>
+  </section>
+
+  <section class="formside">
+    <form class="form" id="f" autocomplete="on">
+      <h2 id="ft">欢迎回来</h2>
+      <p class="lead" id="fl">登录后只看得到你自己的任务和成品</p>
+
+      <div class="field">
+        <label for="u">账号</label>
+        <div class="inp">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/></svg>
+          <input id="u" name="username" autocomplete="username" placeholder="管理员分配的账号" required>
+        </div>
+      </div>
+      <div class="field">
+        <label for="p">密码</label>
+        <div class="inp">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          <input id="p" name="password" type="password" autocomplete="current-password" placeholder="输入密码" required>
+          <button type="button" class="eye" id="eye" aria-label="显示密码"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </div>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="rem" checked>记住账号</label>
+        <span>忘记密码请联系管理员</span>
+      </div>
+      <button class="btn">登录</button>
+      <p class="gerr" id="err" role="alert"></p>
+      <div class="ffoot"><span>小红书流水线工作台</span><a href="#" id="swap">管理员入口 →</a></div>
+    </form>
+  </section>
+</div>
+
+<div class="demo" role="group" aria-label="效果稿切换">
+  <button class="on" data-m="user">员工登录</button><button data-m="admin">管理端登录</button><button data-m="err">报错状态</button>
+</div>
+
+<script>
+// 只是效果稿:不调接口
+const $ = s => document.querySelector(s);
+$("#eye").onclick = () => { const p = $("#p"); p.type = p.type === "password" ? "text" : "password"; };
+$("#f").onsubmit = e => { e.preventDefault(); $("#err").textContent = "效果稿:正式版这里调用 /api/login"; };
+function mode(m) {
+  document.querySelectorAll(".demo button").forEach(b => b.classList.toggle("on", b.dataset.m === m));
+  const admin = m === "admin";
+  document.body.classList.toggle("admin", admin);
+  $("#bname").textContent = admin ? "小红书流水线 · 管理后台" : "小红书流水线";
+  $("#ft").textContent = admin ? "管理后台" : "欢迎回来";
+  $("#fl").textContent = admin ? "人员、接口配置、数据看板" : "登录后只看得到你自己的任务和成品";
+  $("#u").closest(".field").hidden = admin;   // 管理端只有密码
+  $("#rem").closest("label").style.visibility = admin ? "hidden" : "";
+  $("#swap").textContent = admin ? "← 员工登录" : "管理员入口 →";
+  $("#err").textContent = m === "err" ? "账号或密码不正确" : "";
+}
+document.querySelector(".demo").onclick = e => e.target.dataset.m && mode(e.target.dataset.m);
+$("#swap").onclick = e => { e.preventDefault(); mode(document.body.classList.contains("admin") ? "user" : "admin"); };
+</script>
+</body>
+</html>

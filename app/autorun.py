@@ -8,7 +8,7 @@ from collections import Counter
 import threading
 import time
 
-from . import llm, notes as nt, products, worker
+from . import llm, notes as nt, products, ptype, worker
 from .db import conn, get_settings, q_all, q_exec, q_one
 
 ACTIVE = ("profiling", "collecting", "tagging", "analyzing", "writing", "retrying")
@@ -82,6 +82,19 @@ def pick_groups(pid: int, s: dict) -> list[tuple[str, list[int]]]:
         top = pick(pool)
         groups = [("", top)] if top else []
     return [(t, [n["id"] for n in ns]) for t, ns in groups]
+
+
+def pick_by_kind(pid: int, s: dict, mix: dict) -> list[tuple[str, list[int]]]:
+    """按帖子类型挑参考:每个想要的类型,取已分好类、和产品相关、正文够长的图文笔记里互动量高的几篇。
+    某类可用的笔记不到 ptype.MIN_REFS 篇就跳过这一类。返回 [(类型, [笔记 id])];一个类型都凑不出就返回空,调用方退回按主题分组。"""
+    rows = [n for n in _project_notes(pid, s) if n.get("note_type") != "video" and n["rel"] == "high" and not n["old"] and ptype.usable(n)]
+    nrefs, used, out = int(s.get("auto_refs") or 5), used_counts(), []
+    for kind in mix:
+        ns = [n for n in rows if n["kind"] == kind]
+        if len(ns) >= ptype.MIN_REFS:
+            top = sorted(sorted(ns, key=_eng, reverse=True)[:nrefs * 3], key=lambda n: (used[n["id"]], -_eng(n)))[:nrefs]
+            out.append((kind, [n["id"] for n in top]))
+    return out
 
 
 def used_counts() -> Counter:
@@ -370,7 +383,8 @@ def advance(run: dict):
     if status == "tagging":
         if s.get("auto_tag") == "1":
             untagged = q_one("SELECT COUNT(*) c FROM project_notes pn JOIN notes n ON n.id=pn.note_id "
-                             "WHERE pn.project_id=? AND (n.topic='' OR n.topic IS NULL)", pid)["c"]
+                             "WHERE pn.project_id=? AND (n.topic='' OR n.topic IS NULL OR (n.kind_status IN ('pending','running') AND ?!=''))",
+                             pid, s.get("deepseek_api_key") or "")["c"]
             if untagged and _waited_min(run) < 10:
                 worker.wake_tagger()
                 return _save(run, msg=f"正在给笔记分类,还剩 {untagged} 篇")
@@ -384,19 +398,29 @@ def advance(run: dict):
         if rc < 3:
             return _save(run, "error", f"采到的笔记和产品/关键词基本不相关(相关的只有 {rc} 篇)。请换更具体的关键词,或检查采集端的搜索结果")
         used = used_counts()
-        groups = pick_groups(pid, s)
+        mix = ptype.parse_mix(st.get("mix")) or (ptype.DEFAULT_MIX if project.get("product_id") else ptype.DEFAULT_MIX_FREE)
+        kgroups = pick_by_kind(pid, s, mix)   # 按帖子类型分组:每类一张拆解卡,同一类的参考放一起学
+        if kgroups:
+            groups = [(k, nids) for k, nids in kgroups]
+            skipped = [k for k in mix if k not in dict(kgroups)]
+        else:  # 笔记还没分好类 / 凑不出任何一类:退回按主题分组
+            groups, skipped = [(t, n) for t, n in pick_groups(pid, s)], []
         if not groups:
             return _save(run, "error", "没有可用来拆解的笔记")
         refs = [i for _, nids in groups for i in nids]
         reused = sum(1 for i in refs if used[i])
-        ids = []
+        ids, counts = [], {}
         for topic, nids in groups:
-            cur = q_exec("INSERT INTO playbooks(project_id,name,note_ids) VALUES(?,?,?)", pid,
-                         f"自动·{topic or project['track']}", json.dumps(nids))
+            kind = topic if kgroups else ""
+            cur = q_exec("INSERT INTO playbooks(project_id,name,note_ids,kind) VALUES(?,?,?,?)", pid,
+                         f"自动·{topic or project['track']}", json.dumps(nids), kind)
             ids.append(cur.lastrowid)
+            counts[str(cur.lastrowid)] = mix[kind] if kind else 1
             worker.submit_playbook(cur.lastrowid)
         note = f",其中 {reused} 篇以前当过参考" + (",建议补采新笔记" if reused == len(refs) else "") if reused else ""
-        return _save(run, "analyzing", f"正在拆解爆款({len(ids)} 个主题,参考 {len(refs)} 篇{note})", pbs=ids, refs=len(refs), reused=reused)
+        skip_note = f";{'、'.join(skipped)}可参考的笔记太少,这一类不做" if skipped else ""
+        label = "个类型" if kgroups else "个主题"
+        return _save(run, "analyzing", f"正在拆解爆款({len(ids)} {label},参考 {len(refs)} 篇{note}{skip_note})", pbs=ids, refs=len(refs), reused=reused, pb_counts=counts)
 
     if status == "analyzing":
         pbs = q_all(f"SELECT id,status,error FROM playbooks WHERE id IN ({','.join('?' * len(st['pbs']))})", *st["pbs"]) if st.get("pbs") else []
@@ -406,7 +430,13 @@ def advance(run: dict):
         if not good:
             return _save(run, "error", "拆解失败:" + "; ".join((p["error"] or "")[:60] for p in pbs))
         dids = []
-        for pb_id, cnt in zip(good, allocate(run["target"], len(good))):
+        pc = st.get("pb_counts") or {}
+        if pc:   # 按类型比例分篇数(某张拆解卡失败了,剩下的按比例补上)
+            split = ptype.split_count(run["target"], {str(i): pc.get(str(i), 1) for i in good})
+            alloc = [split.get(str(i), 0) for i in good]
+        else:
+            alloc = allocate(run["target"], len(good))
+        for pb_id, cnt in zip(good, alloc):
             if cnt:
                 dids += worker.plan_and_submit(pid, pb_id, cnt, project["direction"] or "", s.get("auto_images") != "0")
         return _save(run, "writing", f"正在写稿和配图(共 {len(dids)} 篇)", drafts=dids)

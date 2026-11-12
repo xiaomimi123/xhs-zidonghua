@@ -77,6 +77,9 @@ def get_conf():
 @router.post("/settings")
 def set_conf(d: dict):
     save_settings({k: v for k, v in d.items() if k not in SECRET_KEYS})
+    if "kol_targets" in d:   # 目标品类改了:达人库的适配度和评分跟着重算
+        from . import kol
+        kol.rescore()
     worker.wake_tagger()  # 可能刚填了 Key 或打开了自动打标签
     return {"ok": True}
 
@@ -126,8 +129,8 @@ def _staff_row(r):
 
 @router.get("/staff")
 def staff_list():
-    rows = q_all("""SELECT s.*, (SELECT COUNT(*) FROM projects p WHERE p.created_by=s.username) AS projects,
-        (SELECT COUNT(*) FROM drafts d JOIN projects p ON p.id=d.project_id WHERE p.created_by=s.username) AS drafts
+    rows = q_all("""SELECT s.*, (SELECT COUNT(*) FROM projects p WHERE p.owner_id=s.id) AS projects,
+        (SELECT COUNT(*) FROM drafts d JOIN projects p ON p.id=d.project_id WHERE p.owner_id=s.id AND d.title!='') AS drafts
         FROM staff s ORDER BY s.id""")
     return {"items": [_staff_row(r) for r in rows], "legacy_password": bool(get_settings()["user_password_hash"])}
 
@@ -186,7 +189,7 @@ def staff_kick(sid: int):
 @router.delete("/staff/{sid}")
 def staff_delete(sid: int):
     _staff_or_404(sid)
-    q_exec("DELETE FROM staff WHERE id=?", sid)  # 历史任务上的发起人账号名保留
+    q_exec("DELETE FROM staff WHERE id=?", sid)  # 他的任务、稿子不删:归属 id 不会再被新账号用到,员工端没人看得到,管理员仍能看到
     return {"ok": True}
 
 
@@ -375,9 +378,9 @@ def projects():
                  "FROM projects p ORDER BY id DESC")
 
 
-def _note_filter(track="", keyword="", ai_type="", tier="", ai_status="", project_id=0, q="", topic=""):
+def _note_filter(track="", keyword="", ai_type="", tier="", ai_status="", project_id=0, q="", topic="", kind="", kind_sub=""):
     where, args = ["1=1"], []
-    for col, v in (("n.track", track), ("n.topic", topic), ("n.keyword", keyword), ("n.ai_type", ai_type), ("n.ai_status", ai_status)):
+    for col, v in (("n.track", track), ("n.topic", topic), ("n.keyword", keyword), ("n.ai_type", ai_type), ("n.ai_status", ai_status), ("n.kind", kind), ("n.kind_sub", kind_sub)):
         if v:
             where.append(f"{col}=?"); args.append(v)
     if tier:
@@ -391,8 +394,8 @@ def _note_filter(track="", keyword="", ai_type="", tier="", ai_status="", projec
 
 @router.get("/notes")
 def all_notes(track: str = "", keyword: str = "", ai_type: str = "", tier: str = "", ai_status: str = "",
-              project_id: int = 0, q: str = "", sort: str = "new", offset: int = 0, limit: int = 50, topic: str = ""):
-    w, args = _note_filter(track, keyword, ai_type, tier, ai_status, project_id, q, topic)
+              project_id: int = 0, q: str = "", sort: str = "new", offset: int = 0, limit: int = 50, topic: str = "", kind: str = "", kind_sub: str = ""):
+    w, args = _note_filter(track, keyword, ai_type, tier, ai_status, project_id, q, topic, kind, kind_sub)
     order = {"new": "n.id DESC", "hot": "(n.likes+n.collects+n.comments) DESC", "updated": "n.updated DESC"}.get(sort, "n.id DESC")
     total = q_one(f"SELECT COUNT(*) n FROM notes n WHERE {w}", *args)["n"]
     items = q_all(f"""SELECT n.*, {tier_sql()} AS tier,
@@ -400,6 +403,23 @@ def all_notes(track: str = "", keyword: str = "", ai_type: str = "", tier: str =
         FROM notes n WHERE {w} ORDER BY {order} LIMIT ? OFFSET ?""", *args, min(limit, 200), max(offset, 0))
     age = int(get_settings().get("collect_max_age_days") or 0)
     return {"total": total, "items": [annotate(localize(i), age) for i in items]}
+
+
+class RekindIn(BaseModel):
+    scope: str = "failed"   # failed = 只重试出错的;all = 全部重新分类;其他字符串 = 重新分类指定类型
+
+
+@router.post("/notes/rekind")
+def rekind(p: RekindIn):
+    """让笔记重新分「帖子类型」(商业硬文 / 产品软文 / 教程 / 测评 / 其他);后台自动处理。"""
+    if p.scope == "all":
+        n = q_exec("UPDATE notes SET kind_status='pending'").rowcount
+    elif p.scope == "failed":
+        n = q_exec("UPDATE notes SET kind_status='pending' WHERE kind_status='error'").rowcount
+    else:
+        n = q_exec("UPDATE notes SET kind_status='pending' WHERE kind=?", p.scope).rowcount
+    worker.wake_tagger()
+    return {"ok": True, "n": n}
 
 
 @router.post("/notes/fill_tracks")
@@ -421,6 +441,8 @@ def note_facets(track: str = ""):
         "topics": grp("n.topic", "n.topic!='' AND n.track=?", track) if track else grp("n.topic", "n.topic!=''"),
         "keywords": grp("n.keyword", "n.track=?", track) if track else grp("n.keyword")[:100],
         "types": grp("n.ai_type", "n.ai_status='done'"),
+        "kinds": grp("n.kind", "n.kind_status='done'"),
+        "kind_status": grp("n.kind_status"),
         "tiers": grp(tier_sql()),
         "ai": grp("n.ai_status"),
         "mirror": grp("n.mirror_status"),

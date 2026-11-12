@@ -4,20 +4,22 @@ const FL = { mode: "product", track: "", kw: "", count: 10, P: { name: "", files
   filter: "all", pid: 0, picking: false, picked: new Set(), pv: null, sig: "", account: "", acc: "", accts: null, plan: {}, angles: new Set(), angAcc: "", accKw: {} };
 const fetchAccts = async () => FL.accts || (FL.accts = await api("/api/qianfan/accounts").catch(() => []));
 const when = s => { const d = new Date((s || "").replace(" ", "T") + "Z"); return isNaN(d) ? "" : `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
+// 任务状态只分四种颜色:蓝=进行中、绿=已完成、橙=完成但有稿子要检查、红=出错,灰=已取消
+const runState = r => r.active ? "run" : r.status === "done" ? (r.drafts.failed ? "warn" : "ok") : r.status === "error" ? "bad" : "off";
 const runPill = r => {
-  if (r.status === "done") return r.drafts.failed ? `<span class="fl-pill warn">完成 · ${r.drafts.failed} 篇需检查</span>` : `<span class="fl-pill ok">完成</span>`;
-  if (r.status === "error") return `<span class="fl-pill bad">出错</span>`;
+  if (r.status === "done") return r.drafts.failed ? `<span class="fl-pill warn">✓ 完成 · ${r.drafts.failed} 篇需检查</span>` : `<span class="fl-pill ok">✓ 已完成</span>`;
+  if (r.status === "error") return `<span class="fl-pill bad">✕ 出错</span>`;
   if (r.status === "canceled") return `<span class="fl-pill">已取消</span>`;
   const s = r.steps[r.step] || "处理";
-  return `<span class="fl-pill run">${s === "写稿配图" ? `写稿配图 ${r.drafts.finished || 0}/${r.target}` : s + "中"}</span>`;
+  return `<span class="fl-pill run"><i class="dot"></i>${s === "写稿配图" ? `写稿配图 ${r.drafts.finished || 0}/${r.target}` : s + "中"}</span>`;
 };
 const segCls = (r, i) => i < r.step ? "done" : i === r.step ? (r.active ? "cur" : ["error", "canceled"].includes(r.status) ? "bad" : "") : "";
-const runCard = r => `<article class="fl-run" data-run="${r.id}" tabindex="0">
+const runCard = r => `<article class="fl-run s-${runState(r)}" data-run="${r.id}" tabindex="0">
   <div class="fl-rh">${r.cover ? `<img src="${esc(thumb(r.cover, 240))}" alt="" loading="lazy" decoding="async">` : `<span class="fl-ph">${r.kind === "product" ? "产品" : "赛道"}</span>`}
     <div class="fl-rt"><b>${esc(r.name)}</b><span class="sub">${r.target} 篇 · ${when(r.created)}</span></div>${runPill(r)}</div>
-  <div class="fl-track">${r.steps.map((s, i) => `<div class="${segCls(r, i)}"><i></i><span>${s}</span></div>`).join("")}</div>
+  ${r.status === "done" ? "" : `<div class="fl-track">${r.steps.map((s, i) => `<div class="${segCls(r, i)}"><i></i><span>${s}</span></div>`).join("")}</div>`}
   <div class="fl-rf">${r.status === "done" ? `<span class="ok">合格 ${r.drafts.passed}</span>${r.drafts.failed ? `<span class="warn">需检查 ${r.drafts.failed}</span>` : ""}` : `<span class="sub fl-msg">${esc(r.msg)}</span>`}
-    ${r.active ? "" : `<button class="btn gray sm" data-rerun="${r.id}" title="用同样的设置再跑一次">重新运行</button>`}
+    ${r.active ? "" : `<button class="btn gray sm" data-rerun="${r.id}" title="用同样的设置再跑一次">重新运行</button><button class="btn ghost sm danger" data-rdel="${r.id}" data-n="${r.drafts.total ?? r.drafts.finished ?? 0}" title="删除这个任务">${FL.delRun === r.id ? `再点一次确认${(r.drafts.total ?? r.drafts.finished) ? `(含 ${r.drafts.total ?? r.drafts.finished} 篇成品)` : ""}` : "删除"}</button>`}
     <span class="go">${r.status === "done" ? "查看成品 ›" : "详情 ›"}</span></div>
 </article>`;
 const noteCover = (d, big) => d.images.length ? `<img src="${esc(thumb("/images/" + d.images[0]))}" alt="" loading="lazy" decoding="async">` : `<div class="fl-tc${big ? " big" : ""}">${esc(d.title)}</div>`;
@@ -97,6 +99,8 @@ async function fNew() {
       <div class="fl-step"><button data-fcnt="-1" aria-label="减少">−</button><b>${FL.count}</b><button data-fcnt="1" aria-label="增加">+</button></div>
       <div class="fl-chips">${[5, 10, 20].map(n => `<button class="chip ${FL.count === n ? "on" : ""}" data-fset="${n}">${n}</button>`).join("")}</div>
     </div>
+    <span class="fl-lbl" title="系统会按类型分别挑参考笔记、分别拆解、按各自的写法写">写什么类型的帖子</span>
+    <div class="fl-chips">${PTYPES.map(([k, n, tip]) => `<button class="chip ${(FL.ptype || "") === k ? "on" : ""}" data-fptype="${k}" title="${esc(tip)}">${n}</button>`).join("")}</div>
     <div class="fl-foot fl-startbar">
       <span class="fl-sum" title="${esc(sum)}">${esc(sum)}</span>
       <span class="fl-err" id="ferr" role="alert"></span>
@@ -115,6 +119,7 @@ async function fNew() {
   };
   $("#main").onclick = e => {
     const t = e.target;
+    const pt = t.closest("[data-fptype]"); if (pt) { keep(); FL.ptype = pt.dataset.fptype; return fNew(); }
     const m = t.closest("[data-fmode]"); if (m) { keep(); FL.mode = m.dataset.fmode; return fNew(); }
     const pk = t.closest("[data-fpick]"); if (pk) { keep(); P.pick = +pk.dataset.fpick; FL.edit = null; FL.delSure = 0; return fNew(); }
     if (t.closest("[data-fedit]")) { FL.edit = { id: picked.id, name: picked.name, price: picked.price || "", sp: picked.selling_points || "", aud: picked.audience || "", forbid: picked.forbid || "", keep: [...picked.images], add: [] }; return fNew(); }
@@ -158,7 +163,7 @@ async function fNew() {
   });
   $("#fstart").onclick = async () => {
     keep(); const err = m => { $("#ferr").textContent = m; };
-    let body = { count: FL.count, ...(FL.account ? { account_id: FL.account, angles: [...FL.angles] } : {}) };
+    let body = { count: FL.count, ...(PTYPE_MIX[FL.ptype || ""] ? { mix: PTYPE_MIX[FL.ptype] } : {}), ...(FL.account ? { account_id: FL.account, angles: [...FL.angles] } : {}) };
     if (prod) {
       if (!picked && !P.name.trim()) return err("填一下产品名称");
       if (!picked && !P.files.length) return err("至少上传一张产品图");
@@ -175,6 +180,11 @@ async function fNew() {
     } catch (e) { err(e.message); $("#fstart").disabled = false; $("#fstart").textContent = "开始生成"; }
   };
 }
+
+// 帖子类型预设:空 = 系统默认(有产品:软文为主加测评;按赛道:软文 + 教程 + 测评)
+const PTYPES = [["", "系统默认", "有产品:产品软文为主,加一部分测评;按赛道:软文、教程、测评混合"], ["soft", "产品软文", "用户视角的体验、卖点、观点分享"], ["tut", "教程", "配方、用量、步骤"],
+  ["rev", "测评", "有评价维度的单款 / 多款对比"], ["biz", "商业硬文", "品牌 / 商家视角的产品介绍(参考笔记较少)"], ["mix", "软文 + 教程 + 测评", "三类混合,按 5:3:2 分配"]];
+const PTYPE_MIX = { soft: { 产品软文: 1 }, tut: { 教程: 1 }, rev: { 测评: 1 }, biz: { 商业硬文: 1 }, mix: { 产品软文: 5, 教程: 3, 测评: 2 } };
 
 function editForm(E) {
   return `<div class="fl-edit"><label class="fl-lbl" for="fename">产品名称</label><input id="fename" value="${esc(E.name)}">
@@ -200,7 +210,9 @@ const RUN_SIZE = 24;   // 任务页每页个数
 async function fRuns() {
   const draw = (rs, total) => {
     const pages = Math.max(1, Math.ceil(total / RUN_SIZE));
-    $("#main").innerHTML = rs.length ? `<div class="fl-runs">${rs.map(runCard).join("")}</div>${pager(FL.runsPage, total, RUN_SIZE)}`
+    const grp = (title, cls, list) => list.length ? `<div class="fl-gh ${cls}"><b>${title}</b><span>${list.length}</span></div><div class="fl-runs">${list.map(runCard).join("")}</div>` : "";
+    const act = rs.filter(r => r.active), bad = rs.filter(r => !r.active && r.status === "error"), rest = rs.filter(r => !r.active && r.status !== "error");
+    $("#main").innerHTML = rs.length ? `${grp("进行中", "run", act)}${grp("出错,需要处理", "bad", bad)}${grp(act.length || bad.length ? "已完成" : "全部任务", "ok", rest)}${pager(FL.runsPage, total, RUN_SIZE)}`
       : `<div class="empty"><b>还没有任务</b>选赛道或上传产品,填好篇数就能开始<br><button class="btn" data-go="new">新建任务</button></div>`;
     FL.sig = JSON.stringify(rs); FL.runsPages = pages;
   };
@@ -212,6 +224,13 @@ async function fRuns() {
   let [rs, total] = await load(); draw(rs, total);
   $("#main").onclick = e => {
     const g = e.target.closest("[data-pg]"); if (g) { if (g.disabled) return; FL.runsPage = +g.dataset.pg; return fRuns().then(() => window.scrollTo({ top: 0, behavior: "smooth" })); }
+    const rd = e.target.closest("[data-rdel]");   // 删除任务:点两次(不用浏览器自带的确认框),5 秒内不再点就还原
+    if (rd) {
+      const id = +rd.dataset.rdel;
+      if (FL.delRun !== id) { FL.delRun = id; clearTimeout(FL.delRunT); FL.delRunT = setTimeout(() => { FL.delRun = 0; if (state.tab === "runs") draw(rs, total); }, 5000); return draw(rs, total); }
+      FL.delRun = 0; rd.closest(".fl-run")?.remove(); rs = rs.filter(r => r.id !== id); total--;
+      return api(`/api/runs/${id}`, "DELETE").then(() => toast("任务已删除")).catch(err => toast(err.message, 1)).finally(() => fRuns());
+    }
     const rr = e.target.closest("[data-rerun]"); if (rr) return rerunRun(rr); const r = e.target.closest("[data-run]"); if (r) openRun(+r.dataset.run);
   };
   if (rs.some(r => r.active)) loop(async () => { const [n, t] = await load(); if (JSON.stringify(n) !== FL.sig) draw(n, t); return n.some(r => r.active); }, 4000);
@@ -339,7 +358,7 @@ function drawPv() {
       <div class="fl-thumbs">${imgs.map((u, k) => `<button class="${k === v.img ? "on" : ""}" data-pto="${k}" aria-label="第 ${k + 1} 张"><img src="${esc(thumb("/images/" + u, 240))}" alt=""></button>`).join("")}</div>
       <p class="fl-hint">手机上长按图片可保存到相册</p>` : `<div class="fl-big">${noteCover(d, true)}</div>`}</div>
     <div class="fl-txt">
-      <div class="fl-th"><span class="fl-badge ${d.auto_ok === 0 ? "warn" : "ok"}">${d.auto_ok === 0 ? "需检查" : d.auto_ok === 1 ? "合格" : "成品"}</span>${d.score != null ? `<span class="sub">审稿 ${d.score} 分</span>` : ""}
+      <div class="fl-th"><span class="fl-badge ${d.auto_ok === 0 ? "warn" : "ok"}">${d.auto_ok === 0 ? "需检查" : d.auto_ok === 1 ? "合格" : "成品"}</span>${d.score != null ? `<span class="sub">审稿 ${d.score} 分</span>` : ""}${d.ptype ? `<span class="fl-badge ${d.ptype_got && d.ptype_got !== d.ptype ? "warn" : "ok"}" title="${esc(d.ptype_got && d.ptype_got !== d.ptype ? `目标是${d.ptype},写完后判成了${d.ptype_got}` : d.ptype_got ? "写完后复判,类型一致" : "目标类型")}">${esc(d.ptype)}${d.ptype_got && d.ptype_got !== d.ptype ? ` → ${esc(d.ptype_got)}` : ""}</span>` : ""}
         <span class="sub fl-cnt">${v.i + 1} / ${N}</span><button class="btn gray sm" data-pstep="-1" aria-label="上一篇">‹</button><button class="btn gray sm" data-pstep="1" aria-label="下一篇">›</button><button class="fl-x" data-pclose aria-label="关闭">×</button></div>
       <div class="fl-tb">${d.auto_ok === 0 ? `<div class="banner warn">需检查:${esc(d.auto_note)} <button class="btn ghost sm" data-pedit>去修改</button></div>` : ""}
         <h2>${esc(d.title)}</h2><div class="fl-body">${esc(d.content)}</div><div class="fl-tags">${d.tags.map(t => "#" + esc(t)).join(" ")}</div>
@@ -459,7 +478,7 @@ document.addEventListener("keydown", e => { if (!FL.pv) return; if (e.key === "E
 
 
 // ---------- 笔记库(只读):采集到的笔记,按赛道 / 主题 / 内容类型 / 分级找参考 ----------
-const NB = { f: { track: "", topic: "", ai_type: "", tier: "", q: "", sort: "new" }, items: [], total: 0, page: 1 };
+const NB = { f: { track: "", topic: "", ai_type: "", kind: "", tier: "", q: "", sort: "new" }, items: [], total: 0, page: 1 };
 const NB_SIZE = 36;   // 每页篇数
 const NB_TIER = { viral: "爆款", hot: "热门", normal: "普通" };
 const nbCard = (n, i) => `<article class="fl-nc" data-nb="${i}" tabindex="0">
@@ -478,6 +497,7 @@ async function fNoteBase() {
   $("#main").innerHTML = `<div class="fl-bar nb-bar">
     <select data-nb-f="track" aria-label="赛道">${opt(fa.tracks, f.track, "全部赛道")}</select>
     <select data-nb-f="topic" aria-label="主题">${opt(fa.topics, f.topic, "全部主题")}</select>
+    <select data-nb-f="kind" aria-label="帖子类型">${opt(fa.kinds || [], f.kind, "全部帖子类型")}</select>
     <select data-nb-f="ai_type" aria-label="内容类型">${opt(fa.types, f.ai_type, "全部类型")}</select>
     <select data-nb-f="tier" aria-label="热度分级">${opt(fa.tiers, f.tier, "全部分级", k => NB_TIER[k] || k)}</select>
     <select data-nb-f="sort" aria-label="排序"><option value="new" ${f.sort === "new" ? "selected" : ""}>最新入库</option><option value="hot" ${f.sort === "hot" ? "selected" : ""}>互动最高</option></select>
@@ -500,7 +520,7 @@ async function fNoteBase() {
   await load(NB.page || 1);
   $$("[data-nb-f]").forEach(el => el.onchange = () => { f[el.dataset.nbF] = el.value; if (el.dataset.nbF === "track") f.topic = ""; NB.page = 1; fNoteBase(); });
   let deb; $("#nbq").oninput = e => { clearTimeout(deb); deb = setTimeout(() => { f.q = e.target.value.trim(); load(1); }, 350); };
-  $("#nbreset") && ($("#nbreset").onclick = () => { NB.f = { track: "", topic: "", ai_type: "", tier: "", q: "", sort: "new" }; NB.page = 1; fNoteBase(); });
+  $("#nbreset") && ($("#nbreset").onclick = () => { NB.f = { track: "", topic: "", ai_type: "", kind: "", tier: "", q: "", sort: "new" }; NB.page = 1; fNoteBase(); });
   const open = e => {
     const g = e.target.closest("[data-pg]");
     if (g) { if (g.disabled) return; return load(+g.dataset.pg).then(() => window.scrollTo({ top: 0, behavior: "smooth" })); }
@@ -529,7 +549,7 @@ function nbOpen(i) {
           <h2>${esc(n.title)}</h2>
           <div class="nb-stats">${stat("赞", n.likes)}${stat("藏", n.collects)}${stat("评", n.comments)}</div>
           <p class="sub">${esc(n.author || "-")}${n.published_at ? ` · 发布 ${esc(n.published_at)}` : ""}</p>
-          <p class="sub">${esc(n.track || "-")} · <b>${esc(n.topic || "待识别")}</b>${n.ai_type ? ` · ${esc(n.ai_type)}` : ""}${n.dup_of ? " · 重复" : ""}${n.rel === "low" ? ` · <span style="color:var(--err)">弱相关</span>` : ""}</p>
+          <p class="sub">${esc(n.track || "-")} · <b>${esc(n.topic || "待识别")}</b>${n.ai_type ? ` · ${esc(n.ai_type)}` : ""}${n.kind ? ` · <b title="${esc(n.kind_why || "")}">${esc(n.kind)}${n.kind_sub ? "·" + esc(n.kind_sub) : ""}</b>` : ""}${n.kind && n.kind_rel === 0 ? ` · <span style="color:var(--err)">和产品无关</span>` : ""}${n.dup_of ? " · 重复" : ""}${n.rel === "low" ? ` · <span style="color:var(--err)">弱相关</span>` : ""}</p>
           ${n.ai_highlight ? `<div class="angle"><span>爆点</span>${esc(n.ai_highlight)}${n.ai_audience ? " · " + esc(n.ai_audience) : ""}</div>` : ""}
           <div class="fl-body">${esc(n.content) || "(没有正文)"}</div>
           ${n.tags?.length ? `<div class="fl-tags">${n.tags.map(x => "#" + esc(x)).join(" ")}</div>` : ""}</div>
@@ -622,6 +642,8 @@ async function fLoop() {
   const tbl = (head, body) => `<table class="tbl"><thead><tr><th>${head}</th><th class="num">有结论</th><th class="num">爆款</th><th class="num">爆款率</th></tr></thead><tbody>${body}</tbody></table>`;
   const topicRows = ov.by_topic.map(x => `<tr><td>${esc(x.name)}</td><td class="num">${x.mature}</td><td class="num">${x.winners}</td><td class="num">${lpPct(x.rate)}</td></tr>`).join("");
   const projRows = ov.by_project.map(x => `<tr><td>${esc(x.name)}<div class="sub">${esc(x.created)}</div></td><td class="num">${x.mature}</td><td class="num">${x.winners}</td><td class="num">${lpPct(x.rate)}</td></tr>`).join("");
+  const ptypeRows = (ov.by_ptype || []).map(x => `<tr><td>${esc(x.name)}</td><td class="num">${x.mature}</td><td class="num">${x.winners}</td><td class="num">${lpPct(x.rate)}</td></tr>`).join("");
+  const coverRows = (ov.by_cover || []).map(x => `<tr><td>${esc(x.name)}</td><td class="num">${x.mature}</td><td class="num">${x.winners}</td><td class="num">${lpPct(x.rate)}</td></tr>`).join("");
   const none = `<div class="empty" style="border:0">数据还不够</div>`;
   $("#main").innerHTML = `${ov.no_data ? `<div class="banner warn">还没有千帆里的「笔记表现」数据。采集端把这份数据同步过来后,系统会自动把发出去的稿子对上号、判断谁爆了。</div>` : ""}
   <section class="card lp-fun"><div class="card-h"><b>从生成到爆款</b><span class="sub">稿子发布后,系统按标题自动和千帆里的笔记对上号,不用手动登记</span></div>
@@ -634,7 +656,9 @@ async function fLoop() {
   ${wins.length ? `<div class="lp-ws">${(LP.winAll ? wins : wins.slice(0, LP_WIN)).map(lpWinner).join("")}</div>${wins.length > LP_WIN ? `<p style="text-align:center;margin:12px 0 0"><button class="btn gray sm" data-winall>${LP.winAll ? "收起" : `展开全部 ${wins.length} 篇`}</button></p>` : ""}` : `<div class="empty"><b>还没有判定为爆款的稿子</b>先多发布一些稿子;发布满 ${c.min_days} 天、数据回流后会出现在这里。门槛可以在管理端「接口配置 → 爆款回流」调整。</div>`}
   <h3 class="lp-h">哪类更容易爆</h3>
   <div class="lp-two"><section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按选题主题</b></div>${ov.by_topic.length ? tbl("主题", topicRows) : none}</section>
-  <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按任务批次</b></div>${ov.by_project.length ? tbl("任务", projRows) : none}</section></div>
+  <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按任务批次</b></div>${ov.by_project.length ? tbl("任务", projRows) : none}</section>
+  <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按封面类型</b></div>${(ov.by_cover || []).length ? tbl("封面", coverRows) : none}</section>
+  <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按帖子类型</b></div>${(ov.by_ptype || []).length ? tbl("类型", ptypeRows) : none}</section></div>
   <h3 class="lp-h">全部稿子的表现</h3>
   <div class="fl-chips" style="margin-bottom:10px">${Object.entries(names).map(([k, n]) => `<button class="chip ${LP.tier === k ? "on" : ""}" data-lt="${k}">${n}${k ? ` ${ov.tiers[k] ?? 0}` : ""}</button>`).join("")}</div>
   <section class="card flush">${rows.length ? `<table class="tbl lp-tbl"><thead><tr><th>稿子</th><th>账号</th><th>发布</th><th class="num">阅读</th><th class="num">赞藏评</th><th class="num">相对平均</th><th>判定</th></tr></thead><tbody>${rows.map(r => `<tr data-open="${r.id}"><td class="lp-tt">${esc(r.title)}${r.generation ? ` <span class="sub">· 第${r.generation}代</span>` : ""}</td><td class="sub">${esc(r.account_name || "-")}</td><td class="sub">${esc(r.published_at || "-")}</td><td class="num">${r.views == null ? "-" : fmtN(r.views)}</td><td class="num">${r.eng == null ? "-" : r.eng}</td><td class="num">${r.lift == null ? "-" : "×" + r.lift}</td><td><span class="fl-pill ${TIER_CLS[r.tier]}">${r.tier_name}</span></td></tr>`).join("")}</tbody></table>` : `<div class="empty" style="border:0">这个筛选下没有稿子</div>`}</section>

@@ -1,0 +1,273 @@
+[
+ {
+  "creator_id": "sample5ecfe0a128",
+  "name": "sample-1",
+  "avatar": "",
+  "city": "四川 成都",
+  "level": "V6",
+  "fans": 2217076,
+  "categories": [
+   "美食",
+   "探店",
+   "vlog",
+   "开箱"
+  ],
+  "history_cats": [
+   "传统滋补营养品",
+   "黄金/彩宝/钻石/珍珠",
+   "粮油调味/速食/干货/烘焙"
+  ],
+  "willing": [],
+  "coop_tags": [
+   "1"
+  ],
+  "live_plan": "11-11 test plan",
+  "gmv": "100w-200w",
+  "price": "1000-2000",
+  "brand_gmv": "5w-10w",
+  "live_days": 12,
+  "avg_viewers": "162427",
+  "note_read_median": 96739,
+  "active_rate": 0.8431,
+  "notes_coop": 0,
+  "red_id": "10000000",
+  "sex": "男",
+  "url": ""
+ },
+ {
+  "creator_id": "samplee5484a2fe5",
+  "name": "sample-2",
+  "avatar": "",
+  "city": "上海",
+  "level": "V7",
+  "fans": 1448227,
+  "categories": [
+   "美食",
+   "时尚"
+  ],
+  "history_cats": [
+   "翡翠/和田玉/琥珀蜜蜡/其他玉石",
+   "传统滋补营养品",
+   "水产肉类/新鲜蔬果/熟食"
+  ],
+  "willing": [],
+  "coop_tags": [
+   "5"
+  ],
+  "live_plan": "",
+  "gmv": "200w-500w",
+  "price": "1000-2000",
+  "brand_gmv": "50w-100w",
+  "live_days": 11,
+  "avg_viewers": "65999",
+  "note_read_median": 52103,
+  "active_rate": 0.6374,
+  "notes_coop": 0,
+  "red_id": "10000001",
+  "sex": "女",
+  "url": ""
+ },
+ {
+  "creator_id": "sampledab964141a",
+  "name": "sample-3",
+  "avatar": "",
+  "city": "广东 深圳",
+  "level": "V5",
+  "fans": 2170462,
+  "categories": [
+   "护肤",
+   "健康养生",
+   "抗老",
+   "合集",
+   "干皮",
+   "开箱"
+  ],
+  "history_cats": [
+   "保健食品/膳食营养补充食品",
+   "传统滋补营养品",
+   "居家日用"
+  ],
+  "willing": [],
+  "coop_tags": [
+   "1"
+  ],
+  "live_plan": "",
+  "gmv": "100w-200w",
+  "price": "1000-2000",
+  "brand_gmv": "10w-20w",
+  "live_days": 4,
+  "avg_viewers": "31513",
+  "note_read_median": 33671,
+  "active_rate": 0.6761,
+  "notes_coop": 0,
+  "red_id": "10000002",
+  "sex": "女",
+  "url": ""
+ },
+ {
+  "creator_id": "sample8256cf41ad",
+  "name": "sample-4",
+  "avatar": "",
+  "city": "陕西 西安",
+  "level": "V3",
+  "fans": 107460,
+  "categories": [
+   "健康养生"
+  ],
+  "history_cats": [
+   "传统滋补营养品",
+   "零食/坚果/特产",
+   "美容美体仪器"
+  ],
+  "willing": [],
+  "coop_tags": [
+   "1"
+  ],
+  "live_plan": "",
+  "gmv": "10w-20w",
+  "price": "1000-2000",
+  "brand_gmv": "1w-2w",
+  "live_days": 11,
+  "avg_viewers": "466",
+  "note_read_median": 982,
+  "active_rate": 0.5318,
+  "notes_coop": 0,
+  "red_id": "10000003",
+  "sex": "男",
+  "url": ""
+ },
+ {
+  "creator_id": "samplece713066e7",
+  "name": "sample-5",
+  "avatar": "",
+  "city": "上海",
+  "level": "V6",
+  "fans": 440713,
+  "categories": [
+   "生活记录",
+   "plog",
+   "探店",
+   "教程",
+   "开箱"
+  ],
+  "history_cats": [
+   "传统滋补营养品",
+   "咖啡/麦片/冲饮",
+   "零食/坚果/特产"
+  ],
+  "willing": [],
+  "coop_tags": [
+   "5"
+  ],
+  "live_plan": "11-11 test plan",
+  "gmv": "10w-20w",
+  "price": "200-500",
+  "brand_gmv": "1w-2w",
+  "live_days": 42,
+  "avg_viewers": "16801",
+  "note_read_median": 29925,
+  "active_rate": 0.9202,
+  "notes_coop": 0,
+  "red_id": "10000004",
+  "sex": "男",
+  "url": ""
+ },
+ {
+  "creator_id": "samplebd9bd199d4",
+  "name": "sample-6",
+  "avatar": "",
+  "city": "陕西 西安",
+  "level": "V3",
+  "fans": 218539,
+  "categories": [
+   "健康养生"
+  ],
+  "history_cats": [
+   "传统滋补营养品",
+   "茶",
+   "美容护肤/美体/精油"
+  ],
+  "willing": [],
+  "coop_tags": [
+   "1"
+  ],
+  "live_plan": "",
+  "gmv": "10w-20w",
+  "price": "1000-2000",
+  "brand_gmv": "2w-5w",
+  "live_days": 10,
+  "avg_viewers": "418",
+  "note_read_median": 3286,
+  "active_rate": 0.4355,
+  "notes_coop": 0,
+  "red_id": "10000005",
+  "sex": "男",
+  "url": ""
+ },
+ {
+  "creator_id": "sample9dda478fb6",
+  "name": "sample-7",
+  "avatar": "",
+  "city": "辽宁 营口",
+  "level": "V3",
+  "fans": 66259,
+  "categories": [
+   "母婴",
+   "运动健身",
+   "健康养生",
+   "vlog"
+  ],
+  "history_cats": [
+   "保健食品/膳食营养补充食品",
+   "传统滋补营养品",
+   "咖啡/麦片/冲饮"
+  ],
+  "willing": [],
+  "coop_tags": [
+   "1"
+  ],
+  "live_plan": "11-11 test plan",
+  "gmv": "2w-5w",
+  "price": "1000-2000",
+  "brand_gmv": "2000-5000",
+  "live_days": 33,
+  "avg_viewers": "766",
+  "note_read_median": 1070,
+  "active_rate": 0.8629,
+  "notes_coop": 0,
+  "red_id": "10000006",
+  "sex": "女",
+  "url": ""
+ },
+ {
+  "creator_id": "sample0939c57f08",
+  "name": "sample-8",
+  "avatar": "",
+  "city": "不列颠哥伦比亚 大温哥华",
+  "level": "V3",
+  "fans": 113213,
+  "categories": [],
+  "history_cats": [
+   "保健食品/膳食营养补充食品",
+   "传统滋补营养品",
+   "家居饰品"
+  ],
+  "willing": [],
+  "coop_tags": [
+   "4",
+   "1"
+  ],
+  "live_plan": "",
+  "gmv": "5000-1w",
+  "price": "1000-2000",
+  "brand_gmv": "5000-1w",
+  "live_days": 44,
+  "avg_viewers": "2826",
+  "note_read_median": 7454,
+  "active_rate": 0.9385,
+  "notes_coop": 0,
+  "red_id": "10000007",
+  "sex": "女",
+  "url": ""
+ }
+]

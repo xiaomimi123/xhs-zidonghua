@@ -13,6 +13,18 @@ from collections import defaultdict
 from . import qianfan
 from .db import conn, get_settings, q_all, q_exec, q_one
 
+COVER_KINDS = {"html": "程序排版(纯文字)", "photo_text": "实拍图 + 排字", "photo": "纯产品图"}
+
+
+def _cover_kind(d: dict) -> str:
+    """封面类型:新稿记在 cover_card.kind 里;老稿按版式推出来(实拍版式 = 实拍图 + 排字,其余 = 纯文字)。"""
+    cc = d.get("cover_card") or {}
+    if cc.get("kind"):
+        return cc["kind"]
+    from .covers import kind_of
+    return kind_of(cc["layout"]) if cc.get("layout") else ""
+
+
 TIERS = {"winner": "爆款", "good": "不错", "normal": "一般", "weak": "偏弱", "observing": "观察中", "nodata": "没对上数据", "unpublished": "未发布"}
 _auto_at = 0.0
 
@@ -92,8 +104,8 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
         perf = qianfan.match_drafts(items)
     base = _baselines(items)
     spawned = {r["spawn_from"]: r["n"] for r in q_all("SELECT spawn_from, COUNT(*) AS n FROM projects WHERE spawn_from IS NOT NULL GROUP BY spawn_from")}
-    drafts = q_all("""SELECT d.id, d.title, d.angle, d.account_id, d.account_name, d.project_id, d.published, d.published_at, d.qf_note_id, d.status, d.auto_ok, d.created, d.images,
-        p.track, p.created_by, p.spawn_from, COALESCE(p.generation, 0) AS generation
+    drafts = q_all("""SELECT d.id, d.title, d.angle, d.account_id, d.account_name, d.project_id, d.published, d.published_at, d.qf_note_id, d.status, d.auto_ok, d.created, d.images, d.cover_card, d.ptype,
+        p.track, p.created_by, p.owner_id, p.spawn_from, COALESCE(p.generation, 0) AS generation
         FROM drafts d LEFT JOIN projects p ON p.id=d.project_id WHERE d.title!='' ORDER BY d.id DESC""")
     rows = []
     for d in drafts:
@@ -104,12 +116,13 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
         acc = it.get("account_id") if it else (d["account_id"] or "")
         tier, lift = classify(it, d, base.get(acc or "") or base.get(""), c)
         rows.append({"id": d["id"], "title": d["title"], "topic": _topic(d["angle"]), "angle": d["angle"], "track": d["track"] or "", "project_id": d["project_id"],
-                     "account_id": acc or "", "account_name": (it or {}).get("account_name") or d["account_name"] or "", "created_by": d["created_by"] or "",
+                     "account_id": acc or "", "account_name": (it or {}).get("account_name") or d["account_name"] or "", "created_by": d["created_by"] or "", "owner_id": d["owner_id"],
                      "tier": tier, "tier_name": TIERS[tier], "lift": lift, "generation": d["generation"], "spawn_from": d["spawn_from"], "spawned": spawned.get(d["id"], 0),
                      "published": bool(d["published"]), "linked": bool(d["qf_note_id"]), "auto_ok": d["auto_ok"], "cover": (d["images"] or [""])[0] if isinstance(d["images"], list) else "",
                      "published_at": (it or {}).get("published_at") or d["published_at"] or "", "days": _days_since((it or {}).get("published_at") or d["published_at"] or ""),
                      "views": (it or {}).get("views"), "likes": (it or {}).get("likes"), "collects": (it or {}).get("collects"),
-                     "comments": (it or {}).get("comments"), "eng": _eng(it) if it else None})
+                     "comments": (it or {}).get("comments"), "eng": _eng(it) if it else None,
+                     "cover_kind": _cover_kind(d), "cover_name": COVER_KINDS.get(_cover_kind(d), "(旧稿没记录)"), "cover_layout": (d["cover_card"] or {}).get("layout", ""), "ptype": d["ptype"] or "(未标注)"})
     return {"rows": rows, "cfg": c, "data_at": at}
 
 
@@ -146,7 +159,7 @@ def overview(ev: dict | None = None) -> dict:
                          key=lambda x: x["created"], reverse=True)[:12]
     gens = {"original": _rate([r for r in got if not r["generation"]]), "spawned": _rate([r for r in got if r["generation"]])}
     return {"funnel": [{"key": k, "name": n, "n": v} for k, n, v in funnel], "tiers": {t: sum(1 for r in rows if r["tier"] == t) for t in TIERS},
-            "by_topic": group("topic"), "by_account": group("account_name", 1), "by_project": by_project, "spawn_effect": gens, "cfg": ev["cfg"], "data_at": ev["data_at"],
+            "by_topic": group("topic"), "by_cover": group("cover_name", 1), "by_ptype": group("ptype", 1), "by_account": group("account_name", 1), "by_project": by_project, "spawn_effect": gens, "cfg": ev["cfg"], "data_at": ev["data_at"],
             "no_data": not got and not q_one("SELECT 1 AS x FROM qf_snapshots WHERE kind='notes' LIMIT 1")}
 
 
@@ -182,14 +195,15 @@ def spawn(did: int, count: int | None = None, by: str = "") -> int:
             refs += [i for i in json.loads(old[0] or "[]") if i != nid][:2]
         direction = (f"以我们已发布并验证过的爆款《{d['title']}》为样本:保留它成功的标题句式、开头钩子、正文结构和语气,"
                      f"换新的主题细节、场景、搭配,不要照抄原文。" + (f"原内容方向:{p['direction']}" if p.get("direction") else ""))
-        pid = cn.execute("INSERT INTO projects(track,keywords,direction,product_id,account_id,account_name,angle_pref,account_style,created_by,spawn_from,generation) "
-                         "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        # 继续复刻出来的任务沿用原任务的归属(自动复刻也一样)
+        pid = cn.execute("INSERT INTO projects(track,keywords,direction,product_id,account_id,account_name,angle_pref,account_style,created_by,spawn_from,generation,owner_id) "
+                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                          (p.get("track") or "", json.dumps(p.get("keywords") or [], ensure_ascii=False), direction, p.get("product_id"),
                           d["account_id"] or p.get("account_id") or "", d["account_name"] or p.get("account_name") or "", p.get("angle_pref") or "",
-                          p.get("account_style") or "", by, did, (row.get("generation") or 0) + 1)).lastrowid
+                          p.get("account_style") or "", by, did, (row.get("generation") or 0) + 1, p.get("owner_id"))).lastrowid
         for i in refs:
             cn.execute("INSERT OR IGNORE INTO project_notes(project_id,note_id) VALUES(?,?)", (pid, i))
-        pb = cn.execute("INSERT INTO playbooks(project_id,name,note_ids) VALUES(?,?,?)", (pid, f"爆款复刻·{d['title'][:10]}", json.dumps(refs))).lastrowid
+        pb = cn.execute("INSERT INTO playbooks(project_id,name,note_ids,kind) VALUES(?,?,?,?)", (pid, f"爆款复刻·{d['title'][:10]}", json.dumps(refs), d.get("ptype") or "")).lastrowid   # 沿用爆款的帖子类型
     worker.submit_playbook(pb)
     autorun.new_run(pid, count, "analyzing", f"正在拆解爆款《{d['title'][:14]}》", pbs=[pb], refs=len(refs), reused=0, spawn_from=did)
     return pid

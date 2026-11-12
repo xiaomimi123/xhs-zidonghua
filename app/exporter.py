@@ -1,5 +1,6 @@
 import json
 import re
+import secrets
 import shutil
 import time
 import zipfile
@@ -17,10 +18,11 @@ def _safe(s: str) -> str:
     return re.sub(r'[\\/:*?"<>|\s]+', "_", s)[:30] or "untitled"
 
 
-def export(draft_ids: list[int], progress=None) -> str:
-    """progress(已处理篇数, 总篇数, 阶段):阶段是 copy(整理文件)或 zip(压缩),供页面显示进度。"""
+def export(draft_ids: list[int], progress=None, owner_id: int | None = None) -> str:
+    """progress(已处理篇数, 总篇数, 阶段):阶段是 copy(整理文件)或 zip(压缩),供页面显示进度。
+    owner_id:谁导出的(登记到 exports,下载时只有本人和管理员能取);文件名带随机串,猜不出别人的包。"""
     total = len(draft_ids)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
+    stamp = time.strftime("%Y%m%d_%H%M%S") + "_" + secrets.token_hex(3)
     k = 1
     while True:  # 同一秒内再导出一次(连点、两个人同时导出)会撞名:加序号,不再报「文件已存在」
         root = EXPORT / (f"批次_{stamp}" if k == 1 else f"批次_{stamp}_{k}")
@@ -64,6 +66,8 @@ def export(draft_ids: list[int], progress=None) -> str:
             if f.is_file():  # 图片本身已经是压缩格式,再压一遍又慢又不省空间:只存不压;文字才压缩
                 z.write(f, f.relative_to(root), compress_type=zipfile.ZIP_STORED if f.suffix.lower() in IMG_EXT else zipfile.ZIP_DEFLATED)
     shutil.rmtree(root, ignore_errors=True)  # 压缩包才是交付物,整理用的文件夹留着只会让磁盘翻倍
+    with conn() as c:
+        c.execute("INSERT OR REPLACE INTO exports(zip, owner_id, draft_ids) VALUES(?,?,?)", (zpath.name, owner_id, json.dumps(draft_ids)))
     prune()
     return zpath.name
 
@@ -79,3 +83,7 @@ def prune(keep_days: int = 14):
                 shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink()
         except OSError:
             pass
+    with conn() as c:   # 压缩包被清掉了,登记也删掉
+        for r in c.execute("SELECT zip FROM exports").fetchall():
+            if not (EXPORT / r[0]).exists():
+                c.execute("DELETE FROM exports WHERE zip=?", (r[0],))

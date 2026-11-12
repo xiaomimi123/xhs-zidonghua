@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from . import imagegen, mirror, products
 from .auth import CURRENT, require_collector, require_user
+from .scope import check as own, my_id, owner_sql
 from .db import DATA, conn, get_settings, q_all, q_exec, q_one
 
 router = APIRouter(prefix="/api/live", dependencies=[Depends(require_user)])
@@ -151,7 +152,8 @@ def status():
 def list_jobs(limit: int = Query(200, le=500)):
     with conn() as c:
         _requeue_stale(c)
-    rows = q_all("SELECT j.*, COALESCE(NULLIF(j.title,''), d.title) AS shown FROM live_jobs j LEFT JOIN drafts d ON d.id=j.draft_id ORDER BY j.id DESC LIMIT ?", limit)
+    w, a = owner_sql("j")
+    rows = q_all("SELECT j.*, COALESCE(NULLIF(j.title,''), d.title) AS shown FROM live_jobs j LEFT JOIN drafts d ON d.id=j.draft_id WHERE 1=1" + w + " ORDER BY j.id DESC LIMIT ?", *a, limit)
     return [{"id": j["id"], "draft_id": j["draft_id"], "title": j["shown"] or f"#{j['id']}", "image": j["image"], "opts": j["opts"],
              "thumb": j["image"] or (j["gen"] or {}).get("orig", ""), "scene": (j["gen"] or {}).get("scene", "") if j["src"] == "bgswap" else "",
              "src": j["src"], "status": j["status"], "stage": j["stage"], "mode": j["mode"], "error": j["error"], "worker": j["worker"], "created": j["created"],
@@ -172,6 +174,7 @@ def create_jobs(p: JobsIn):
     who = (CURRENT.get() or {}).get("name", "")
     made, skipped, ids = 0, 0, []
     for it in p.items:
+        own("draft", it.draft_id)
         d = q_one("SELECT id, images FROM drafts WHERE id=?", it.draft_id)
         if not d:
             raise HTTPException(404, f"稿子 #{it.draft_id} 不存在")
@@ -188,8 +191,8 @@ def create_jobs(p: JobsIn):
                 skipped += 1
                 ids.append(dup["id"])
                 continue
-            ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage) VALUES(?,?,?,?,?,?)",
-                              it.draft_id, name, ojs, who, opts["mode"], stage).lastrowid)
+            ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,owner_id) VALUES(?,?,?,?,?,?,?)",
+                              it.draft_id, name, ojs, who, opts["mode"], stage, my_id()).lastrowid)
             made += 1
     return {"created": made, "skipped": skipped, "ids": ids}
 
@@ -227,10 +230,11 @@ def delete(jid: int):
 @router.post("/jobs/clear_done")
 def clear_done():
     """清掉已完成的任务和成品文件(成品传到 iPhone 以后就不需要留着了)。"""
-    rows = q_all("SELECT id, image, gen FROM live_jobs WHERE status='done'")
+    w, a = owner_sql("live_jobs")
+    rows = q_all("SELECT id, image, gen FROM live_jobs WHERE status='done'" + w, *a)
     for r in rows:
         _rm_files(r["id"])
-    q_exec("DELETE FROM live_jobs WHERE status='done'")
+        q_exec("DELETE FROM live_jobs WHERE id=?", r["id"])
     for r in rows:
         g = r["gen"] or {}
         for n in (r["image"], g.get("orig", ""), g.get("edit", "")):
@@ -324,13 +328,13 @@ def create_from_upload(p: UploadIn):
         title = (Path(p.names[i]).stem[:30] if i < len(p.names) and p.names[i] else "") or "上传图片"
         for o in _take_opts(opts, p.takes):
             ojs = json.dumps(o, sort_keys=True)
-            dup = q_one("SELECT id FROM live_jobs WHERE image=? AND opts=? AND status IN ('pending','running','done')", name, ojs)
+            dup = q_one("SELECT id FROM live_jobs WHERE image=? AND opts=? AND status IN ('pending','running','done') AND owner_id IS ?", name, ojs, my_id())
             if dup:
                 skipped += 1
                 ids.append(dup["id"])
                 continue
-            ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src) VALUES(NULL,?,?,?,?,?,?,'upload')",
-                              name, ojs, who, opts["mode"], stage, title).lastrowid)
+            ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,owner_id) VALUES(NULL,?,?,?,?,?,?,'upload',?)",
+                              name, ojs, who, opts["mode"], stage, title, my_id()).lastrowid)
             made += 1
     return {"created": made, "skipped": skipped, "ids": ids}
 
@@ -351,7 +355,7 @@ class GenIn(BaseModel):
     opts: dict | None = None
 
 
-MAX_GEN = 4
+MAX_GEN = 10
 
 
 @router.post("/jobs/generate")
@@ -378,8 +382,8 @@ def create_from_product(p: GenIn):
     ids = []
     for k in range(p.count):
         g = dict(gen, idx=seed + k * 3)   # idx 用来在「自动」场景下给每张挑不同的场景
-        ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen) VALUES(NULL,'',?,?,?,'image',?,'gen',?)",
-                          ojs, who, opts["mode"], title, json.dumps(g, ensure_ascii=False)).lastrowid)
+        ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen,owner_id) VALUES(NULL,'',?,?,?,'image',?,'gen',?,?)",
+                          ojs, who, opts["mode"], title, json.dumps(g, ensure_ascii=False), my_id()).lastrowid)
     return {"created": len(ids), "ids": ids}
 
 
@@ -560,15 +564,15 @@ def create_bgswap(p: BgIn):
             for o in _take_opts(opts, p.takes):
                 g = {"kind": "bgswap", "orig": orig, "scene": sc, "subject": subject, "background": background, "ratio": ratio, "idx": seed + k * 3 + i}
                 ojs = json.dumps(o, sort_keys=True)
-                dup = q_one("SELECT id FROM live_jobs WHERE src='bgswap' AND opts=? AND status IN ('pending','running','done') AND gen LIKE ? AND gen LIKE ? AND gen LIKE ? AND gen LIKE ?",
-                            ojs, f'%"orig": "{orig}"%', f'%"scene": {json.dumps(sc, ensure_ascii=False)}%',
+                dup = q_one("SELECT id FROM live_jobs WHERE src='bgswap' AND opts=? AND status IN ('pending','running','done') AND owner_id IS ? AND gen LIKE ? AND gen LIKE ? AND gen LIKE ? AND gen LIKE ?",
+                            ojs, my_id(), f'%"orig": "{orig}"%', f'%"scene": {json.dumps(sc, ensure_ascii=False)}%',
                             f'%"subject": {json.dumps(subject)}%', f'%"background": {json.dumps(background)}%')
                 if dup:
                     skipped += 1
                     ids.append(dup["id"])
                     continue
-                ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen) VALUES(NULL,'',?,?,?,'bg',?,'bgswap',?)",
-                                  ojs, who, o["mode"], f"{title}·换背景", json.dumps(g, ensure_ascii=False)).lastrowid)
+                ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen,owner_id) VALUES(NULL,'',?,?,?,'bg',?,'bgswap',?,?)",
+                                  ojs, who, o["mode"], f"{title}·换背景", json.dumps(g, ensure_ascii=False), my_id()).lastrowid)
                 made += 1
     return {"created": made, "skipped": skipped, "ids": ids}
 

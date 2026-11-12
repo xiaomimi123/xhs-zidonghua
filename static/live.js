@@ -7,7 +7,7 @@ const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], bgI
   opts: Object.assign({ mode: "motion", motion: "sway", seconds: 5, zoom: 1.08, focus_y: 0.35, fit: "crop" }, (() => { try { return JSON.parse(localStorage.lvOpts || "{}"); } catch { return {}; } })()) };
 try { LV.upMode = localStorage.lvUpMode || "up"; } catch { }
 const LV_FIT = { crop: "裁成 3:4", blur: "完整+虚化补边" };
-const LV_COST = 0.3, LV_VIDEO_SEC = 90, LV_GEN_SEC = 45;   // 估算用:每次 AI 生图约 ¥0.3 / 45 秒;每条视频约 90 秒
+const LV_VIDEO_SEC = 90, LV_GEN_SEC = 45;   // 估算耗时用:每次 AI 生图约 45 秒;每条视频约 90 秒
 const lvKey = (d, img) => `${d}:${img}`;
 // 经验:图里有「正在倒、撒、研磨」的动作(粉末、液体)时,AI 容易把粉末画成球状颗粒、越堆越多
 const LV_TIP = "图里有倒、撒、研磨这类<b>正在进行的动作</b>(粉末、液体)时,AI 容易把粉末画成球状颗粒。建议选<b>静态画面</b>(手拿罐子、俯拍、搅拌);一定要用就选「慢推镜头」,或把「每张拍几条」调高,挑最好的一条。";
@@ -151,9 +151,9 @@ async function lvPick(files, bucket, max) {
   }
 }
 const LV_MODES = [
-  ["up", "直接上传", "用你自己的图原样做成 Live", "免费", "free"],
-  ["bg", "换背景", "实拍图换成别的场景,主体原样不变", `约 ¥${LV_COST} / 个背景`, ""],
-  ["gen", "产品图生成场景", "AI 按产品图重画一张随手拍场景图", `约 ¥${LV_COST} / 张`, ""],
+  ["up", "直接上传", "用你自己的图原样做成 Live"],
+  ["bg", "换背景", "实拍图换成别的场景,主体原样不变"],
+  ["gen", "产品图生成场景", "AI 按产品图重画一张随手拍场景图"],
 ];
 // 这次要提交什么:几个任务、几次 AI 生图、约多少钱、约多久、还差什么
 function lvPlan() {
@@ -168,13 +168,13 @@ function lvPlan() {
     tasks = G.count; gen = G.count; if (!(G.product || G.files.length)) need = "先选产品或上传产品图";
   }
   const sec = tasks * (motion ? LV_VIDEO_SEC : 12) + Math.ceil(gen / 2) * LV_GEN_SEC;
-  return { tasks, gen, cost: gen * LV_COST, mins: Math.max(1, Math.round(sec / 60)), need, takes, motion };
+  return { tasks, gen, mins: Math.max(1, Math.round(sec / 60)), need, takes, motion };
 }
 // 右侧面板的汇总和提交按钮(不重画整个表单,避免打字时丢焦点)
 function lvUpSync() {
   const p = lvPlan(), box = $("#lvsum2"), btn = $("#lvsubmit"); if (!box || !btn) return;
   box.innerHTML = p.need ? `<p class="lv-need">${p.need}</p>` : `<dl><div><dt>将生成</dt><dd><b>${p.tasks}</b> 个 Live 任务</dd></div>
-    ${p.gen ? `<div><dt>AI 生图</dt><dd>${p.gen} 次 · 约 <b>¥${p.cost.toFixed(1)}</b></dd></div>` : `<div><dt>生图费用</dt><dd>无</dd></div>`}
+    ${p.gen ? `<div><dt>AI 生图</dt><dd><b>${p.gen}</b> 张</dd></div>` : ""}
     <div><dt>预计耗时</dt><dd>约 ${p.mins} 分钟</dd></div></dl>`;
   btn.disabled = !!p.need; btn.textContent = p.need ? "提交" : `提交 ${p.tasks} 个任务`;
 }
@@ -198,11 +198,11 @@ function lvUpload() {
       ${prod ? `<div class="lv-pvs">${prod.images.slice(0, 3).map(u => `<span class="lv-pv"><img src="${esc(u)}" alt=""></span>`).join("")}</div>`
         : `${drop("lvdrop2", "点击选择产品图,或拖到这里(1~3 张,包装正面最重要)")}<div class="lv-pvs" id="lvpv2">${lvThumbs(G.files, "gen")}</div>`}
       <div class="lv-two"><div><label class="f">场景</label><select id="lvscene"><option value="">自动(每张换一个生活场景)</option>${LV.scenes.map(s => `<option value="${esc(s)}" ${G.scene === s ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
-        <div><label class="f">生成几张</label><select id="lvcount">${[1, 2, 3, 4].map(n => `<option value="${n}" ${G.count === n ? "selected" : ""}>${n} 张</option>`).join("")}</select></div></div>
+        <div><label class="f">生成几张</label><select id="lvcount">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<option value="${n}" ${G.count === n ? "selected" : ""}>${n} 张</option>`).join("")}</select></div></div>
       <label class="f">画面补充 <span class="sub">可选</span></label><input id="lvnote" maxlength="100" placeholder="例如:一只手拿着罐子、旁边有一杯刚冲好的拿铁" value="${esc(G.note)}">`,
   }[m];
   sec.innerHTML = `<details class="lv-tipd"><summary>选图小提示</summary><p>${LV_TIP}</p></details>
-    <div class="lv-modes" role="tablist" aria-label="上传方式">${LV_MODES.map(([k, t, d, c, cls]) => `<button role="tab" class="lv-mode ${k === m ? "on" : ""}" data-m="${k}" aria-selected="${k === m}"><b>${t}</b><span>${d}</span><em class="${cls}">${c}</em></button>`).join("")}</div>
+    <div class="lv-modes" role="tablist" aria-label="上传方式">${LV_MODES.map(([k, t, d]) => `<button role="tab" class="lv-mode ${k === m ? "on" : ""}" data-m="${k}" aria-selected="${k === m}"><b>${t}</b><span>${d}</span></button>`).join("")}</div>
     <div class="lv-form"><div class="card lv-src">${panel}</div>
       <aside class="card lv-side" aria-label="输出设置"><h3>输出设置</h3>
         <div class="lv-fields" data-ctl>${lvCtl()}</div>

@@ -113,6 +113,8 @@ async def require_user(request: Request):
         raise HTTPException(401, "请先登录")
     s = current_staff(request)
     CURRENT.set(s if s else ({"name": "管理员", "username": "admin"} if is_admin(request) else None))
+    from .scope import guard   # 按路由里的 {pid}/{did}/… 校验数据归属(放这里避免循环导入)
+    guard(request)
 
 
 def require_collector(request: Request):

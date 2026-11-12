@@ -4,7 +4,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from .auth import require_collector
 from . import mirror, qianfan, worker
-from .db import conn, q_all, q_exec, q_one
+from .db import conn, get_settings, q_all, q_exec, q_one
 from .notes import save_notes, split_by_age
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_collector)])
@@ -62,12 +62,17 @@ def parse_types(types: str) -> tuple[str, ...]:
 
 @router.get("/tasks")
 def claim_tasks(request: Request, limit: int = 1, worker_name: str = Query("", alias="worker"), types: str = "",
-                shop: str = "", shop_name: str = "", kinds: str = ""):
+                shop: str = "", shop_name: str = "", kinds: str = "", cv: int = 0):
     """采集端轮询:领取待抓任务。领走即标记为 running,超时未回传会自动退回。
     types:本采集端支持的任务类型,逗号分隔(keyword,title,author);不传只发 keyword 和 title。
     千帆任务:shop = 这个采集端登录的店铺 ID(shop_name 是店铺名),只领这个店铺的任务和不分店铺的任务;不传 shop 就领不到分店铺的任务。
     kinds = 这个采集端能做的千帆数据类别(account,notes,...),不传 = 都能做。"""
     want = parse_types(types)
+    # cv = 采集端程序版本号:设置里的 collector_min_cv 调高后,更旧的千帆采集端收到 401 并退出。
+    # 用来清掉升级时残留的旧版采集脚本(它们会抢任务,又不认识新的任务类别,抢到就报「不支持」)
+    need = int(get_settings().get("collector_min_cv") or 0)
+    if "qianfan" in want and cv < need:
+        raise HTTPException(401, f"采集端版本过旧(需要 cv >= {need}),请重启采集端")
     shop = shop.strip()[:64]
     qf_kinds = {k.strip() for k in kinds.split(",") if k.strip()} or None
     if shop:

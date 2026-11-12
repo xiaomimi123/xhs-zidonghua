@@ -13,7 +13,7 @@ DEFAULT_SETTINGS = {
     "image_base_url": "",   # OpenAI 兼容: {base}/images/generations
     "image_api_key": "",
     "image_model": "",
-    "image_size": "9:16",        # 比例(9:16、3:4…)或像素(1024x1536),取决于服务商
+    "image_size": "3:4",         # 比例(3:4 是小红书图文的标准比例;9:16 等)或像素(1024x1536),取决于服务商
     "image_resolution": "",      # 清晰度 1k / 2k / 4k;留空则不传,用服务商默认值
     "collect_limit": "20",       # 每个采集任务要抓的笔记数
     "collect_max_age_days": "180",  # 只采近多少天发布的笔记;0 = 不限
@@ -23,6 +23,7 @@ DEFAULT_SETTINGS = {
     "public_base_url": "",       # 给采集端用的对外地址,如 http://192.168.1.100:18765
     "text_concurrency": "3",     # 复刻:同时写文案的篇数
     "image_concurrency": "2",    # 复刻:同时生图的篇数
+    "image_api_concurrency": "4",  # 向生图服务商同时发出的请求数上限(复刻配图和 Live 场景图共用);一篇里的几张图并行生成,受它限制
     "auto_tag": "1",             # 帖子入库后由 DeepSeek 自动打内容标签
     "tier_viral": "3000",        # 互动量(赞+藏+评)≥ 此值为「爆款」
     "tier_hot": "1000",          # 互动量 ≥ 此值为「热门」,否则「普通」
@@ -65,6 +66,16 @@ DEFAULT_SETTINGS = {
     "loop_spawn_count": "5",     # 以爆款为样本继续复刻时,默认复刻几篇
     "loop_auto": "0",            # 是否自动继续复刻新出现的爆款(1/0);会消耗文案和生图额度,默认关
     "loop_daily_cap": "10",      # 自动继续复刻每天最多生成几篇
+    "collector_min_cv": "0",     # collector min version: lower qianfan collectors get 401 and exit (flushes stale scripts left after upgrades)
+    "kol_enabled": "0",          # 是否自动让采集端去千帆买手广场采集达人(1/0);还需要「千帆数据同步」总开关打开
+    "kol_hours": "72",           # 达人库多久自动更新一次(小时)
+    "kol_cats": "",              # 采集时筛选哪些「合作品类」,逗号分隔(要和千帆里的品类名一致);留空 = 用下面的目标品类
+    "kol_targets": "保健食品,咖啡/麦片/冲饮,传统滋补营养品,粮油调味,零食/坚果",   # 我们产品所属的品类关键词(对应买手广场「合作品类」的一级品类名,写前几个字就行):达人历史合作命中它,适配度才高
+    "kol_content": "美食,健康养生,低脂低卡",   # 和我们产品相关的内容分类关键词:达人发的内容是这类,适配度算「一般」
+    "kol_contact_enabled": "0",  # 是否允许员工在达人库里「获取联系方式」(1/0);默认关,管理员确认要用再打开
+    "kol_contact_paused": "",    # 获取联系方式被自动暂停的原因(采集端遇到风控提示时写入,管理员处理完再把开关打开并清空)
+    "kol_contact_cap": "30",     # 每天最多获取几位达人的联系方式(每位要打开一次邀约弹窗,量大了容易被千帆当成异常操作)
+    "kol_pages": "30",           # 每个品类最多翻几页(每页 20 位)
     "kb_common": "",             # 全赛道通用知识(平台规则等),首次启动写入默认内容
     "admin_password_hash": "",   # 管理端登录密码(只存哈希)
     "user_password_hash": "",    # 用户端访问密码,留空则用户端无需登录
@@ -87,7 +98,7 @@ DEFAULT_TRACKS = [
 ]
 
 JSON_COLS = ("keywords", "images", "tags", "note_ids", "data", "ai_tags", "checks", "stats", "review", "variant", "state", "profile", "cover_card", "images_local",
-             "alt_titles", "image_prompts", "template_ids", "opts", "gen")
+             "alt_titles", "image_prompts", "template_ids", "opts", "gen", "categories", "history_cats", "coop_tags", "willing")
 
 
 # 全局笔记库:同一篇帖子只存一份(按 uid 去重),通过 project_notes 关联到多个项目
@@ -308,6 +319,60 @@ def _m007_live_upload(c):
     add_column(c, "live_jobs", "gen", "TEXT DEFAULT '{}'")
 
 
+def _m008_kol(c):
+    """达人库:千帆买手广场里采集到的合作达人(按 creator_id 去重),加上我们自己记的建联状态和备注。"""
+    c.execute("""CREATE TABLE IF NOT EXISTS kol_creators(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, creator_id TEXT NOT NULL UNIQUE, name TEXT DEFAULT '', avatar TEXT DEFAULT '', city TEXT DEFAULT '', level TEXT DEFAULT '',
+        fans INTEGER DEFAULT 0, categories TEXT DEFAULT '[]', history_cats TEXT DEFAULT '[]', coop_tags TEXT DEFAULT '[]', live_plan TEXT DEFAULT '',
+        gmv_text TEXT DEFAULT '', gmv_min REAL DEFAULT 0, price_text TEXT DEFAULT '', price_min REAL DEFAULT 0, price_max REAL DEFAULT 0, url TEXT DEFAULT '',
+        tier TEXT DEFAULT '', fit INTEGER DEFAULT 0, score INTEGER DEFAULT 0, source TEXT DEFAULT '',
+        status TEXT DEFAULT 'new', note TEXT DEFAULT '', owner TEXT DEFAULT '', contacted_at TEXT DEFAULT '',
+        first_seen TEXT DEFAULT CURRENT_TIMESTAMP, last_seen TEXT DEFAULT CURRENT_TIMESTAMP, seen_count INTEGER DEFAULT 1, updated TEXT DEFAULT CURRENT_TIMESTAMP)""")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_kol_status ON kol_creators(status)")
+
+
+def _m009_kol_fields(c):
+    """达人库补字段:买手广场列表里的直播、笔记、活跃粉丝等指标,以及意愿合作品类。"""
+    for col, ddl in (("willing", "TEXT DEFAULT '[]'"), ("brand_gmv", "TEXT DEFAULT ''"), ("live_days", "INTEGER DEFAULT 0"), ("avg_viewers", "REAL DEFAULT 0"),
+                     ("note_read_median", "INTEGER DEFAULT 0"), ("active_rate", "REAL DEFAULT 0"), ("notes_coop", "INTEGER DEFAULT 0"), ("red_id", "TEXT DEFAULT ''"), ("sex", "TEXT DEFAULT ''")):
+        add_column(c, "kol_creators", col, ddl)
+
+
+def _m010_kol_contact(c):
+    """达人联系方式:员工在达人库里点「获取联系方式」后,采集端在买手广场的邀约弹窗里点眼睛读到的手机号 / 微信号。"""
+    for col, ddl in (("phone", "TEXT DEFAULT ''"), ("wechat", "TEXT DEFAULT ''"), ("contact_at", "TEXT DEFAULT ''"),
+                     ("contact_status", "TEXT DEFAULT ''"), ("contact_error", "TEXT DEFAULT ''")):
+        add_column(c, "kol_creators", col, ddl)
+
+
+def _m011_owner(c):
+    """数据归属:员工只看自己的数据。归属记 staff.id(账号名会被删了再建,不可靠);NULL = 管理员 / 历史数据,员工看不到。
+    稿子、拆解卡、采集任务经 project_id 找归属;Live 任务可能没有稿子,单独记;导出包登记发起人,下载时核对。"""
+    add_column(c, "projects", "owner_id", "INTEGER")
+    add_column(c, "live_jobs", "owner_id", "INTEGER")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_projects_owner ON projects(owner_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_live_owner ON live_jobs(owner_id)")
+    c.execute("""CREATE TABLE IF NOT EXISTS exports(
+        zip TEXT PRIMARY KEY, owner_id INTEGER, draft_ids TEXT DEFAULT '[]', created TEXT DEFAULT CURRENT_TIMESTAMP)""")
+    # 不回填:按约定,上线前的历史任务、稿子、Live 任务全部归管理员(owner_id 保持 NULL),不分给任何员工
+
+
+def _m012_kind(c):
+    """帖子类型:商业硬文 / 产品软文 / 教程 / 测评 / 其他(见 app/ptype.py),以及是否和食品饮品产品相关。
+    已有的笔记 kind_status 默认 pending,启动后后台自动补分类。"""
+    for col, ddl in (("kind", "TEXT DEFAULT ''"), ("kind_sub", "TEXT DEFAULT ''"), ("kind_conf", "REAL DEFAULT 0"), ("kind_why", "TEXT DEFAULT ''"),
+                     ("kind_rel", "INTEGER DEFAULT 1"), ("kind_status", "TEXT DEFAULT 'pending'")):
+        add_column(c, "notes", col, ddl)
+    c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
+
+
+def _m013_ptype(c):
+    """复刻时按帖子类型写:拆解卡记下它是哪一类(playbooks.kind),稿子记下目标类型和写完后实际判出的类型(drafts.ptype / ptype_got)。"""
+    add_column(c, "playbooks", "kind", "TEXT DEFAULT ''")
+    add_column(c, "drafts", "ptype", "TEXT DEFAULT ''")
+    add_column(c, "drafts", "ptype_got", "TEXT DEFAULT ''")
+
+
 MIGRATIONS = [
     (1, "baseline", _m001_baseline),
     (2, "staff", _m002_staff),
@@ -316,6 +381,12 @@ MIGRATIONS = [
     (5, "live", _m005_live),
     (6, "live_motion", _m006_live_motion),
     (7, "live_upload", _m007_live_upload),
+    (8, "kol", _m008_kol),
+    (9, "kol_fields", _m009_kol_fields),
+    (10, "kol_contact", _m010_kol_contact),
+    (11, "owner", _m011_owner),
+    (12, "kind", _m012_kind),
+    (13, "ptype", _m013_ptype),
     # (2, "说明", _m002_xxx),
 ]
 
@@ -378,6 +449,7 @@ def _startup_fixups(c):
     # 拆解、复刻、打标签的中断任务由 worker.resume() 在启动后接着跑;
     # 已领走的采集任务按超时规则自动退回,采集端可能仍在抓,这里不动
     c.execute("UPDATE notes SET ai_status='pending' WHERE ai_status='running'")
+    c.execute("UPDATE notes SET kind_status='pending' WHERE kind_status='running'")
     c.execute("UPDATE notes SET mirror_status='pending' WHERE mirror_status='running'")
 
 
