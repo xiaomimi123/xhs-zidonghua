@@ -2,6 +2,7 @@
 成品目录和图片目录都换成临时目录,不碰真实的 data/。"""
 import io
 import json
+import time
 import tempfile
 import zipfile
 from pathlib import Path
@@ -102,6 +103,17 @@ def run(rep, env):
         rep.check("没有待领任务时返回空", col.get("/api/live/worker/claim").json()["job"] is None)
         user.post(f"/api/live/jobs/{c2['id']}/retry")
         rep.check("重试:回到待领取并清掉错误", db.q_one("SELECT status, error FROM live_jobs WHERE id=?", c2["id"]) == {"status": "pending", "error": ""})
+
+        # 在线判断:机器忙着做任务时不发心跳,不能因此显示离线
+        db.q_exec("INSERT INTO live_workers(worker,ip,last_seen,done) VALUES('busy-mac','',?,0) ON CONFLICT(worker) DO UPDATE SET last_seen=excluded.last_seen", time.time() - 300)
+        db.q_exec("DELETE FROM live_workers WHERE worker!='busy-mac'")
+        rep.check("在线:心跳超过 60 秒、手上也没有任务,显示离线", not user.get("/api/live/status").json()["online"])
+        bj = db.q_exec("INSERT INTO live_jobs(image,opts,created_by,mode,stage,status,worker,claimed_at) VALUES('x.png','{}','x','zoom','live','running','busy-mac',datetime('now','-90 seconds'))").lastrowid
+        st2 = user.get("/api/live/status").json()
+        rep.check("在线:机器正在做一条任务(没有心跳)也算在线,并标出忙碌", st2["online"] and st2["workers"][0]["busy"] is True, str(st2))
+        db.q_exec("UPDATE live_jobs SET claimed_at=datetime('now','-15 minutes') WHERE id=?", bj)
+        rep.check("在线:任务领走超过 10 分钟还没动静,不再算在线(可能死机了)", not user.get("/api/live/status").json()["online"])
+        db.q_exec("DELETE FROM live_jobs WHERE id=?", bj)
 
         # 超时退回
         col.get("/api/live/worker/claim?worker=sleepy")

@@ -123,10 +123,13 @@ def _requeue_stale(c):
 
 
 def _workers(table: str) -> dict:
+    """后台机器的在线状态。机器忙着做一条任务(视频约 85 秒、实况几十秒)时不发心跳,所以「有任务正在它手上做」也算在线,
+    不然每次做视频都会显示离线。"""
     now = time.time()
-    ws = [{"worker": r["worker"], "ip": r["ip"], "ago": int(now - r["last_seen"]), "done": r["done"]}
+    busy = {r["worker"] for r in q_all(f"SELECT DISTINCT worker FROM live_jobs WHERE status='running' AND worker!='' AND claimed_at > datetime('now','-10 minutes')")}
+    ws = [{"worker": r["worker"], "ip": r["ip"], "ago": int(now - r["last_seen"]), "done": r["done"], "busy": r["worker"] in busy}
           for r in q_all(f"SELECT * FROM {table} ORDER BY last_seen DESC")]
-    return {"online": bool(ws) and ws[0]["ago"] < ONLINE_SEC, "ago": ws[0]["ago"] if ws else None, "workers": ws}
+    return {"online": any(w["ago"] < ONLINE_SEC or w["busy"] for w in ws), "ago": ws[0]["ago"] if ws else None, "workers": ws}
 
 
 # ---------- 用户端 ----------
