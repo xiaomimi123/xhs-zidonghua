@@ -129,11 +129,12 @@ def _assign_album(stem: str, album: str):
     tell application "Photos"
         set matches to every media item whose filename starts with "{safe_stem}"
         if (count of matches) is 0 then return "no-match"
-        set mi to last item of matches   -- 匹配项里最后一个 = 最新导入的
+        set mi to last item of matches
         if (count of (every album whose name is "{safe_album}")) is 0 then
             make new album named "{safe_album}"
         end if
-        add mi to album "{safe_album}"
+        set al to first item of (every album whose name is "{safe_album}")
+        add {{mi}} to al
         return "ok"
     end tell'''
     try:
@@ -157,7 +158,9 @@ def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool
             video = Path(td) / "motion.mp4"
             video.write_bytes(api.call("GET", job["video"].split("?")[0], timeout=180))
         # 真实动作:关键照片默认用原图(和视频用同一个裁切,包装上的字清晰);--first-frame-still 改取视频第一帧(和视频画面完全一致,但视频分辨率低、字会糊)
-        pvt = make_pvt(None if (first_frame_still and video) else src, out, f"L{job['id']}", job["opts"], use_makelive, video, keep_audio, sharpen)
+        # 成品按发起人存子目录:~/LivePhotos/发起人/IMG_L{id}_LIVE.pvt,没有署名的进「未署名」
+        owner_out = out / (job.get("by") or "未署名")
+        pvt = make_pvt(None if (first_frame_still and video) else src, owner_out, f"L{job['id']}", job["opts"], use_makelive, video, keep_audio, sharpen)
     if to_photos:
         import_to_photos(pvt, job.get("by") or "")   # 按任务发起人分相册
     api.upload(job["id"], zip_dir(pvt))
