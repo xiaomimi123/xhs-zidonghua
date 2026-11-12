@@ -109,10 +109,21 @@ class Api:
 
 
 def import_to_photos(pvt: Path, album: str = ""):
-    """把 .pvt 包导入本机「照片」App(等效于在 Finder 里双击)。导入后相册里就是一张实况图。
+    """把 .pvt 包导入本机「照片」App。照片 App 的 import 命令会强制把自己弹到前台(实测隐藏没用,
+    这是照片 App 的固有行为),所以导入前记下当时的前台 App,导入后立刻把焦点还回去,把干扰压到最低。
     album 有值时,把刚导入的项归入以它命名的相册(按任务发起人分类,没有就放「未署名」)。"""
     try:
-        subprocess.run(["open", "-a", "Photos", str(pvt)], check=True, timeout=60)
+        front = subprocess.run(["osascript", "-e",
+                                'tell application "System Events" to get name of first application process whose frontmost is true'],
+                               capture_output=True, text=True, timeout=30).stdout.strip()
+        subprocess.run(["osascript", "-e",
+                        f'tell application "Photos" to import POSIX file "{pvt.resolve()}"'],
+                       check=True, capture_output=True, timeout=120)
+        time.sleep(2)
+        if front and front != "Photos":   # 把焦点还给导入前的 App
+            subprocess.run(["osascript", "-e",
+                            f'tell application "System Events" to set frontmost of application process "{front}" to true'],
+                           capture_output=True, timeout=30)
         print(f"   已导入照片 App:{pvt.name}" + (f" → 相册「{album}」" if album else ""))
         time.sleep(5)   # 给照片 App 一点导入时间
         if album:
