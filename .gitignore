@@ -46,3 +46,7 @@ Thumbs.db
 # 采集端(ego)的探索脚本和运行日志:含真实账号名 / 账号 ID,只保留正式的 collector.mjs
 collector/ego/*
 !collector/ego/collector.mjs
+
+# Live 视频 worker 的运行日志
+tools/livephoto/*.log
+tools/livephoto/*.log.err
