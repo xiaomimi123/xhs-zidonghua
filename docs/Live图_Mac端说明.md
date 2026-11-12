@@ -29,6 +29,15 @@ python3 mac_worker.py --server http://工作台IP:18765 --token 采集端Token
 - 导入 iPhone:双击 `.pvt` 导入 Mac「照片」,再 AirDrop;或直接把 `.pvt` 文件夹 AirDrop 过去。
 - 发布仍只能用 iPhone 上的小红书 App:选图时选这张 Live 图,点「实况」。
 
+### 做完自动导入 Mac 相册(按发起人分相册)
+加 `--import-photos`,每做完一个 `.pvt` 就自动导入本机「照片」App,Mac 相册里立刻出现实况图
+(已验证:macOS 照片会按真品 Live Photo 配对存储,iCloud 照片开着的话还会同步到 iPhone),成品照常回传工作台。
+从 2026-11-12 起,导入后会**自动归入以任务发起人命名的相册**(工作台 claim 接口下发 `by` 字段,
+发起人空缺时归入「未署名」相册),照片 App 侧边栏一人一个相册,发给别人时按相册整批取即可:
+```bash
+python3 mac_worker.py --server http://工作台IP:18765 --token 采集端Token --import-photos
+```
+
 ## 不连工作台,只处理一个文件夹
 ```bash
 python3 mac_worker.py --local ~/Pictures/待做 --out ~/LivePhotos

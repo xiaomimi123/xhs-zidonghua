@@ -658,7 +658,8 @@ def w_claim(request: Request, worker: str = ""):
         return {"job": None}
     opts = clean_opts(json.loads(r["opts"] or "{}"))
     job = {"id": r["id"], "image": r["image"], "opts": opts, "mode": opts["mode"],
-           "source": f"/api/live/worker/jobs/{r['id']}/source", "name": _file_stem(r["id"])}
+           "source": f"/api/live/worker/jobs/{r['id']}/source", "name": _file_stem(r["id"]),
+           "by": r["created_by"] or ""}   # 发起人,Mac 导相册时按它分相册
     if opts["mode"] == "motion":
         job["video"] = f"/api/live/worker/jobs/{r['id']}/video"
     return {"job": job}

@@ -9,6 +9,7 @@
 
 常用参数:--name 这台电脑的名字(工作台上显示)  --out 成品保存目录(默认 ~/LivePhotos)
           --once 领完当前任务就退出  --no-pvt 不调用 makelive(只在没有 macOS 时测试流程用,做出来的包 iPhone 认不了)
+          --import-photos 每做完一个包就自动导入本机「照片」App,相册里立刻是实况图(成品同时回传工作台)
 只用标准库发请求;图片处理和视频编码复用同目录的 make_live.py。"""
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import json
 import platform
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -106,7 +108,45 @@ class Api:
             print(f"   (没能把失败原因告诉工作台:{e})")
 
 
-def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool = False, first_frame_still: bool = False, sharpen: float = 0.6):
+def import_to_photos(pvt: Path, album: str = ""):
+    """把 .pvt 包导入本机「照片」App(等效于在 Finder 里双击)。导入后相册里就是一张实况图。
+    album 有值时,把刚导入的项归入以它命名的相册(按任务发起人分类,没有就放「未署名」)。"""
+    try:
+        subprocess.run(["open", "-a", "Photos", str(pvt)], check=True, timeout=60)
+        print(f"   已导入照片 App:{pvt.name}" + (f" → 相册「{album}」" if album else ""))
+        time.sleep(5)   # 给照片 App 一点导入时间
+        if album:
+            _assign_album(pvt.name.replace(".pvt", ""), album)
+    except Exception as e:
+        print(f"   导入照片 App 失败(不影响回传):{e}")
+
+
+def _assign_album(stem: str, album: str):
+    """把照片 App 里文件名匹配的最新导入项归入指定相册。相册不存在就建。"""
+    safe_stem = stem.replace('"', '')
+    safe_album = album.replace('"', '') or "未署名"
+    script = f'''
+    tell application "Photos"
+        set matches to every media item whose filename starts with "{safe_stem}"
+        if (count of matches) is 0 then return "no-match"
+        set mi to last item of matches   -- 匹配项里最后一个 = 最新导入的
+        if (count of (every album whose name is "{safe_album}")) is 0 then
+            make new album named "{safe_album}"
+        end if
+        add mi to album "{safe_album}"
+        return "ok"
+    end tell'''
+    try:
+        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=60)
+        out = (r.stdout or "").strip()
+        if r.returncode == 0 and out == "ok":
+            return
+        print(f"   相册归类失败(图还在「最近项目」里,不影响回传):{(r.stderr or out or '未知原因').strip()[:120]}")
+    except Exception as e:
+        print(f"   相册归类失败(图还在「最近项目」里,不影响回传):{e}")
+
+
+def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool = False, first_frame_still: bool = False, sharpen: float = 0.6, to_photos: bool = False):
     t0 = time.time()
     print(f"[任务 {job['id']}] {job.get('name', '')}  {'真实动作(以视频为源)' if job.get('video') else '慢推镜头'}  参数 {job['opts']}")
     with tempfile.TemporaryDirectory() as td:
@@ -118,6 +158,8 @@ def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool
             video.write_bytes(api.call("GET", job["video"].split("?")[0], timeout=180))
         # 真实动作:关键照片默认用原图(和视频用同一个裁切,包装上的字清晰);--first-frame-still 改取视频第一帧(和视频画面完全一致,但视频分辨率低、字会糊)
         pvt = make_pvt(None if (first_frame_still and video) else src, out, f"L{job['id']}", job["opts"], use_makelive, video, keep_audio, sharpen)
+    if to_photos:
+        import_to_photos(pvt, job.get("by") or "")   # 按任务发起人分相册
     api.upload(job["id"], zip_dir(pvt))
     print(f"   完成 {time.time() - t0:.0f} 秒 → {pvt}")
 
@@ -148,7 +190,7 @@ def serve(a):
             continue
         idle_logged = False
         try:
-            run_job(api, job, a.out, not a.no_pvt, a.keep_audio, a.first_frame_still, a.sharpen)
+            run_job(api, job, a.out, not a.no_pvt, a.keep_audio, a.first_frame_still, a.sharpen, a.import_photos)
         except Exception as e:
             print(f"   失败:{e}")
             api.fail(job["id"], f"{type(e).__name__}: {e}")
@@ -167,6 +209,8 @@ def local(a):
         print(f"[{i}/{len(files)}] {f.name}")
         try:
             pvt = make_pvt(f, a.out, f"{f.stem}", opts, not a.no_pvt)
+            if a.import_photos:
+                import_to_photos(pvt)
             print(f"   → {pvt}")
             ok += 1
         except Exception as e:
@@ -184,6 +228,7 @@ def main():
     ap.add_argument("--interval", type=int, default=5, help="没有任务时每隔几秒问一次")
     ap.add_argument("--once", action="store_true", help="只做一个任务就退出")
     ap.add_argument("--no-pvt", action="store_true", help="不调用 makelive(非 macOS 测试用)")
+    ap.add_argument("--import-photos", action="store_true", help="每做完一个包就自动导入本机「照片」App(成品同时回传工作台)")
     ap.add_argument("--keep-audio", action="store_true", help="真实动作模式:保留视频里模型生成的声音(默认去掉)")
     ap.add_argument("--sharpen", type=float, default=0.6, help="真实动作模式:视频轻锐化强度(AI 视频偏软),0 = 关闭,超过 1 容易出白边")
     ap.add_argument("--first-frame-still", action="store_true", help="真实动作模式:关键照片取视频第一帧,而不是原图")
