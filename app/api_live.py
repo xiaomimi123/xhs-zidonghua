@@ -659,7 +659,8 @@ def w_claim(request: Request, worker: str = ""):
     opts = clean_opts(json.loads(r["opts"] or "{}"))
     job = {"id": r["id"], "image": r["image"], "opts": opts, "mode": opts["mode"],
            "source": f"/api/live/worker/jobs/{r['id']}/source", "name": _file_stem(r["id"]),
-           "by": r["created_by"] or ""}   # 发起人,Mac 导相册时按它分相册
+           "by": r["created_by"] or "",   # 发起人,Mac 导相册时按它分相册
+           "created": (r["created"] or "")[:10]}   # 任务创建日期(YYYY-MM-DD),Mac 按它分日期子文件夹/相册
     if opts["mode"] == "motion":
         job["video"] = f"/api/live/worker/jobs/{r['id']}/video"
     return {"job": job}
