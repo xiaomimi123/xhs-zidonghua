@@ -315,6 +315,32 @@ def run(rep, env):
     ep = api_user.check_product(api_user.ProductCheckIn(name="姜黄粉", images=[du(img_a)], selling_points="x", audience="上班族"))
     rep.check("素材检查接口:返回提醒;图片格式不对返回 400", any("完全一样" in w["msg"] for w in ep["warnings"]) and _raises2(lambda: api_user.check_product(api_user.ProductCheckIn(name="x", images=["不是图片"]))))
     pdt.delete(pid_cin)
+    # ---- 产品图按页面顺序保存(拖动 / ‹ › 调整顺序;原图和新图可以交错)----
+    pid_o = pdt.create("排序测试", [du(img_a), du(img_b), du(img_c)])
+    o0 = pdt.get(pid_o)["images"]
+    db.q_exec("UPDATE products SET profile=? WHERE id=?", json.dumps({"category": "测试", "shoot": {"kind": "side"}}), pid_o)
+    nm = lambda **k: dict(name="排序测试", price="", selling_points="", audience="", forbid="", **k)
+    pdt.update(pid_o, keep=o0, add=None, order=[f"k:{o0[2]}", f"k:{o0[0]}", f"k:{o0[1]}"], **nm())
+    o1 = pdt.get(pid_o)
+    rep.check("产品图顺序:只调整顺序时按页面顺序保存,识别结果(含拍摄规格)不清",
+              o1["images"] == [o0[2], o0[0], o0[1]] and o1["profile"].get("shoot", {}).get("kind") == "side" and o1["profile"].get("category") == "测试", str(o1["images"]))
+    pdt.update(pid_o, keep=[o0[2], o0[0], o0[1]], add=[du(img_d)], order=[f"k:{o0[2]}", "a:0", f"k:{o0[0]}", f"k:{o0[1]}"], **nm())
+    o2 = pdt.get(pid_o)
+    rep.check("产品图顺序:新上传的图可以插在原图中间;图的构成变了就清掉识别结果",
+              len(o2["images"]) == 4 and o2["images"][0] == o0[2] and o2["images"][2:] == [o0[0], o0[1]] and o2["images"][1] not in o0 and not o2["profile"], str(o2["images"]))
+    pdt.update(pid_o, keep=[o0[2], o0[0]], add=None, order=["k:不存在.jpg", "a:9", f"k:{o0[0]}", f"k:{o0[0]}", "乱写"], **nm())
+    o3 = pdt.get(pid_o)
+    rep.check("产品图顺序:order 里不认识的、重复的忽略,没提到的图补在后面,不会丢图;没传 order 保持原来的顺序",
+              o3["images"] == [o0[0], o0[2]] and not (pdt.DIR / o0[1]).exists(), str(o3["images"]))
+    pdt.update(pid_o, keep=[o0[2], o0[0]], add=[du(img_b)], order=None, **nm())
+    o4 = pdt.get(pid_o)["images"]
+    rep.check("产品图顺序:不传 order = 原图在前(按原来的顺序)、新图在后", o4[:2] == [o0[0], o0[2]] and len(o4) == 3, str(o4))
+    other_png = pdt.get(pid_o)["images"][0]
+    pid_p = pdt.create("排序测试2", [du(img_c)])
+    ws_o = pc.check("排序测试2", [(img_a, "png")], [pdt.get(pid_p)["images"][0]], "x", "上班族", "", pid_p, vision=False, order=["a:0", "k:" + pdt.get(pid_p)["images"][0]])
+    rep.check("素材检查:提示里的「第几张」按页面顺序算(新图拖到了第 1 位)", any("第 1 张图和产品「排序测试」里的图完全一样" in w["msg"] for w in ws_o), str([w["msg"] for w in ws_o]))
+    pdt.delete(pid_o)
+    pdt.delete(pid_p)
     off = api_user.list_runs(limit=2, offset=1)
     full = api_user.list_runs(limit=500)
     rep.check("任务页分页:offset 跳过前 N 个,总数接口和列表一致", [x["id"] for x in off] == [x["id"] for x in full[1:3]] and api_user.runs_count()["total"] == len(full))

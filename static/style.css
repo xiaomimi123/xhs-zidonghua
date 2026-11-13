@@ -1211,3 +1211,15 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 .pc-list li.tip{background:var(--soft);border-left-color:var(--line-2);color:var(--sub)}
 .pc-t{display:inline-block;margin-right:8px;padding:0 6px;border-radius:99px;font-size:11px;background:var(--panel);color:var(--warn)}
 .pc-list li.tip .pc-t{color:var(--sub)}
+
+/* 产品图缩略图:点击放大、拖动排序、‹ › 前后移 */
+.fl-up img{cursor:zoom-in}
+.fl-up.mv{cursor:grab}
+.fl-up.drag{opacity:.35}
+.fl-up.over{outline:2px dashed var(--accent);outline-offset:2px;border-radius:var(--r-sm)}
+.fl-mv{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;padding:3px;opacity:0;transition:opacity .12s}
+.fl-up:hover .fl-mv,.fl-up:focus-within .fl-mv{opacity:1}
+.fl-up .fl-mv button{position:static;width:24px;height:24px;border-radius:7px;background:oklch(20% .01 50 / .7);color:#fff;font-size:15px;line-height:1;cursor:pointer}
+.fl-up .fl-mv button:disabled{opacity:.3;cursor:default}
+.fl-up img:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (hover:none){.fl-mv{opacity:1}}

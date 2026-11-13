@@ -265,12 +265,14 @@ class ProductEdit(BaseModel):
     forbid: str = ""
     keep: list[str] = []   # 保留的原图文件名
     add: list[str] = []    # 新上传的图(data URL)
+    order: list[str] = []  # 页面上的图片顺序:"k:文件名" 原图、"a:序号" 新上传的第几张(可以交错);不传就原图在前
 
 
 class ProductCheckIn(BaseModel):
     name: str = ""
     images: list[str] = []         # 新上传的图(data URL)
     keep: list[str] = []           # 编辑产品时保留的原图文件名
+    order: list[str] = []          # 页面上的图片顺序(同 ProductEdit.order),检查提示里的「第几张」按它算
     selling_points: str = ""
     audience: str = ""
     forbid: str = ""
@@ -284,13 +286,13 @@ def check_product(c: ProductCheckIn):
         new = products.decode_images(c.images) if c.images else []
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"warnings": product_check.check(c.name, new, c.keep, c.selling_points, c.audience, c.forbid, c.product_id)}
+    return {"warnings": product_check.check(c.name, new, c.keep, c.selling_points, c.audience, c.forbid, c.product_id, order=c.order)}
 
 
 @router.put("/api/products/{pid}")
 def edit_product(pid: int, e: ProductEdit):
     try:
-        products.update(pid, e.name, e.price, e.selling_points, e.audience, e.forbid, e.keep, e.add)
+        products.update(pid, e.name, e.price, e.selling_points, e.audience, e.forbid, e.keep, e.add, e.order)
     except ValueError as ex:
         raise HTTPException(400, str(ex))
     return {"ok": True}

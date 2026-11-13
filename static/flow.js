@@ -38,6 +38,14 @@ document.addEventListener("keydown", e => {
 
 const fmtN = n => n >= 10000 ? (n / 10000).toFixed(1) + "w" : (n ?? 0);
 
+// ---------- 产品图缩略图:点击放大、‹ › 前后移、拖动排序、× 去掉 ----------
+// 生图时只取前 3 张当参考,所以顺序很重要。kind:p = 新产品的图,e = 编辑产品时的图(原图和新图可以交错),v = 只看(不能改)。
+const FL_REFS = 3;
+function imgTile(kind, u, i, n, rm = "") {
+  const mv = kind === "v" ? "" : `<span class="fl-mv"><button type="button" data-mv="${kind}:${i}:-1" aria-label="往前移一位" ${i === 0 ? "disabled" : ""}>‹</button><button type="button" data-mv="${kind}:${i}:1" aria-label="往后移一位" ${i === n - 1 ? "disabled" : ""}>›</button></span>`;
+  return `<span class="fl-up${kind === "v" ? "" : " mv"}" ${kind === "v" ? "" : `draggable="true" data-ord="${kind}:${i}"`}>${i < FL_REFS ? `<i class="fl-refno" title="生图时会用这张当参考">${i + 1}</i>` : ""}<img src="${esc(u)}" alt="第 ${i + 1} 张产品图,点击放大" data-zoom="${kind}:${i}" tabindex="0" role="button" draggable="false">${rm}${mv}</span>`;
+}
+
 // ---------- 按账号推荐 ----------
 const WRITABLE_ANGLES = ["产品种草", "吃法搭配", "菜谱做法", "知识科普", "测评对比"];
 function angleBlock(plan) {
@@ -77,15 +85,15 @@ async function fNew() {
     <div class="seg"><button class="${prod ? "on" : ""}" data-fmode="product">我有产品</button><button class="${prod ? "" : "on"}" data-fmode="track">按赛道</button></div>
     ${prod ? `${list.length ? `<span class="fl-lbl">已有产品</span><div class="fl-chips">${list.map(x => `<button class="chip ${P.pick === x.id ? "on" : ""}" data-fpick="${x.id}">${esc(x.name)}</button>`).join("")}${P.pick ? `<button class="chip" data-fpick="0">+ 新产品</button>` : ""}</div>` : ""}
       ${picked && FL.edit?.id === picked.id ? editForm(FL.edit)
-      : picked ? `<div class="fl-ups">${picked.images.map((u, i) => `<span class="fl-up">${i < 3 ? `<i class="fl-refno" title="生图时会用这张当参考">${i + 1}</i>` : ""}<img src="${esc(u)}" alt=""></span>`).join("")}</div>
+      : picked ? `<div class="fl-ups">${picked.images.map((u, i) => imgTile("v", u, i, picked.images.length)).join("")}</div>
         <div class="fl-pinfo"><div><b>${esc(picked.name)}</b><p class="sub">${[picked.price, picked.selling_points && "卖点:" + picked.selling_points, picked.audience && "人群:" + picked.audience, picked.forbid && "不写:" + picked.forbid].filter(Boolean).map(esc).join(" · ") || "没有补充资料"}</p></div>
           <button class="btn gray sm" data-fedit>编辑</button><button class="btn ghost sm danger" data-fdel>${FL.delSure === picked.id ? "再点一次确认删除" : "删除"}</button></div>`
       : `<label class="fl-lbl" for="fpname">产品名称</label><input id="fpname" placeholder="如:国圣台湾风味豆腐乳" value="${esc(P.name)}">
-        <span class="fl-lbl">产品图</span><div class="pc-tip"><b>怎么传才好用</b><ul>
+        <span class="fl-lbl">产品图 · 点图片放大,拖动或点 ‹ › 调整顺序</span><div class="pc-tip"><b>怎么传才好用</b><ul>
         <li>建议 3–6 张:<b>① 包装正面</b>(白底最好)、<b>② 开盖 / 内容物特写</b>、<b>③ 1–2 张真实使用或食用场景</b></li>
         <li>一次只传<b>一个产品</b>,图里不要出现别的产品或别的品牌</li>
         <li>生图时只取<b>前 3 张</b>当参考(带数字角标的就是),把最能代表产品的放在最前面</li></ul></div>
-        <div class="fl-ups">${P.files.map((u, i) => `<span class="fl-up">${i < 3 ? `<i class="fl-refno" title="生图时会用这张当参考">${i + 1}</i>` : ""}<img src="${u}" alt=""><button data-frm="${i}" aria-label="移除第 ${i + 1} 张">×</button></span>`).join("")}<label class="fl-add">+ 上传<input id="ffile" type="file" accept="image/*" multiple hidden></label></div>
+        <div class="fl-ups">${P.files.map((u, i) => imgTile("p", u, i, P.files.length, `<button type="button" data-frm="${i}" aria-label="移除第 ${i + 1} 张">×</button>`)).join("")}<label class="fl-add">+ 上传<input id="ffile" type="file" accept="image/*" multiple hidden></label></div>
         <details class="fl-more"><summary>补充资料(可选,写得越准,文案越贴合)</summary><div class="pc-tip"><b>填写要点</b><ul>
           <li><b>卖点</b>:3–5 条短句,只写这个产品,不要复制别的产品的文案</li>
           <li><b>适合人群</b>:只写人群本身,如「上班族、控糖人群」;不要写给 AI 的指令(如「帮我收集…」)</li>
@@ -130,10 +138,11 @@ async function fNew() {
     const pt = t.closest("[data-fptype]"); if (pt) { keep(); FL.ptype = pt.dataset.fptype; return fNew(); }
     const m = t.closest("[data-fmode]"); if (m) { keep(); FL.mode = m.dataset.fmode; return fNew(); }
     const pk = t.closest("[data-fpick]"); if (pk) { keep(); P.pick = +pk.dataset.fpick; FL.edit = null; FL.delSure = 0; return fNew(); }
-    if (t.closest("[data-fedit]")) { FL.edit = { id: picked.id, name: picked.name, price: picked.price || "", sp: picked.selling_points || "", aud: picked.audience || "", forbid: picked.forbid || "", keep: [...picked.images], add: [] }; return fNew(); }
+    if (t.closest("[data-fedit]")) { FL.edit = { id: picked.id, name: picked.name, price: picked.price || "", sp: picked.selling_points || "", aud: picked.audience || "", forbid: picked.forbid || "", imgs: picked.images.map(u => ({ u })) }; return fNew(); }
     if (t.closest("[data-fecancel]")) { FL.edit = null; return fNew(); }
-    const ek = t.closest("[data-fekeep]"); if (ek) { keepEdit(); FL.edit.keep.splice(+ek.dataset.fekeep, 1); return fNew(); }
-    const ea = t.closest("[data-feadd]"); if (ea) { keepEdit(); FL.edit.add.splice(+ea.dataset.feadd, 1); return fNew(); }
+    const er = t.closest("[data-fermv]"); if (er) { keepEdit(); FL.edit.imgs.splice(+er.dataset.fermv, 1); return fNew(); }
+    const zm = t.closest("[data-zoom]"); if (zm) { const [k, i] = zm.dataset.zoom.split(":"); return lightbox(imgList(k), +i); }
+    const mvb = t.closest("[data-mv]"); if (mvb) { const [k, i, d] = mvb.dataset.mv.split(":"); return moveImg(k, +i, +i + +d); }
     if (t.closest("[data-fesave]")) return saveEdit();
     if (t.closest("[data-fdel]")) {
       if (FL.delSure !== picked.id) { FL.delSure = picked.id; return fNew(); }
@@ -149,23 +158,45 @@ async function fNew() {
     const hw = t.closest("[data-fhot]"); if (hw) { keep(); const w = hw.dataset.fhot, cur = FL.kw.split(/[,，、\n]+/).map(s => s.trim()).filter(Boolean); if (!cur.includes(w)) cur.push(w); FL.kw = cur.join("、"); return fNew(); }
     const r = t.closest("[data-run]"); if (r) return openRun(+r.dataset.run);
   };
+  // 图片列表和调整顺序:p = 新产品的图,e = 编辑中的图,v = 已选产品(只看)
+  const imgList = k => k === "p" ? P.files : k === "e" ? (FL.edit?.imgs || []).map(x => x.u) : (picked?.images || []);
+  const moveImg = (k, from, to) => {
+    const arr = k === "p" ? P.files : k === "e" ? FL.edit?.imgs : null;
+    if (!arr || to < 0 || to >= arr.length || from === to) return;
+    if (k === "p") keep(); else keepEdit();
+    arr.splice(to, 0, arr.splice(from, 1)[0]);
+    fNew();
+  };
+  const ordOf = e => e.target.closest?.(".fl-up[data-ord]");
+  $("#main").ondragstart = e => { const t = ordOf(e); if (!t) return; e.dataTransfer.setData("text/plain", t.dataset.ord); e.dataTransfer.effectAllowed = "move"; t.classList.add("drag"); };
+  $("#main").ondragend = () => $$(".fl-up.drag, .fl-up.over").forEach(x => x.classList.remove("drag", "over"));
+  $("#main").ondragover = e => { const t = ordOf(e); if (t) { e.preventDefault(); $$(".fl-up.over").forEach(x => x !== t && x.classList.remove("over")); t.classList.add("over"); } };
+  $("#main").ondrop = e => {
+    const t = ordOf(e); if (!t) return; e.preventDefault();
+    const [k1, i1] = (e.dataTransfer.getData("text/plain") || ":").split(":"), [k2, i2] = t.dataset.ord.split(":");
+    if (k1 === k2 && i1 !== "" ) moveImg(k1, +i1, +i2);
+  };
+  $("#main").onkeydown = e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("img[data-zoom]")) { e.preventDefault(); e.target.click(); } };
   const keepEdit = () => { const E = FL.edit; if (!E) return; for (const [k, id] of [["name", "fename"], ["price", "feprice"], ["aud", "feaud"], ["sp", "fesp"], ["forbid", "feforbid"]]) if ($("#" + id)) E[k] = $("#" + id).value; };
   const saveEdit = async () => {
     keepEdit(); const E = FL.edit;
     if (!E.name.trim()) return toast("产品名称不能为空", 1);
-    if (!E.keep.length && !E.add.length) return toast("至少保留一张产品图", 1);
+    if (!E.imgs.length) return toast("至少保留一张产品图", 1);
+    const part = E_ => { const add = E_.imgs.filter(x => x.a), keepN = E_.imgs.filter(x => !x.a).map(x => x.u.split("/").pop());
+      let ai = 0; return { images: add.map(x => x.u), keep: keepN, order: E_.imgs.map(x => x.a ? "a:" + ai++ : "k:" + x.u.split("/").pop()) }; };
+    const pp = part(E);
     const btn_ = $("[data-fesave]"); btn_ && (btn_.disabled = true, btn_.textContent = "检查中…");
-    const go_ = await checkProduct({ name: E.name, images: E.add, keep: E.keep.map(u => u.split("/").pop()), selling_points: E.sp, audience: E.aud, forbid: E.forbid, product_id: E.id });
+    const go_ = await checkProduct({ name: E.name, images: pp.images, keep: pp.keep, order: pp.order, selling_points: E.sp, audience: E.aud, forbid: E.forbid, product_id: E.id });
     btn_ && (btn_.disabled = false, btn_.textContent = "保存产品");
     if (!go_) return;
     try {
-      await api(`/api/products/${E.id}`, "PUT", { name: E.name, price: E.price, selling_points: E.sp, audience: E.aud, forbid: E.forbid, keep: E.keep.map(u => u.split("/").pop()), add: E.add });
+      await api(`/api/products/${E.id}`, "PUT", { name: E.name, price: E.price, selling_points: E.sp, audience: E.aud, forbid: E.forbid, keep: pp.keep, add: pp.images, order: pp.order });
       FL.edit = null; toast("产品已保存"); fNew();
     } catch (e) { toast(e.message, 1); }
   };
   $("#fefile") && ($("#fefile").onchange = async e => {
     keepEdit(); const E = FL.edit;
-    try { for (const f of [...e.target.files]) if (E.keep.length + E.add.length < 9) E.add.push(await shrink(f)); } catch (err) { toast(err.message, 1); }
+    try { for (const f of [...e.target.files]) if (E.imgs.length < 9) E.imgs.push({ u: await shrink(f), a: true }); } catch (err) { toast(err.message, 1); }
     fNew();
   });
   $("#ffile") && ($("#ffile").onchange = async e => {
@@ -226,11 +257,11 @@ async function checkProduct(body) {
 
 function editForm(E) {
   return `<div class="fl-edit"><label class="fl-lbl" for="fename">产品名称</label><input id="fename" value="${esc(E.name)}">
-    <span class="fl-lbl">产品图 · 点 × 去掉,至少留一张</span><div class="pc-tip"><b>怎么传才好用</b><ul>
+    <span class="fl-lbl">产品图 · 点图片放大,拖动或点 ‹ › 调整顺序,点 × 去掉(至少留一张)</span><div class="pc-tip"><b>怎么传才好用</b><ul>
         <li>建议 3–6 张:<b>① 包装正面</b>(白底最好)、<b>② 开盖 / 内容物特写</b>、<b>③ 1–2 张真实使用或食用场景</b></li>
         <li>一次只传<b>一个产品</b>,图里不要出现别的产品或别的品牌</li>
         <li>生图时只取<b>前 3 张</b>当参考(带数字角标的就是),把最能代表产品的放在最前面</li></ul></div>
-    <div class="fl-ups">${E.keep.map((u, i) => `<span class="fl-up">${i < 3 ? `<i class="fl-refno" title="生图时会用这张当参考">${i + 1}</i>` : ""}<img src="${esc(u)}" alt=""><button data-fekeep="${i}" aria-label="去掉这张">×</button></span>`).join("")}${E.add.map((u, i) => `<span class="fl-up">${E.keep.length + i < 3 ? `<i class="fl-refno" title="生图时会用这张当参考">${E.keep.length + i + 1}</i>` : ""}<img src="${u}" alt=""><button data-feadd="${i}" aria-label="去掉这张">×</button></span>`).join("")}<label class="fl-add">+ 添加<input id="fefile" type="file" accept="image/*" multiple hidden></label></div>
+    <div class="fl-ups">${E.imgs.map((x, i) => imgTile("e", x.u, i, E.imgs.length, `<button type="button" data-fermv="${i}" aria-label="去掉这张">×</button>`)).join("")}<label class="fl-add">+ 添加<input id="fefile" type="file" accept="image/*" multiple hidden></label></div>
     <div class="fl-two"><input id="feprice" placeholder="价格,如 29.9 元 / 罐" value="${esc(E.price)}"><input id="feaud" placeholder="适合人群,如 上班族" value="${esc(E.aud)}"></div>
     <input id="fesp" placeholder="卖点,如 古法发酵 · 小罐装" value="${esc(E.sp)}" style="margin-top:10px"><input id="feforbid" placeholder="不能出现的说法,如 不写疗效" value="${esc(E.forbid)}" style="margin-top:10px">
     <div class="fl-acts" style="margin-top:12px;justify-content:flex-end"><button class="btn gray sm" data-fecancel>取消</button><button class="btn sm" data-fesave>保存产品</button></div></div>`;

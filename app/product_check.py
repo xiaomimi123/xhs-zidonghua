@@ -78,19 +78,47 @@ def _text_warnings(name: str, selling_points: str, audience: str, forbid: str, e
     return out
 
 
-def _image_warnings(new: list[tuple[bytes, str]], keep: list[str], exclude_pid: int) -> list[dict]:
+def ordered(new: list[tuple[bytes, str]], keep: list[str], order: list[str] | None = None) -> list[tuple[str, str | None, bytes | None]]:
+    """按页面上的顺序排好的图片 [(类型, 原图文件名, 新图字节)],类型 k = 已有的原图,a = 新上传的。
+    order = 页面传来的顺序 ["k:文件名", "a:序号"];没传就是原图在前、新图在后;order 里没提到的图补在最后,不会丢。"""
+    keep = [Path(f).name for f in keep]
+    seq, used = [], set()
+    for t in order or []:
+        kind, _, v = str(t).partition(":")
+        if kind == "k" and Path(v).name in keep and ("k", Path(v).name) not in used:
+            used.add(("k", Path(v).name)); seq.append(("k", Path(v).name, None))
+        elif kind == "a" and v.isdigit() and int(v) < len(new) and ("a", int(v)) not in used:
+            used.add(("a", int(v))); seq.append(("a", None, new[int(v)][0]))
+    for f in keep:
+        if ("k", f) not in used:
+            seq.append(("k", f, None))
+    for n, (b, _e) in enumerate(new):
+        if ("a", n) not in used:
+            seq.append(("a", None, b))
+    return seq
+
+
+def _bytes_of(item) -> bytes | None:
+    kind, name, data = item
+    if kind == "a":
+        return data
+    p = products.DIR / name
+    return p.read_bytes() if p.is_file() else None
+
+
+def _image_warnings(seq: list, exclude_pid: int) -> list[dict]:
     out = []
-    n_keep = len(keep)
-    total = n_keep + len(new)
+    total = len(seq)
     if total > REFS_USED:
-        out.append({"level": "tip", "where": "图片", "msg": f"共 {total} 张图,生图时只会取前 {REFS_USED} 张当参考。请把最能代表产品的(包装正面、开盖实物)放在最前面"})
+        out.append({"level": "tip", "where": "图片", "msg": f"共 {total} 张图,生图时只会取前 {REFS_USED} 张当参考。请把最能代表产品的(包装正面、开盖实物)放在最前面(可以拖动或用 ‹ › 调整顺序)"})
     other = _other_images(exclude_pid)
     seen: dict[str, int] = {}
-    for f in keep:   # 已有的图也参与「是否重复」的比较
-        p = products.DIR / f
-        if p.is_file():
-            seen.setdefault(_md5_file(p), len(seen) + 1)
-    for i, (b, _ext) in enumerate(new, n_keep + 1):
+    blobs = []
+    for i, item in enumerate(seq, 1):
+        b = _bytes_of(item)
+        blobs.append(b)
+        if b is None:
+            continue
         h = hashlib.md5(b).hexdigest()
         if h in other:
             out.append({"level": "warn", "where": "图片", "msg": f"第 {i} 张图和产品「{other[h][0]}」里的图完全一样,是不是传错了?放错产品会让生成的图里出现别的产品"})
@@ -100,7 +128,9 @@ def _image_warnings(new: list[tuple[bytes, str]], keep: list[str], exclude_pid: 
     try:   # 分辨率偏低:没装 Pillow(本地开发)就跳过
         import io
         from PIL import Image
-        for i, (b, _ext) in enumerate(new, n_keep + 1):
+        for i, b in enumerate(blobs, 1):
+            if b is None:
+                continue
             with Image.open(io.BytesIO(b)) as im:
                 if min(im.size) < LOW_RES:
                     out.append({"level": "tip", "where": "图片", "msg": f"第 {i} 张图分辨率偏低({im.size[0]}×{im.size[1]}),包装上的字生图时容易糊,建议用原图"})
@@ -139,20 +169,26 @@ def _vision_warnings(name: str, paths: list[Path], category: str = "") -> list[d
 
 
 def check(name: str, new_images: list[tuple[bytes, str]] | None = None, keep: list[str] | None = None, selling_points: str = "",
-          audience: str = "", forbid: str = "", exclude_pid: int = 0, vision: bool = True) -> list[dict]:
-    """返回提醒列表 [{level: warn / tip, where: 图片 / 文案, msg}],warn 在前。图片序号 = 已保留的原图在前、新上传的在后(和页面上的顺序一致)。"""
+          audience: str = "", forbid: str = "", exclude_pid: int = 0, vision: bool = True, order: list[str] | None = None) -> list[dict]:
+    """返回提醒列表 [{level: warn / tip, where: 图片 / 文案, msg}],warn 在前。图片序号和页面上的顺序一致(order 没传就是原图在前、新图在后)。"""
     new, keep = list(new_images or []), [Path(f).name for f in (keep or [])]
+    seq = ordered(new, keep, order)
     cat = ""
     if exclude_pid:
         cat = (products.get(exclude_pid) or {}).get("category") or ""
-    out = _image_warnings(new, keep, exclude_pid) + _text_warnings(name, selling_points, audience, forbid, exclude_pid, cat)
-    if vision and (new or keep):
+    out = _image_warnings(seq, exclude_pid) + _text_warnings(name, selling_points, audience, forbid, exclude_pid, cat)
+    if vision and seq:
         with tempfile.TemporaryDirectory() as td:
-            paths = [products.DIR / f for f in keep if (products.DIR / f).is_file()]
-            for i, (b, ext) in enumerate(new):
-                p = Path(td) / f"n{i}.{ext}"
-                p.write_bytes(b)
-                paths.append(p)
+            paths = []
+            for n, item in enumerate(seq):
+                if item[0] == "k":
+                    if (products.DIR / item[1]).is_file():
+                        paths.append(products.DIR / item[1])
+                else:
+                    ext = next((e for b_, e in new if b_ is item[2]), "jpg")
+                    pth = Path(td) / f"n{n}.{ext}"
+                    pth.write_bytes(item[2])
+                    paths.append(pth)
             out += _vision_warnings(name, paths, cat)
     out.sort(key=lambda w: 0 if w["level"] == "warn" else 1)
     return out

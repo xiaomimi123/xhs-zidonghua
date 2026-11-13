@@ -56,9 +56,10 @@ def create(name: str, data_urls: list[str], price: str = "", selling_points: str
 
 
 def update(pid: int, name: str, price: str = "", selling_points: str = "", audience: str = "", forbid: str = "",
-           keep: list[str] | None = None, add: list[str] | None = None):
+           keep: list[str] | None = None, add: list[str] | None = None, order: list[str] | None = None):
     """改产品资料和图片。keep:保留的原图文件名;add:新上传的图(data URL)。至少留一张图。
-    换了图就清掉上次的识别结果(下次生成会重新识别)。"""
+    order:页面上的图片顺序,["k:文件名"] 是保留的原图,["a:0"] 是新上传的第几张;不传就是原图在前、新图在后。
+    顺序很重要:生图时只取前几张当参考。换了图(或前 4 张的构成变了)就清掉上次的识别结果,下次生成会重新识别;只是调整顺序不清。"""
     p = get(pid)
     if not p:
         raise ValueError("找不到这个产品")
@@ -71,15 +72,23 @@ def update(pid: int, name: str, price: str = "", selling_points: str = "", audie
         raise ValueError("至少保留一张产品图")
     if len(kept) + len(new) > MAX_IMAGES:
         raise ValueError(f"最多 {MAX_IMAGES} 张产品图")
-    names = list(kept)
+    new_names = []
     for b, ext in new:
         n = f"p{pid}_{secrets.token_hex(4)}.{ext}"
         (DIR / n).write_bytes(b)
-        names.append(n)
+        new_names.append(n)
+    names = []
+    for t in order or []:   # 按页面顺序排;不认识的、重复的忽略
+        kind, _, v = str(t).partition(":")
+        if kind == "k" and v in kept and v not in names:
+            names.append(v)
+        elif kind == "a" and v.isdigit() and int(v) < len(new_names) and new_names[int(v)] not in names:
+            names.append(new_names[int(v)])
+    names += [n for n in [*kept, *new_names] if n not in names]   # order 里没提到的补在最后,不会丢图
     for old in p["images"]:
         if old not in kept:
             (DIR / old).unlink(missing_ok=True)
-    changed = names != p["images"]
+    changed = set(names) != set(p["images"]) or set(names[:4]) != set(p["images"][:4])
     q_exec("UPDATE products SET name=?, price=?, selling_points=?, audience=?, forbid=?, images=?" + (", profile='{}'" if changed else "") + " WHERE id=?",
            name, price.strip()[:40], selling_points.strip()[:500], audience.strip()[:100], forbid.strip()[:200], json.dumps(names), pid)
 
