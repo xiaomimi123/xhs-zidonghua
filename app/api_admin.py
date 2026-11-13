@@ -219,13 +219,13 @@ def all_tasks(status: str = "", q: str = "", purpose: str = "", limit: int = 200
 
 @router.post("/tasks/{tid}/retry")
 def retry_task(tid: int):
-    q_exec("UPDATE crawl_tasks SET status='pending',error='',worker='' WHERE id=?", tid)
+    q_exec("UPDATE crawl_tasks SET status='pending',error='',worker='',tries=0,claim_start=NULL WHERE id=?", tid)
     return {"ok": True}
 
 
 @router.post("/tasks/retry_failed")
 def retry_failed():
-    n = q_exec("UPDATE crawl_tasks SET status='pending',error='',worker='' WHERE status='failed'").rowcount
+    n = q_exec("UPDATE crawl_tasks SET status='pending',error='',worker='',tries=0,claim_start=NULL WHERE status='failed'").rowcount
     return {"ok": True, "n": n}
 
 

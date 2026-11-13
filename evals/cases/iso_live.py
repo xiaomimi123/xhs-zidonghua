@@ -245,6 +245,18 @@ def run(rep, env):
             rep.check("场景图提示词:保持产品外观 + 手机随手拍风格 + 自动场景 + 带参考图",
                       pr.startswith("以参考图中的产品为主体") and "手机随手拍的生活照风格" in pr and "场景:" in pr and "一只手拿着罐子" in pr and rf and rf[0].startswith("lvref_") and "棚拍广告" not in pr.replace("不是棚拍,不是广告大片", ""), pr[:200])
             api_live.run_gen_once()
+            # 同一产品反复生成不能越来越像:每张有(场景, 拍法),一批里先把不同场景用一遍,下一批避开已经用过的
+            gj = [db.q_one("SELECT gen FROM live_jobs WHERE id=?", i)["gen"] for i in gids]
+            rep.check("自动场景:每张存下场景和拍法,提示词里带拍法", all(x.get("look") and x.get("scene") and x.get("auto") for x in gj) and "拍法:" in calls[0][0]
+                      and len({(x["scene"], x["look"]) for x in gj}) == 2 and gj[0]["scene"] != gj[1]["scene"], str(gj))
+            g2 = user.post("/api/live/jobs/generate", json={"images": [url(png)], "count": 10}).json()["ids"]
+            gj2 = [db.q_one("SELECT gen FROM live_jobs WHERE id=?", i)["gen"] for i in g2]
+            pairs = [(x["scene"], x["look"]) for x in gj + gj2]
+            rep.check("再生成 10 张:12 张(场景, 拍法)没有重复;同一批 10 张场景至少换了 7 种(场景池只有 7~8 种)", len(set(pairs)) == 12 and len({x["scene"] for x in gj2}) >= 7, str(len(set(pairs))))
+            fx = user.post("/api/live/jobs/generate", json={"images": [url(png)], "scene": "厨房台面,旁边有调料瓶和砧板,食材随手放着,明亮的自然光", "count": 6}).json()["ids"]
+            gfx = [db.q_one("SELECT gen FROM live_jobs WHERE id=?", i)["gen"] for i in fx]
+            rep.check("指定了场景也不重样:6 张同一场景,拍法互不相同", len({x["look"] for x in gfx}) == 6 and all(not x["auto"] for x in gfx) and len({x["scene"] for x in gfx}) == 1)
+            db.q_exec(f"DELETE FROM live_jobs WHERE id IN ({','.join(str(i) for i in g2 + fx)})")   # 清掉自己造的,别抢后面检查要用的生成顺序
             rep.check("自动场景:两张换不同场景", calls[0][0] != calls[1][0] and "场景:" in calls[1][0])
             rep.check("没有待生成的任务时返回 False", api_live.run_gen_once() is False)
             vjob = col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"]

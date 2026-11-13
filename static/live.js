@@ -198,8 +198,9 @@ function lvUpload() {
       <select id="lvprod"><option value="0">上传新的产品图</option>${LV.prods.filter(p => p.images.length).map(p => `<option value="${p.id}" ${G.product === p.id ? "selected" : ""}>${esc(p.name)}(${p.images.length} 张图)</option>`).join("")}</select>
       ${prod ? `<div class="lv-pvs">${prod.images.slice(0, 3).map(u => `<span class="lv-pv"><img src="${esc(u)}" alt=""></span>`).join("")}</div>`
         : `${drop("lvdrop2", "点击选择产品图,或拖到这里(1~3 张,包装正面最重要)")}<div class="lv-pvs" id="lvpv2">${lvThumbs(G.files, "gen")}</div>`}
-      <div class="lv-two"><div><label class="f">场景</label><select id="lvscene"><option value="">自动(每张换一个生活场景)</option>${LV.scenes.map(s => `<option value="${esc(s)}" ${G.scene === s ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
+      <div class="lv-two"><div><label class="f">场景</label><select id="lvscene"><option value="">自动(每张换场景和拍法,避开这个产品用过的)</option>${LV.scenes.map(s => `<option value="${esc(s)}" ${G.scene === s ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
         <div><label class="f">生成几张</label><select id="lvcount">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<option value="${n}" ${G.count === n ? "selected" : ""}>${n} 张</option>`).join("")}</select></div></div>
+      <p class="sub" style="margin:8px 0 0">指定了场景也一样:每张会换机位、光线和画面状态(有没有手入镜、旁边的杂物),同一产品反复生成不会越来越像。</p>
       <label class="f">画面补充 <span class="sub">可选</span></label><input id="lvnote" maxlength="100" placeholder="例如:一只手拿着罐子、旁边有一杯刚冲好的拿铁" value="${esc(G.note)}">`,
   }[m];
   sec.innerHTML = `<details class="lv-tipd"><summary>选图小提示</summary><p>${LV_TIP}</p></details>

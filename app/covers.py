@@ -98,16 +98,52 @@ def image_count(s: dict | None = None, rng: random.Random | None = None) -> int:
     return (rng or random).choices([1, 2, 3, 4], weights=w)[0]
 
 
-def scene(track: str, did: int, i: int, prod: dict | None = None) -> str:
-    """配图的场景方向:美食按产品类型挑能放的场景(并优先用产品资料里「可以带出产品的场景」),其它赛道用通用场景;同一篇里每张换一个。"""
+def scene_pool(track: str, prod: dict | None = None) -> list[str]:
+    """这个赛道 / 产品能用的场景(美食按产品类型挑,并优先用产品资料里「可以带出产品的场景」;其它赛道用通用场景)。"""
     if track != "美食":
-        return GENERIC_SCENES[(did * 3 + i * 7) % len(GENERIC_SCENES)]
-    kind = product_kind(prod)
-    pool = KIND_POOLS[kind]
+        return list(GENERIC_SCENES)
+    pool = KIND_POOLS[product_kind(prod)]
     labels = " ".join(((prod or {}).get("profile") or {}).get("scenes") or [])
     pref = [k for pat, k in TAG_KEYS if re.search(pat, labels) and k in pool]
-    cand = list(dict.fromkeys(pref + pool))
-    return SCENES[cand[(did * 3 + i * 7) % len(cand)]]
+    return [SCENES[k] for k in dict.fromkeys(pref + pool)]
+
+
+def scene(track: str, did: int, i: int, prod: dict | None = None) -> str:
+    """配图的场景方向:同一篇里每张换一个。"""
+    cand = scene_pool(track, prod)
+    return cand[(did * 3 + i * 7) % len(cand)]
+
+
+# 拍法:同一个场景也能拍出不一样的画面(机位 × 光线 × 画面状态)。只换场景的话,同一产品反复生成,画面会越来越像
+LOOK_ANGLES = ["平视角度,手机离主体约半米", "从上往下俯拍", "45 度侧前方拍,手机略微倾斜", "近距离特写,主体占画面大半,背景虚焦",
+               "稍远一点,带出更多周围环境", "低机位,贴近桌面略微仰拍"]
+LOOK_LIGHTS = ["白天窗边的自然光", "偏暗的室内灯光,略微暖黄", "午后斜射的阳光,有明显的光影", "傍晚偏暖的光线", "阴天柔和偏冷的光线"]
+LOOK_STATES = ["画面里没有人,只有产品和周围物品", "一只手入镜,正拿着或扶着产品", "旁边有刚用过的痕迹(喝过的杯子、拆开的包装)",
+               "产品偏向画面一侧,另一侧是生活杂物", "产品摆得略有倾斜,像随手一放"]
+LOOKS = [f"{a};{l};{s}" for a in LOOK_ANGLES for l in LOOK_LIGHTS for s in LOOK_STATES]   # 150 种
+
+
+def pick_looks(count: int, scenes: list[str], used: dict | None = None, rng=None) -> list[tuple[str, str]]:
+    """给一批图各挑一个(场景, 拍法):先挑用得最少的场景(一批里先把不同场景用一遍),再在这个场景里挑没用过的拍法。
+    used = {(场景, 拍法): 用过几次}:这个产品以前生成过的,会被避开,所以反复点「生成」也不会越来越像。"""
+    rng = rng or random
+    looks = LOOKS[:]
+    rng.shuffle(looks)
+    scenes = list(scenes) or [""]
+    taken = dict(used or {})
+    scene_use: dict[str, int] = {}
+    for (sc, _), n in taken.items():
+        scene_use[sc] = scene_use.get(sc, 0) + n
+    out = []
+    for _ in range(count):
+        order = scenes[:]
+        rng.shuffle(order)
+        sc = min(order, key=lambda x: scene_use.get(x, 0))
+        lk = min(looks, key=lambda x: taken.get((sc, x), 0))
+        out.append((sc, lk))
+        scene_use[sc] = scene_use.get(sc, 0) + 1
+        taken[(sc, lk)] = taken.get((sc, lk), 0) + 1
+    return out
 
 
 # ---------- 封面文字 ----------

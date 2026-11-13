@@ -174,6 +174,49 @@ def run(rep, env):
     finally:
         ver.FILE = old_file
     rep.check("版本号:没有文件 = dev;有文件原样给出;文件损坏也不报错", v0["version"] == "dev" and v1["version"] == "v1.99" and v1["commit"] == "abc1234" and v1["dirty"] is True and v2["version"] == "dev", str((v0, v1, v2)))
+    # 采集任务租约:心跳续租有上限(领走后又丢掉的任务不能被永远续租);超时退回累计次数,到上限标失败并通知达人库
+    from types import SimpleNamespace
+    from app import api_collector as ac
+    fake = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
+    ids = []
+    with db.conn() as c:
+        mk_t = lambda q, started, claimed, tries=0, purpose="qianfan", params="{}": c.execute(
+            "INSERT INTO crawl_tasks(type,query,status,worker,purpose,claim_start,claimed_at,tries,params) VALUES('qianfan',?,'running','lease-w',?,datetime('now',?),datetime('now',?),?,?)",
+            (q, purpose, started, claimed, tries, params)).lastrowid
+        t_old = mk_t("buyer_contact", "-30 minutes", "-2 minutes")    # 领走 30 分钟了:超过 10 分钟上限,不再续租
+        t_new = mk_t("notes", "-2 minutes", "-2 minutes")              # 刚领走:正常续租
+        t_lib = mk_t("kw", "-30 minutes", "-2 minutes", purpose="library")   # 沉淀任务上限 60 分钟:30 分钟还续租
+        ids += [t_old, t_new, t_lib]
+        before = {i: c.execute("SELECT claimed_at FROM crawl_tasks WHERE id=?", (i,)).fetchone()[0] for i in ids}
+        ac._heartbeat(c, fake, "lease-w", 0)
+        after = {i: c.execute("SELECT claimed_at FROM crawl_tasks WHERE id=?", (i,)).fetchone()[0] for i in ids}
+    rep.check("采集租约:千帆任务领走超过 10 分钟后心跳不再续租;刚领走的、沉淀任务照常续租", after[t_old] == before[t_old] and after[t_new] > before[t_new] and after[t_lib] > before[t_lib], str((before, after)))
+    with db.conn() as c:
+        c.execute("INSERT OR REPLACE INTO kol_creators(creator_id,name,contact_status) VALUES('lease-cid','租约测试','queued')")
+        t_a = mk_t("buyer_contact", "-60 minutes", "-20 minutes", tries=0)
+        t_b = mk_t("buyer_contact", "-60 minutes", "-20 minutes", tries=ac.MAX_TRIES - 1, params='{"creator_id": "lease-cid"}')
+        ids += [t_a, t_b]
+        ac._expire_stale(c)
+        ra = c.execute("SELECT status, tries, worker FROM crawl_tasks WHERE id=?", (t_a,)).fetchone()
+        rb = c.execute("SELECT status, error FROM crawl_tasks WHERE id=?", (t_b,)).fetchone()
+        ks = c.execute("SELECT contact_status FROM kol_creators WHERE creator_id='lease-cid'").fetchone()[0]
+        still = c.execute("SELECT status FROM crawl_tasks WHERE id=?", (t_new,)).fetchone()[0]
+    rep.check("采集租约:超时的任务退回待领取并 tries+1;退回满次数标失败、达人库显示出错;没超时的不动",
+              ra["status"] == "pending" and ra["tries"] == 1 and ra["worker"] == "" and rb["status"] == "failed" and "没有回传" in rb["error"] and ks == "error" and still == "running", str((dict(ra), dict(rb), ks, still)))
+    with db.conn() as c:
+        c.execute(f"DELETE FROM crawl_tasks WHERE id IN ({','.join(str(i) for i in ids)})")
+        c.execute("DELETE FROM kol_creators WHERE creator_id='lease-cid'")
+    # 场景 + 拍法:一批里先把不同场景用一遍;用过的(场景, 拍法)会被避开
+    from app import covers
+    import random as _r
+    sc7 = covers.scene_pool("美食", None)
+    pk = covers.pick_looks(len(sc7), sc7, None, _r.Random(1))
+    only = sc7[0]
+    used_ = {(only, lk): 1 for lk in covers.LOOKS[:140]}
+    pk2 = covers.pick_looks(10, [only], used_, _r.Random(2))
+    rep.check("场景池 + 拍法:一批里每个场景先用一遍;拍法一共 150 种且互不重复;用过的拍法被避开",
+              len({x[0] for x in pk}) == len(sc7) and len(covers.LOOKS) == len(set(covers.LOOKS)) == 150
+              and {x[1] for x in pk2} == set(covers.LOOKS[140:]) and len(sc7) >= 6, str((len(sc7), len({x[0] for x in pk}))))
     off = api_user.list_runs(limit=2, offset=1)
     full = api_user.list_runs(limit=500)
     rep.check("任务页分页:offset 跳过前 N 个,总数接口和列表一致", [x["id"] for x in off] == [x["id"] for x in full[1:3]] and api_user.runs_count()["total"] == len(full))

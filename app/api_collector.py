@@ -9,6 +9,8 @@ from .notes import save_notes, split_by_age
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_collector)])
 STALE_MIN = 15  # 领走任务后超过这么多分钟没回传,任务退回待领取
+MAX_TRIES = 3   # 超时没回传被退回这么多次还不行,就标失败(采集端领走又丢掉的任务不能无限循环)
+LEASE_MIN = {"qianfan": 10}   # 心跳续租最多续到领走后多少分钟(千帆任务几十秒就做完);其他任务 60 分钟
 ONLINE_SEC = 150  # 这么多秒内有心跳(ping、领任务、回传笔记)算在线;采集端忙的时候大约每 60 秒才有一次
 
 
@@ -37,8 +39,30 @@ def _heartbeat(c, request: Request, worker_name: str, claimed: int):
     c.execute("""INSERT INTO collectors(worker,ip,last_seen,claimed) VALUES(?,?,?,?)
         ON CONFLICT(worker) DO UPDATE SET ip=excluded.ip, last_seen=excluded.last_seen, claimed=claimed+excluded.claimed""",
               (w, request.client.host if request.client else "", time.time(), claimed))
-    # 心跳同时续租:这个采集端正在采的任务,超时计时从现在重新开始(否则采得慢的任务会在 15 分钟时被退回、被重复领取)
-    c.execute("UPDATE crawl_tasks SET claimed_at=datetime('now') WHERE status='running' AND worker=?", (w,))
+    # 心跳同时续租:这个采集端正在采的任务,超时计时从现在重新开始(否则采得慢的任务会在 15 分钟时被退回、被重复领取)。
+    # 续租有上限(从第一次领走算起):采集端领走任务后又丢掉了(回传时网络断了、程序出错没报),只要它还在轮询,
+    # 无限续租会让这个任务永远停在「运行中」,再也退不回去。
+    c.execute("UPDATE crawl_tasks SET claimed_at=datetime('now') WHERE status='running' AND worker=? "
+              "AND COALESCE(claim_start, claimed_at) > datetime('now', CASE WHEN purpose='qianfan' THEN ? ELSE ? END)",
+              (w, f"-{LEASE_MIN['qianfan']} minutes", "-60 minutes"))
+
+
+def _expire_stale(c):
+    """超时没回传的任务:退回待领取(tries+1);退回 MAX_TRIES 次还没结果就标失败,并让达人库里排队中的联系方式显示出错。"""
+    for r in c.execute("SELECT id, query, params, tries FROM crawl_tasks WHERE status='running' AND claimed_at < datetime('now', ?)",
+                       (f"-{STALE_MIN} minutes",)).fetchall():
+        if (r["tries"] or 0) + 1 >= MAX_TRIES:
+            msg = f"采集端领走后一直没有回传结果(已重试 {MAX_TRIES} 次),可以在采集监控里点「重新下发」"
+            c.execute("UPDATE crawl_tasks SET status='failed', error=?, finished_at=datetime('now'), tries=COALESCE(tries,0)+1 WHERE id=?", (msg, r["id"]))
+            if r["query"] == "buyer_contact":
+                try:
+                    cid = json.loads(r["params"] or "{}").get("creator_id")
+                except Exception:
+                    cid = None
+                if cid:
+                    c.execute("UPDATE kol_creators SET contact_status='error', contact_error=? WHERE creator_id=? AND contact_status='queued'", (msg[:200], cid))
+        else:
+            c.execute("UPDATE crawl_tasks SET status='pending', worker='', tries=COALESCE(tries,0)+1 WHERE id=?", (r["id"],))
 
 
 @router.get("/ping")
@@ -79,8 +103,7 @@ def claim_tasks(request: Request, limit: int = 1, worker_name: str = Query("", a
         qianfan.register_shop(shop, shop_name.strip())
     with conn() as c:
         c.execute("BEGIN IMMEDIATE")
-        c.execute(f"UPDATE crawl_tasks SET status='pending',worker='' WHERE status='running' "
-                  f"AND claimed_at < datetime('now','-{STALE_MIN} minutes')")
+        _expire_stale(c)
         on = (c.execute("SELECT value FROM settings WHERE key='library_collect_enabled'").fetchone() or ["1"])[0] != "0"
         # 用户的任务永远排在前面;笔记库沉淀任务只在没有用户任务时领取(也可以在管理端暂停)
         rows = c.execute(f"SELECT * FROM crawl_tasks WHERE status='pending' AND type IN ({','.join('?' * len(want))}) "
@@ -88,7 +111,7 @@ def claim_tasks(request: Request, limit: int = 1, worker_name: str = Query("", a
                          + "ORDER BY CASE COALESCE(purpose,'project') WHEN 'library' THEN 2 WHEN 'qianfan' THEN 1 ELSE 0 END, id LIMIT 200", want).fetchall()
         rows = [r for r in rows if _qf_ok(r, shop, qf_kinds)][:max(1, min(limit, 20))]
         for r in rows:
-            c.execute("UPDATE crawl_tasks SET status='running',worker=?,claimed_at=datetime('now') WHERE id=?",
+            c.execute("UPDATE crawl_tasks SET status='running',worker=?,claimed_at=datetime('now'),claim_start=datetime('now') WHERE id=?",
                       (worker_name, r["id"]))
         _heartbeat(c, request, worker_name, len(rows))
     return {"tasks": [_task_out(r) for r in rows]}

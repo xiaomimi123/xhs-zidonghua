@@ -366,6 +366,14 @@ def _m012_kind(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
 
 
+def _m014_task_lease(c):
+    """采集任务的租约:claim_start = 第一次领走的时间(心跳续租有上限,从这里算起);tries = 超时没回传被退回的次数(到上限就标失败)。
+    已经在 running 的任务把 claim_start 补成现在,免得老的卡住任务从此被无限续租。"""
+    add_column(c, "crawl_tasks", "claim_start", "TEXT")
+    add_column(c, "crawl_tasks", "tries", "INTEGER DEFAULT 0")
+    c.execute("UPDATE crawl_tasks SET claim_start=datetime('now') WHERE status='running' AND claim_start IS NULL")
+
+
 def _m013_ptype(c):
     """复刻时按帖子类型写:拆解卡记下它是哪一类(playbooks.kind),稿子记下目标类型和写完后实际判出的类型(drafts.ptype / ptype_got)。"""
     add_column(c, "playbooks", "kind", "TEXT DEFAULT ''")
@@ -387,6 +395,7 @@ MIGRATIONS = [
     (11, "owner", _m011_owner),
     (12, "kind", _m012_kind),
     (13, "ptype", _m013_ptype),
+    (14, "task_lease", _m014_task_lease),
     # (2, "说明", _m002_xxx),
 ]
 

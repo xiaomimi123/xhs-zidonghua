@@ -402,17 +402,42 @@ def create_from_product(p: GenIn):
     ojs = json.dumps(opts, sort_keys=True)
     who = (CURRENT.get() or {}).get("name", "")
     seed = random.randint(0, 99)
+    # 每张图一个(场景, 拍法),避开这个产品以前用过的:同一产品反复生成,画面才不会越来越像
+    from . import covers
+    prod_ = products.get(gen["product_id"]) if gen.get("product_id") else None
+    scenes = [gen["scene"]] if gen["scene"] else covers.scene_pool("美食", prod_)
+    looks = covers.pick_looks(p.count, scenes, _used_looks(gen))
     ids = []
     for k in range(p.count):
-        g = dict(gen, idx=seed + k * 3)   # idx 用来在「自动」场景下给每张挑不同的场景
+        g = dict(gen, idx=seed + k * 3, scene=looks[k][0], look=looks[k][1], auto=not gen["scene"])
         ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen,owner_id) VALUES(NULL,'',?,?,?,'image',?,'gen',?,?)",
                           ojs, who, opts["mode"], title, json.dumps(g, ensure_ascii=False), my_id()).lastrowid)
     return {"created": len(ids), "ids": ids}
 
 
+def _used_looks(gen: dict) -> dict:
+    """这个产品(或这组上传的产品图)以前生成过的 {(场景, 拍法): 次数},只看最近 400 张。"""
+    if gen.get("product_id"):
+        pid = int(gen["product_id"])
+        like, like2 = f'%"product_id": {pid},%', f'%"product_id": {pid}}}%'
+    elif gen.get("refs"):
+        like = like2 = f'%{gen["refs"][0]}%'
+    else:
+        return {}
+    used: dict = {}
+    for r in q_all("SELECT gen FROM live_jobs WHERE src='gen' AND (gen LIKE ? OR gen LIKE ?) ORDER BY id DESC LIMIT 400", like, like2):
+        g = r["gen"] or {}
+        if g.get("look"):
+            k = (g.get("scene") or "", g["look"])
+            used[k] = used.get(k, 0) + 1
+    return used
+
+
 def _gen_prompt(g: dict) -> str:
     from . import covers, worker
     scene = g.get("scene") or covers.scene("美食", g.get("idx", 0), 1)
+    if g.get("look"):
+        scene = f"{scene}。拍法:{g['look']}"   # 机位、光线、画面状态:同一场景也要拍出不一样的画面
     subject = g.get("note") or "产品是画面里的主角,摆在或拿在真实生活场景中,像用户自己随手拍的分享照"
     return worker._image_prompt("", subject, True, scene)
 

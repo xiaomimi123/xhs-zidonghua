@@ -404,10 +404,22 @@ if (DRY) {
       body.shop_name = shop.name;
       const shown = t.query === "buyer_contact" ? { ...body, phone: body.phone ? `${body.phone.slice(0, 3)}****${body.phone.slice(-2)}` : "", wechat: body.wechat ? "***" : "" } : body;   // 日志里不留联系方式明文
       log("  回传内容:", JSON.stringify(shown).slice(0, 300));
-      try {
-        const r = await api("/api/qianfan/ingest", { method: "POST", body: JSON.stringify(body) });
-        log("  回传:", r.status, (await r.text()).slice(0, 200));
-      } catch (e) { log("  回传失败:", e.message); }
+      // 回传失败(服务重启、网络断了)不能直接丢:已经读到的结果丢了就白做了,服务端那边的任务也会一直等。
+      // 重试几次(间隔 3、6、12、24、48 秒,够服务重启一轮);4xx 是内容有问题,重试没用。
+      let sent = false;
+      for (let k = 0; k < 6 && !sent; k++) {
+        try {
+          const r = await api("/api/qianfan/ingest", { method: "POST", body: JSON.stringify(body) });
+          log("  回传:", r.status, (await r.text()).slice(0, 200));
+          sent = r.status < 500;
+          if (!sent) throw new Error(`服务端 ${r.status}`);
+        } catch (e) {
+          if (String(e.message).includes("401")) throw e;
+          log(`  回传失败(第 ${k + 1} 次):`, e.message);
+          if (k < 5) await sleep(3000 * 2 ** k);
+        }
+      }
+      if (!sent) log("  回传多次失败,放弃这条;服务端会在超时后把任务退回待领取,稍后重做");
     }
     await sleep(tasks.length ? 3000 : 10000);
   }
