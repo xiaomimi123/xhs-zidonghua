@@ -13,6 +13,12 @@ import sys
 import time
 from pathlib import Path
 
+for _s in (sys.stdout, sys.stderr):   # Windows 控制台默认 GBK,提交说明里有特殊字符(如 ‹ ›)时 print 会崩:改成 UTF-8,打不出的字符换成 ?
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT / "app" / "version.json"
 IMAGE = "xhs-workbench"
