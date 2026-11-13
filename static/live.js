@@ -1,12 +1,12 @@
 // ---------- Live 图:从成品库选图 / 上传图片 → 排队 →(真实动作:本机显卡先生成视频)→ Mac 端做成实况 → 下载 .pvt 包 AirDrop 到 iPhone ----------
 // 服务端只管队列和文件;视频由装了 ComfyUI 的电脑生成(tools/livephoto/video_worker.py),
 // 实况的动画渲染和 .pvt 打包在 MacBook 上跑(tools/livephoto/mac_worker.py)。
-const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], bgItems: [], bgDefault: [], upMode: "up", jf: "all", who: "", showHow: null,
+const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], bgItems: [], bgDefault: [], upMode: "up", jf: "all", who: "", showHow: null, view: "batch", bopen: new Set(), bsel: new Set(), bjobs: {}, batches: [],
   bg: { files: [], items: null, extra: "", scenes: new Set(), custom: "" }, up: { files: [] }, gen: { files: [], product: 0, scene: "", note: "", count: 1, pname: "", psp: "", psize: "" },
   pinfo: {},   // 产品 id → 场景下拉等信息({scenes, kind, ai, size, …}),选了产品才去取
   pid: 0, todo: false, page: 1, sel: new Map(), jobs: [], st: null, timer: 0,
   opts: Object.assign({ mode: "motion", motion: "sway", seconds: 5, zoom: 1.08, focus_y: 0.35, fit: "crop" }, (() => { try { return JSON.parse(localStorage.lvOpts || "{}"); } catch { return {}; } })()) };
-try { LV.upMode = localStorage.lvUpMode || "up"; } catch { }
+try { LV.upMode = localStorage.lvUpMode || "up"; LV.view = localStorage.lvView || "batch"; } catch { }
 const LV_FIT = { crop: "裁成 3:4", blur: "完整+虚化补边" };
 const LV_VIDEO_SEC = 90, LV_GEN_SEC = 45;   // 估算耗时用:每次 AI 生图约 45 秒;每条视频约 90 秒
 const lvKey = (d, img) => `${d}:${img}`;
@@ -61,7 +61,7 @@ async function fLive() {
     if (!confirm("清除全部已完成的任务和成品文件?(已经传到 iPhone 的就不需要留着了)")) return;
     try { const r = await api("/api/live/jobs/clear_done", "POST"); toast(`已清除 ${r.deleted} 个`); lvRefresh(); } catch (e) { toast(e.message, 1); }
   };
-  $("#lvfilter").onclick = e => { const b = e.target.closest("[data-jf]"), w = e.target.closest("[data-jw]"); if (b) { LV.jf = b.dataset.jf; LV.jp = 1; lvRefresh(); } else if (w) { LV.who = w.dataset.jw; LV.jp = 1; lvRefresh(); } };
+  $("#lvfilter").onclick = e => { const b = e.target.closest("[data-jf]"), w = e.target.closest("[data-jw]"), v = e.target.closest("[data-jv]"); if (v) { LV.view = v.dataset.jv; LV.jp = 1; try { localStorage.lvView = LV.view; } catch { } lvRefresh(); } else if (b) { LV.jf = b.dataset.jf; LV.jp = 1; lvRefresh(); } else if (w) { LV.who = w.dataset.jw; LV.jp = 1; lvRefresh(); } };
   $("#lvjobs").addEventListener("click", e => { const g = e.target.closest("[data-jpg]"); if (g && !g.disabled) { LV.jp = +g.dataset.jpg; lvRefresh().then(() => $("#lvtasks")?.scrollIntoView({ block: "start" })); } });
   $("#lvgrid").onclick = e => {
     const pg = e.target.closest("[data-pg]"); if (pg) { if (pg.disabled) return; LV.page = +pg.dataset.pg; lvGrid(); return $("#lvgrid").scrollIntoView({ behavior: "smooth", block: "start" }); }
@@ -358,46 +358,95 @@ function lvStatus() {
 
 // 任务列表按页从服务端取(状态、发起人也在服务端筛):排队的任务很多时,不会把已完成的挤出列表
 const LV_JSIZE = 30;
+const LV_BSIZE = 10;
 async function lvFetchJobs() {
   const by = encodeURIComponent(LV.who || ""), st = LV.jf === "all" ? "" : LV.jf;
+  if (LV.view === "batch") {
+    const [bs, sum] = await Promise.all([api(`/api/live/batches?status=${st}&by=${by}&limit=${LV_BSIZE}&offset=${((LV.jp || 1) - 1) * LV_BSIZE}`), api(`/api/live/jobs/summary?by=${by}`)]);
+    const open = bs.filter(b => LV.bopen.has(b.id));
+    await Promise.all(open.map(async b => { try { LV.bjobs[b.id] = await api(`/api/live/batches/${b.id}/jobs`); } catch { } }));
+    LV.batches = bs; LV.sum = sum;
+    return;
+  }
   const [jobs, sum] = await Promise.all([api(`/api/live/jobs?status=${st}&by=${by}&limit=${LV_JSIZE}&offset=${((LV.jp || 1) - 1) * LV_JSIZE}`), api(`/api/live/jobs/summary?by=${by}`)]);
   LV.jobs = jobs; LV.sum = sum;
 }
-function lvJobs() {
-  const sm = LV.sum || { all: 0, run: 0, done: 0, err: 0, who: {} }, all = LV.jobs, act = sm.run;
-  const cnt = { all: sm.all, run: sm.run, done: sm.done, err: sm.err };
-  $("#lvsum").textContent = sm.all ? `共 ${sm.all} 个${act ? `,${act} 个进行中` : ""}` : "";
-  const n = $("#lvn"); if (n) { n.textContent = act || sm.all || ""; n.className = act ? "run" : ""; n.title = act ? "进行中的任务数" : "任务总数"; }
-  $("#lvfilter").innerHTML = sm.all || LV.who ? [["all", "全部"], ["run", "进行中"], ["done", "已完成"], ["err", "失败"]].map(([k, l]) => `<button class="chip ${LV.jf === k ? "on" : ""}" data-jf="${k}" ${cnt[k] ? "" : "disabled"}>${l} ${cnt[k]}</button>`).join("") : "";
-  if (LV.jf !== "all" && !cnt[LV.jf]) { LV.jf = "all"; LV.jp = 1; return lvRefresh(); }   // 这个状态已经没有任务了,回到「全部」
-  const who = Object.keys(sm.who || {});   // 管理员能看到所有人的任务:有多个发起人时,每条标出是谁做的,并能按人筛选
-  if (LV.who && !who.includes(LV.who)) { LV.who = ""; LV.jp = 1; return lvRefresh(); }
-  const js = all;
-  if (!js.length && LV.jp > 1) { LV.jp = 1; return lvRefresh(); }   // 数据变少,当前页已经不存在
-  $("#lvfilter").innerHTML += who.length > 1 ? `<span class="sub" style="margin-left:8px">发起人</span>` + [["", "全部"], ...who.map(w => [w, w])].map(([k, l]) => `<button class="chip ${LV.who === k ? "on" : ""}" data-jw="${esc(k)}">${esc(l)}</button>`).join("") : "";
-  $("#lvjobs").innerHTML = js.length ? `<div class="lv-jobs">${js.map(j => {
+const lvDur = m => m < 1 ? "不到 1 分钟" : m < 90 ? `约 ${m} 分钟` : `约 ${(m / 60).toFixed(1)} 小时`;
+// 一个任务一行(任务列表和展开的批次共用);multi = 有多个发起人时标出是谁做的;sel = 展开的批次里,做好的可以勾选
+const lvJobRow = (j, multi, sel) => {
     const [lab, cls] = lvState(j), o = j.opts || {}, motion = j.mode === "motion";
     const how = motion ? `真实动作 · ${esc(j.motion || lvMotionLabel(o.motion))}${o.take ? ` · 第 ${o.take} 条` : ""} · ${o.seconds || 3} 秒` : `慢推镜头 · 推近 ${Math.round(((o.zoom || 1) - 1) * 100)}% · ${o.seconds || 5} 秒`;
     const from = j.src === "upload" ? "上传图片 · " : j.src === "gen" ? "产品场景图 · " : j.src === "bgswap" ? `换背景 · ${esc(j.scene || "自动场景")} · ` : "";
     const flow = lvFlow(j);
     return `<article class="lv-job" data-j="${j.id}">${j.thumb || j.image ? `<img src="${esc(thumb("/images/" + (j.thumb || j.image), 240))}" alt="" loading="lazy" decoding="async">` : `<div class="lv-ph" aria-hidden="true">场景图</div>`}
-      <div class="lv-jt"><b>${esc(j.title)}</b><span class="sub">${from}${how} · ${esc(LV_FIT[o.fit] || "")} · ${esc(when(j.created))}${who.length > 1 ? ` · 发起:${esc(j.by || "管理员")}` : ""}${j.worker ? ` · ${esc(j.worker)}` : ""}${j.size ? ` · ${(j.size / 1048576).toFixed(1)} MB` : ""}</span>
+      <div class="lv-jt"><b>${esc(j.title)}</b><span class="sub">${from}${how} · ${esc(LV_FIT[o.fit] || "")} · ${esc(when(j.created))}${multi ? ` · 发起:${esc(j.by || "管理员")}` : ""}${j.worker ? ` · ${esc(j.worker)}` : ""}${j.size ? ` · ${(j.size / 1048576).toFixed(1)} MB` : ""}</span>
+        ${j.queue ? `<span class="sub lv-q">排队第 ${j.queue.pos} 位(${j.queue.pos > 1 ? `前面还有 ${j.queue.pos - 1} 个` : "下一个就轮到"}${j.queue.eta != null ? `,预计${lvDur(j.queue.eta)}后做完` : ""};多人同时排队时轮流做)</span>` : ""}
         ${flow.length > 1 ? `<div class="lv-flow" aria-label="进度">${flow.map(f => `<span class="${f.cls}"><i></i>${f.name}</span>`).join("")}</div>` : ""}
         ${j.status === "error" ? `<span class="fl-err">${esc(j.error)}</span>` : ""}</div>
       <span class="fl-pill ${cls}">${lab}</span>
-      <div class="lv-ja">${j.image && (j.src === "gen" || j.src === "bgswap") ? `<button class="btn gray sm" data-a="img" title="AI 生成 / 合成好的图">看新图</button>` : ""}${j.has_video ? `<button class="btn gray sm" data-a="video" title="生成的视频(还没做成实况)">看视频</button>` : ""}
+      <div class="lv-ja">${sel && j.has_result ? `<label class="lv-bk" title="勾选后可以只下载选中的"><input type="checkbox" data-bs="${j.id}" ${LV.bsel.has(j.id) ? "checked" : ""}></label>` : ""}${j.image && (j.src === "gen" || j.src === "bgswap") ? `<button class="btn gray sm" data-a="img" title="AI 生成 / 合成好的图">看新图</button>` : ""}${j.has_video ? `<button class="btn gray sm" data-a="video" title="生成的视频(还没做成实况)">看视频</button>` : ""}
         ${j.has_result ? `<button class="btn gray sm" data-a="play">预览实况</button><a class="btn gray sm" href="/api/live/jobs/${j.id}/download">下载</a>` : ""}
         ${j.status === "error" || j.status === "done" ? `<button class="btn ghost sm" data-a="retry" title="${motion && j.has_video ? "视频保留,只重做实况" : "按原参数重新生成"}">${j.status === "error" ? "重试" : "重做"}</button>` : ""}
         ${motion && j.has_video && j.status !== "running" ? `<button class="btn ghost sm" data-a="regen" title="丢掉这条视频,重新生成一条">重拍视频</button>` : ""}
         ${j.status !== "running" ? `<button class="btn ghost sm danger" data-a="del" aria-label="删除">删除</button>` : ""}</div></article>`;
-  }).join("")}</div>${pager(LV.jp || 1, cnt[LV.jf], LV_JSIZE, "jpg")}` : sm.all ? `<div class="empty"><b>这个筛选下没有任务</b>换个状态看看</div>` : `<div class="empty"><b>还没有 Live 图任务</b>在「选图」里点选图片,或到「上传」里传自己的图,再点「做成 Live 图」</div>`;
+};
+// 批次卡:一次下单一组任务。进度条 + 各状态个数 + 预计多久做完 + 整批下载 / 重试失败 / 清掉已完成;展开看每一个
+function lvBatchCard(b, multi) {
+  const open = LV.bopen.has(b.id), left = b.pending + b.running, pct = b.total ? Math.round(b.done * 100 / b.total) : 0;
+  const src = { gen: "产品场景图", bgswap: "换背景", upload: "上传图片" }[b.src] || "选图", jobs = LV.bjobs[b.id];
+  const ready = (jobs || []).filter(j => j.has_result), mine = ready.filter(j => LV.bsel.has(j.id)).map(j => j.id);
+  const selbar = ready.length > 1 ? `<div class="lv-bsel"><button class="btn gray sm" data-ba="selall">全选已完成的 ${ready.length} 个</button>${mine.length ? `<a class="btn sm" href="/api/live/batches/${b.id}/download?ids=${mine.join(",")}">下载选中的 ${mine.length} 个</a><button class="btn ghost sm" data-ba="selnone">取消选择</button>` : ""}</div>` : "";
+  return `<section class="lv-batch ${open ? "open" : ""}" data-b="${b.id}"><div class="lv-bh">
+    <div class="lv-bthumbs" aria-hidden="true">${b.thumbs.filter(Boolean).map(t => `<img src="${esc(thumb("/images/" + t, 120))}" alt="" loading="lazy" decoding="async">`).join("")}</div>
+    <div class="lv-bt"><b>${esc(b.title || `批次 #${b.id}`)}${b.total > 1 ? ` 等 ${b.total} 个` : ""}</b>
+      <span class="sub">${src} · ${esc(when(b.created))}${multi ? ` · 发起:${esc(b.by || "管理员")}` : ""}</span>
+      <div class="lv-bp" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i>${b.err ? `<i class="bad" style="width:${Math.round(b.err * 100 / b.total)}%"></i>` : ""}</div>
+      <span class="sub">完成 ${b.done}/${b.total}${b.running ? ` · 制作中 ${b.running}` : ""}${b.pending ? ` · 排队 ${b.pending}` : ""}${b.err ? ` · <span class="fl-err" style="display:inline">失败 ${b.err}</span>` : ""}${left && b.eta != null ? ` · 预计${lvDur(b.eta)}后全部做完` : ""}${left && b.pos > 1 ? ` · 最后一个排第 ${b.pos} 位` : ""}</span></div>
+    <div class="lv-ja">${b.ready ? `<a class="btn sm" href="/api/live/batches/${b.id}/download" title="把已经做好的 ${b.ready} 个打成一个压缩包,解压后每个是一个 .pvt 文件夹">下载已完成 ${b.ready} 个</a>` : ""}
+      ${b.err ? `<button class="btn ghost sm" data-ba="retry">重试失败 ${b.err} 个</button>` : ""}${b.done ? `<button class="btn ghost sm" data-ba="clear">清掉已完成</button>` : ""}
+      <button class="btn gray sm" data-ba="toggle" aria-expanded="${open}">${open ? "收起 ▴" : "展开 ▾"}</button></div></div>
+    ${open ? `<div class="lv-bbody">${selbar}${jobs ? jobs.map(j => lvJobRow(j, multi, true)).join("") : `<p class="sub">加载中…</p>`}</div>` : ""}</section>`;
+}
+function lvJobs() {
+  const sm = LV.sum || { all: 0, run: 0, done: 0, err: 0, who: {}, batches: {} }, all = LV.jobs, act = sm.run, batchView = LV.view === "batch";
+  const cnt = batchView ? { all: 0, run: 0, done: 0, err: 0, ...sm.batches } : { all: sm.all, run: sm.run, done: sm.done, err: sm.err };
+  $("#lvsum").textContent = sm.all ? `共 ${sm.all} 个${act ? `,${act} 个进行中` : ""}` : "";
+  const n = $("#lvn"); if (n) { n.textContent = act || sm.all || ""; n.className = act ? "run" : ""; n.title = act ? "进行中的任务数" : "任务总数"; }
+  const views = `<span class="lv-views" role="group" aria-label="查看方式">${[["batch", "按批次"], ["list", "全部任务"]].map(([k, l]) => `<button class="chip ${LV.view === k ? "on" : ""}" data-jv="${k}">${l}</button>`).join("")}</span>`;
+  $("#lvfilter").innerHTML = views + (sm.all || LV.who ? [["all", "全部"], ["run", "进行中"], ["done", "已完成"], ["err", "失败"]].map(([k, l]) => `<button class="chip ${LV.jf === k ? "on" : ""}" data-jf="${k}" ${cnt[k] ? "" : "disabled"}>${l} ${cnt[k]}</button>`).join("") : "");
+  if (LV.jf !== "all" && !cnt[LV.jf]) { LV.jf = "all"; LV.jp = 1; return lvRefresh(); }   // 这个状态已经没有任务了,回到「全部」
+  const who = Object.keys(sm.who || {});   // 管理员能看到所有人的任务:有多个发起人时,每条标出是谁做的,并能按人筛选
+  if (LV.who && !who.includes(LV.who)) { LV.who = ""; LV.jp = 1; return lvRefresh(); }
+  const js = batchView ? LV.batches : all;
+  if (!js.length && LV.jp > 1) { LV.jp = 1; return lvRefresh(); }   // 数据变少,当前页已经不存在
+  $("#lvfilter").innerHTML += who.length > 1 ? `<span class="sub" style="margin-left:8px">发起人</span>` + [["", "全部"], ...who.map(w => [w, w])].map(([k, l]) => `<button class="chip ${LV.who === k ? "on" : ""}" data-jw="${esc(k)}">${esc(l)}</button>`).join("") : "";
+  const empty = sm.all ? `<div class="empty"><b>这个筛选下没有任务</b>换个状态看看</div>` : `<div class="empty"><b>还没有 Live 图任务</b>在「选图」里点选图片,或到「上传」里传自己的图,再点「做成 Live 图」</div>`;
+  $("#lvjobs").innerHTML = batchView ? (js.length ? `<div class="lv-batches">${js.map(b => lvBatchCard(b, who.length > 1)).join("")}</div>${pager(LV.jp || 1, cnt[LV.jf], LV_BSIZE, "jpg")}` : empty)
+    : js.length ? `<div class="lv-jobs">${js.map(j => lvJobRow(j, who.length > 1)).join("")}</div>${pager(LV.jp || 1, cnt[LV.jf], LV_JSIZE, "jpg")}` : empty;
 }
 
+async function lvBatchAction(e) {
+  const x = e.target.closest("[data-ba]"), card = x.closest("[data-b]"), id = +card.dataset.b, a = x.dataset.ba;
+  try {
+    if (a === "toggle") {
+      if (LV.bopen.has(id)) LV.bopen.delete(id); else { LV.bopen.add(id); try { LV.bjobs[id] = await api(`/api/live/batches/${id}/jobs`); } catch (err) { toast(err.message, 1); } }
+      return lvJobs();
+    }
+    if (a === "selall") { (LV.bjobs[id] || []).filter(j => j.has_result).forEach(j => LV.bsel.add(j.id)); return lvJobs(); }
+    if (a === "selnone") { (LV.bjobs[id] || []).forEach(j => LV.bsel.delete(j.id)); return lvJobs(); }
+    if (a === "retry") { const r = await api(`/api/live/batches/${id}/retry`, "POST"); toast(`已重新排队 ${r.retried} 个`); }
+    if (a === "clear") { if (!confirm("清掉这一批已完成的任务和成品文件?(没做完的、失败的不动;清掉后不能再下载)")) return; const r = await api(`/api/live/batches/${id}/clear_done`, "POST"); toast(`已清掉 ${r.deleted} 个`); }
+  } catch (err) { toast(err.message, 1); }
+  lvRefresh();
+}
 async function lvJobClick(e) {
+  if (e.target.closest("[data-ba]")) return lvBatchAction(e);
+  const cb = e.target.closest("[data-bs]");
+  if (cb) { const id = +cb.dataset.bs; if (cb.checked) LV.bsel.add(id); else LV.bsel.delete(id); return lvJobs(); }
   const b = e.target.closest("[data-a]"); if (!b) return;
   const id = +b.closest("[data-j]").dataset.j, a = b.dataset.a;
   try {
-    if (a === "img") { const j = LV.jobs.find(x => x.id === id); return j && lightbox(["/images/" + j.image], 0); }
+    if (a === "img") { const j = LV.jobs.find(x => x.id === id) || Object.values(LV.bjobs).flat().find(x => x.id === id); return j && lightbox(["/images/" + j.image], 0); }
     if (a === "play") return lvPlay(id, "preview");
     if (a === "video") return lvPlay(id, "video");
     if (a === "del") { if (!confirm("删除这个任务和它的视频、成品?")) return; await api(`/api/live/jobs/${id}`, "DELETE"); }

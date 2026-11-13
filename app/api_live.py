@@ -12,11 +12,13 @@ import io
 import json
 import random
 import threading
+import tempfile
 import time
 import zipfile
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from . import imagegen, mirror, products
 from .auth import CURRENT, require_collector, require_user
@@ -151,6 +153,65 @@ def status():
             "image": {"pending": n("pending", "image") + n("pending", "bg"), "running": n("running", "image") + n("running", "bg")}}
 
 
+def _new_batch() -> int:
+    """一次下单一个批次号(任务页按批次分组、整批下载)。"""
+    return ((q_one("SELECT COALESCE(MAX(batch_id),0) m FROM live_jobs") or {"m": 0})["m"]) + 1
+
+
+# ---------- 排队:公平领取 + 位置 / 预计等待 ----------
+_served: dict = {}      # (阶段, 发起人) → 最近一次被轮到的序号;只在内存里,重启后大家回到同一起点(按任务号)
+_served_n = 0
+_served_lock = threading.Lock()
+
+
+def _fair_pick(c, stages) -> int | None:
+    """在这几个阶段的排队任务里挑下一个:按发起人轮流,谁最久没被轮到谁先,同一个人的按任务号先后。
+    这样一个人一次下 100 个,别人后下的几个也是下一个就轮到,而不是等这 100 个做完;从没被轮到过的(新来的)最先;
+    只有一个人排队时和先进先出一样。设备一次只做一个任务时也公平(不靠「正在做几个」来判断)。"""
+    global _served_n
+    ph = ",".join("?" * len(stages))
+    rows = c.execute(f"SELECT MIN(id) id, COALESCE(owner_id,0) o FROM live_jobs WHERE status='pending' AND stage IN ({ph}) GROUP BY 2", tuple(stages)).fetchall()
+    if not rows:
+        return None
+    with _served_lock:
+        best = min(rows, key=lambda r: (_served.get((tuple(stages), r["o"]), 0), r["id"]))
+        _served_n += 1
+        _served[(tuple(stages), best["o"])] = _served_n
+    return best["id"]
+
+
+RATE_WIN_MIN = 120
+
+
+def _rates() -> dict:
+    """最近 2 小时每分钟完成几个(真实动作 / 其他分开算,瓶颈不同)。样本太少(<3)给 None,不瞎估。"""
+    out = {"motion": None, "other": None}
+    for r in q_all(f"SELECT mode='motion' m, COUNT(*) n FROM live_jobs WHERE status='done' AND finished_at > datetime('now','-{RATE_WIN_MIN} minutes') GROUP BY 1"):
+        if r["n"] >= 3:
+            out["motion" if r["m"] else "other"] = r["n"] / RATE_WIN_MIN
+    return out
+
+
+def _queue_info(ids: list[int] | None = None) -> dict:
+    """{任务号: {"pos": 前面还有几个(含自己,1 = 下一个), "eta": 预计还要几分钟}},只含排队中的任务。
+    位置按公平顺序估:同一类里,我是自己的第 k 个,别的人每人最多排我前面 k 个 → pos = k + Σ min(别人排队数, k)。"""
+    rows = q_all("SELECT id, status, COALESCE(owner_id,0) o, mode='motion' m FROM live_jobs WHERE status IN ('pending','running') ORDER BY id")
+    cnt, rank = {}, {}
+    for r in rows:
+        cnt[(r["m"], r["o"])] = cnt.get((r["m"], r["o"]), 0) + 1
+        rank[r["id"]] = cnt[(r["m"], r["o"])]
+    rates = _rates()
+    out = {}
+    for r in rows:
+        if r["status"] != "pending" or (ids is not None and r["id"] not in ids):
+            continue
+        k = rank[r["id"]]
+        pos = k + sum(min(n, k) for (m, o), n in cnt.items() if m == r["m"] and o != r["o"])
+        rate = rates["motion" if r["m"] else "other"]
+        out[r["id"]] = {"pos": pos, "eta": int(round(pos / rate)) if rate else None}
+    return out
+
+
 _JOB_STATUS = {"run": "j.status IN ('pending','running')", "done": "j.status='done'", "err": "j.status='error'"}
 _WHO = "COALESCE(NULLIF(j.created_by,''), '管理员')"
 
@@ -167,7 +228,9 @@ def list_jobs(limit: int = Query(200, le=500), offset: int = Query(0, ge=0), sta
     if by:
         w += f" AND {_WHO}=?"; a = [*a, by]
     rows = q_all("SELECT j.*, COALESCE(NULLIF(j.title,''), d.title) AS shown FROM live_jobs j LEFT JOIN drafts d ON d.id=j.draft_id WHERE 1=1" + w + " ORDER BY j.id DESC LIMIT ? OFFSET ?", *a, limit, offset)
+    qi = _queue_info([j["id"] for j in rows if j["status"] == "pending"]) if any(j["status"] == "pending" for j in rows) else {}
     return [{"id": j["id"], "draft_id": j["draft_id"], "title": j["shown"] or f"#{j['id']}", "image": j["image"], "opts": j["opts"],
+             "batch": j["batch_id"], "queue": qi.get(j["id"]),
              "thumb": j["image"] or (j["gen"] or {}).get("orig", ""), "scene": (j["gen"] or {}).get("scene", "") if j["src"] == "bgswap" else "",
              "src": j["src"], "status": j["status"], "stage": j["stage"], "mode": j["mode"], "error": j["error"], "worker": j["worker"], "created": j["created"],
              "finished_at": j["finished_at"] or "", "size": j["result_size"] or 0, "has_video": _video_path(j["id"]).is_file(),
@@ -182,7 +245,9 @@ def jobs_summary(by: str = ""):
     who = {r["w"]: r["n"] for r in q_all(f"SELECT {_WHO} AS w, COUNT(*) n FROM live_jobs j WHERE 1=1" + w + " GROUP BY w ORDER BY n DESC", *a)}
     w2, a2 = (w + f" AND {_WHO}=?", [*a, by]) if by else (w, a)
     c = {r["s"]: r["n"] for r in q_all("SELECT j.status AS s, COUNT(*) n FROM live_jobs j WHERE 1=1" + w2 + " GROUP BY j.status", *a2)}
-    return {"all": sum(c.values()), "run": c.get("pending", 0) + c.get("running", 0), "done": c.get("done", 0), "err": c.get("error", 0), "who": who}
+    bs = q_all("SELECT SUM(j.status IN ('pending','running')) a, SUM(j.status='error') e FROM live_jobs j WHERE j.batch_id IS NOT NULL" + w2 + " GROUP BY j.batch_id", *a2)
+    batches = {"all": len(bs), "run": sum(1 for b in bs if b["a"]), "err": sum(1 for b in bs if b["e"]), "done": sum(1 for b in bs if not b["a"] and not b["e"])}   # 和 /batches 的 status 筛选口径一致
+    return {"all": sum(c.values()), "run": c.get("pending", 0) + c.get("running", 0), "done": c.get("done", 0), "err": c.get("error", 0), "who": who, "batches": batches}
 
 
 @router.post("/jobs")
@@ -196,6 +261,7 @@ def create_jobs(p: JobsIn):
     stage = "video" if opts["mode"] == "motion" else "live"
     who = (CURRENT.get() or {}).get("name", "")
     made, skipped, ids = 0, 0, []
+    bid = _new_batch()
     for it in p.items:
         own("draft", it.draft_id)
         d = q_one("SELECT id, images FROM drafts WHERE id=?", it.draft_id)
@@ -214,8 +280,8 @@ def create_jobs(p: JobsIn):
                 skipped += 1
                 ids.append(dup["id"])
                 continue
-            ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,owner_id) VALUES(?,?,?,?,?,?,?)",
-                              it.draft_id, name, ojs, who, opts["mode"], stage, my_id()).lastrowid)
+            ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,owner_id,batch_id) VALUES(?,?,?,?,?,?,?,?)",
+                              it.draft_id, name, ojs, who, opts["mode"], stage, my_id(), bid).lastrowid)
             made += 1
     return {"created": made, "skipped": skipped, "ids": ids}
 
@@ -263,6 +329,110 @@ def clear_done():
         for n in (r["image"], g.get("orig", ""), g.get("edit", "")):
             _gc_image(n)
     return {"deleted": len(rows)}
+
+
+# ---------- 批次:一次下单一组任务,按批次看进度 / 整批下载 ----------
+def _batch_jobs(bid: int) -> list[dict]:
+    w, a = owner_sql("j")
+    rows = q_all("SELECT j.*, COALESCE(NULLIF(j.title,''), d.title) AS shown FROM live_jobs j LEFT JOIN drafts d ON d.id=j.draft_id WHERE j.batch_id=?" + w + " ORDER BY j.id", bid, *a)
+    if not rows:
+        raise HTTPException(404, "这个批次不存在")
+    return rows
+
+
+@router.get("/batches")
+def list_batches(limit: int = Query(20, le=100), offset: int = Query(0, ge=0), status: str = "", by: str = ""):
+    """按批次(一次下单)列出,新的在前。status = run(还有没做完的)/ done(全做完了)/ err(有失败的);by = 发起人。
+    每批带:总数 / 完成 / 失败 / 排队 / 生成中、几张缩略图、已经能下载的个数、预计还要多久(最后一个排队任务的预计时间)。"""
+    with conn() as c:
+        _requeue_stale(c)
+    w, a = owner_sql("j")
+    if by:
+        w += f" AND {_WHO}=?"; a = [*a, by]
+    having = {"run": "HAVING pending+running>0", "done": "HAVING pending+running=0 AND err=0", "err": "HAVING err>0"}.get(status, "")
+    heads = q_all(f"""SELECT j.batch_id b, MIN(j.created) created, MAX({_WHO}) who, MAX(j.src) src, COUNT(*) total,
+            SUM(j.status='done') done, SUM(j.status='error') err, SUM(j.status='pending') pending, SUM(j.status='running') running
+        FROM live_jobs j WHERE j.batch_id IS NOT NULL{w} GROUP BY j.batch_id {having} ORDER BY j.batch_id DESC LIMIT ? OFFSET ?""", *a, limit, offset)
+    if not heads:
+        return []
+    qi = _queue_info() if any(h["pending"] for h in heads) else {}
+    out = []
+    for h in heads:
+        js = q_all("SELECT j.id, j.status, j.image, j.gen, j.title t FROM live_jobs j WHERE j.batch_id=?" + owner_sql("j")[0] + " ORDER BY j.id", h["b"], *owner_sql("j")[1])
+        etas = [qi[x["id"]]["eta"] for x in js if x["id"] in qi and qi[x["id"]]["eta"] is not None]
+        poss = [qi[x["id"]]["pos"] for x in js if x["id"] in qi]
+        out.append({"id": h["b"], "created": h["created"], "by": h["who"], "src": h["src"], "total": h["total"], "done": h["done"], "err": h["err"],
+                    "pending": h["pending"], "running": h["running"], "title": next((x["t"] for x in js if x["t"]), ""),
+                    "thumbs": [x["image"] or (x["gen"] or {}).get("orig", "") for x in js[:4]],
+                    "ready": sum(1 for x in js if x["status"] == "done" and _result_path(x["id"]).is_file()),
+                    "eta": max(etas) if etas else None, "pos": max(poss) if poss else None})
+    return out
+
+
+@router.get("/batches/{batch}/jobs")
+def batch_jobs(batch: int):
+    """一个批次里的全部任务(展开批次时取),字段和任务列表一致。"""
+    rows = _batch_jobs(batch)
+    qi = _queue_info([j["id"] for j in rows if j["status"] == "pending"]) if any(j["status"] == "pending" for j in rows) else {}
+    return [{"id": j["id"], "title": j["shown"] or f"#{j['id']}", "image": j["image"], "thumb": j["image"] or (j["gen"] or {}).get("orig", ""),
+             "src": j["src"], "status": j["status"], "stage": j["stage"], "mode": j["mode"], "error": j["error"], "batch": j["batch_id"], "queue": qi.get(j["id"]),
+             "has_result": j["status"] == "done" and _result_path(j["id"]).is_file(), "has_video": _video_path(j["id"]).is_file(),
+             "size": j["result_size"] or 0, "finished_at": j["finished_at"] or "", "created": j["created"], "by": j["created_by"],
+             "motion": MOTIONS.get((j["opts"] or {}).get("motion"), {}).get("label", "")} for j in rows]
+
+
+def _zip_results(rows: list[dict], name: str):
+    """把这些任务做好的成品包合成一个 zip 下载:每个任务一个 {名字}.pvt/ 文件夹(和单个下载解压出来的一样,双击导入「照片」)。
+    成品本来就是压缩过的视频,这里只存不再压缩;写到临时文件再发,发完删,不占内存。"""
+    todo = [r for r in rows if r["status"] == "done" and _result_path(r["id"]).is_file()]
+    if not todo:
+        raise HTTPException(404, "还没有做好的可以下载")
+    tmp = tempfile.NamedTemporaryFile(prefix="lvbatch_", suffix=".zip", delete=False)
+    tmp.close()
+    try:
+        with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_STORED) as out:
+            for r in todo:
+                stem = _file_stem(r["id"])
+                with zipfile.ZipFile(_result_path(r["id"])) as z:
+                    for info in z.infolist():
+                        if not info.is_dir():
+                            out.writestr(f"{stem}.pvt/{info.filename}", z.read(info))
+    except Exception:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
+    return FileResponse(tmp.name, media_type="application/zip", filename=name, background=BackgroundTask(lambda: Path(tmp.name).unlink(missing_ok=True)))
+
+
+@router.get("/batches/{batch}/download")
+def batch_download(batch: int, ids: str = ""):
+    """整批下载(只含已经做好的);ids = 逗号分隔的任务号时只下这几个(批次里勾选的)。"""
+    rows = _batch_jobs(batch)
+    if ids:
+        want = {int(x) for x in ids.split(",") if x.strip().isdigit()}
+        rows = [r for r in rows if r["id"] in want]
+    return _zip_results(rows, f"live_batch{batch}_{len([r for r in rows if r['status'] == 'done'])}个.zip")
+
+
+@router.post("/batches/{batch}/retry")
+def batch_retry(batch: int):
+    """把这一批里失败的全部重试。"""
+    n = 0
+    for r in _batch_jobs(batch):
+        if r["status"] == "error":
+            retry(r["id"])
+            n += 1
+    return {"retried": n}
+
+
+@router.post("/batches/{batch}/clear_done")
+def batch_clear_done(batch: int):
+    """清掉这一批里已完成的(成品传到 iPhone 以后就不需要留着了);没做完的、失败的留着。"""
+    n = 0
+    for r in _batch_jobs(batch):
+        if r["status"] == "done":
+            delete(r["id"])
+            n += 1
+    return {"deleted": n}
 
 
 def _file_stem(jid: int) -> str:
@@ -346,6 +516,7 @@ def create_from_upload(p: UploadIn):
     stage = "video" if opts["mode"] == "motion" else "live"
     who = (CURRENT.get() or {}).get("name", "")
     made, skipped, ids = 0, 0, []
+    bid = _new_batch()
     for i, (b, ext) in enumerate(imgs):
         name = _save_img(b, ext, "lvup_")
         title = (Path(p.names[i]).stem[:30] if i < len(p.names) and p.names[i] else "") or "上传图片"
@@ -356,8 +527,8 @@ def create_from_upload(p: UploadIn):
                 skipped += 1
                 ids.append(dup["id"])
                 continue
-            ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,owner_id) VALUES(NULL,?,?,?,?,?,?,'upload',?)",
-                              name, ojs, who, opts["mode"], stage, title, my_id()).lastrowid)
+            ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,owner_id,batch_id) VALUES(NULL,?,?,?,?,?,?,'upload',?,?)",
+                              name, ojs, who, opts["mode"], stage, title, my_id(), bid).lastrowid)
             made += 1
     return {"created": made, "skipped": skipped, "ids": ids}
 
@@ -429,6 +600,7 @@ def create_from_product(p: GenIn):
     avoid = products.avoid_text(spec)
     size = products.size_text(prod_, spec) if prod_ else ""
     ids = []
+    bid = _new_batch()
     for k in range(p.count):
         g = dict(gen, idx=seed + k * 3, scene=looks[k][0], look=looks[k][1], auto=not gen["scene"])
         if size:
@@ -437,8 +609,8 @@ def create_from_product(p: GenIn):
             g["pairing"] = pairs[k]
         if avoid:
             g["avoid"] = avoid
-        ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen,owner_id) VALUES(NULL,'',?,?,?,'image',?,'gen',?,?)",
-                          ojs, who, opts["mode"], title, json.dumps(g, ensure_ascii=False), my_id()).lastrowid)
+        ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen,owner_id,batch_id) VALUES(NULL,'',?,?,?,'image',?,'gen',?,?,?)",
+                          ojs, who, opts["mode"], title, json.dumps(g, ensure_ascii=False), my_id(), bid).lastrowid)
     return {"created": len(ids), "ids": ids}
 
 
@@ -512,11 +684,11 @@ def process_gen_job(jid: int):
 def claim_gen() -> int | None:
     with conn() as c:
         c.execute("BEGIN IMMEDIATE")
-        r = c.execute("SELECT id FROM live_jobs WHERE status='pending' AND stage IN ('image','bg') ORDER BY id LIMIT 1").fetchone()
-        if not r:
+        jid = _fair_pick(c, ("image", "bg"))
+        if jid is None:
             return None
-        c.execute("UPDATE live_jobs SET status='running', worker='server', claimed_at=datetime('now'), error='' WHERE id=?", (r["id"],))
-        return r["id"]
+        c.execute("UPDATE live_jobs SET status='running', worker='server', claimed_at=datetime('now'), error='' WHERE id=?", (jid,))
+        return jid
 
 
 def run_gen_once() -> bool:
@@ -644,6 +816,7 @@ def create_bgswap(p: BgIn):
     opts = clean_opts(p.opts)
     who = (CURRENT.get() or {}).get("name", "")
     made, skipped, ids = 0, 0, []
+    bid = _new_batch()
     seed = random.randint(0, 99)
     for i, (b, ext) in enumerate(imgs):
         orig = _save_img(b, ext, "lvup_")
@@ -660,8 +833,8 @@ def create_bgswap(p: BgIn):
                     skipped += 1
                     ids.append(dup["id"])
                     continue
-                ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen,owner_id) VALUES(NULL,'',?,?,?,'bg',?,'bgswap',?,?)",
-                                  ojs, who, o["mode"], f"{title}·换背景", json.dumps(g, ensure_ascii=False), my_id()).lastrowid)
+                ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen,owner_id,batch_id) VALUES(NULL,'',?,?,?,'bg',?,'bgswap',?,?,?)",
+                                  ojs, who, o["mode"], f"{title}·换背景", json.dumps(g, ensure_ascii=False), my_id(), bid).lastrowid)
                 made += 1
     return {"created": made, "skipped": skipped, "ids": ids}
 
@@ -703,7 +876,8 @@ def _claim(table: str, stage, request: Request, worker: str):
         _requeue_stale(c)
         r = None
         for sg in stages:
-            r = c.execute("SELECT * FROM live_jobs WHERE status='pending' AND stage=? ORDER BY id LIMIT 1", (sg,)).fetchone()
+            jid = _fair_pick(c, (sg,))
+            r = c.execute("SELECT * FROM live_jobs WHERE id=?", (jid,)).fetchone() if jid else None
             if r:
                 break
         if not r:

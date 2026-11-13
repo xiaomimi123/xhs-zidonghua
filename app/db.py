@@ -366,6 +366,29 @@ def _m012_kind(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
 
 
+def _m017_live_batch(c):
+    """Live 任务的批次:一次下单(一次点「生成」)里的任务同属一个批次,任务页按批次看进度、整批下载。
+    已有的任务按「同一个人、同一类、间隔不超过 10 分钟」补批次号。"""
+    import datetime as _dt
+    add_column(c, "live_jobs", "batch_id", "INTEGER")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_live_batch ON live_jobs(batch_id)")
+    last, nb = {}, c.execute("SELECT COALESCE(MAX(batch_id),0) FROM live_jobs").fetchone()[0]
+    for r in c.execute("SELECT id, COALESCE(created_by,'') who, COALESCE(src,'') src, created FROM live_jobs WHERE batch_id IS NULL ORDER BY id").fetchall():
+        try:
+            t = _dt.datetime.strptime((r["created"] or "")[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            t = None
+        key = (r["who"], r["src"])
+        cur = last.get(key)
+        if cur and t and cur[1] and abs((t - cur[1]).total_seconds()) <= 600:
+            bid = cur[0]
+        else:
+            nb += 1
+            bid = nb
+        last[key] = (bid, t)
+        c.execute("UPDATE live_jobs SET batch_id=? WHERE id=?", (bid, r["id"]))
+
+
 def _m016_product_size(c):
     """产品的实际大小(用户填的,优先于 AI 估的):生图时要求产品和周围的手、杯子、碗保持真实比例,不要忽大忽小。"""
     add_column(c, "products", "size_note", "TEXT DEFAULT ''")
@@ -408,6 +431,7 @@ MIGRATIONS = [
     (14, "task_lease", _m014_task_lease),
     (15, "task_by", _m015_task_by),
     (16, "product_size", _m016_product_size),
+    (17, "live_batch", _m017_live_batch),
     # (2, "说明", _m002_xxx),
 ]
 

@@ -1237,3 +1237,29 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 @media (hover:none){.lv-pv .fl-mv{opacity:1}}
 .lv-newp{margin-top:6px}
 .lv-pinfo{margin:8px 0 0}
+
+/* Live 任务页:按批次看 / 排队位置 */
+.lv-views{display:inline-flex;gap:6px;margin-right:14px;padding-right:14px;border-right:1px solid var(--line)}
+.lv-batches{display:flex;flex-direction:column;gap:10px;max-width:960px}
+.lv-batch{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.lv-bh{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:14px;padding:12px 14px}
+.lv-bthumbs{display:flex}
+.lv-bthumbs img{width:40px;height:52px;border-radius:6px;object-fit:cover;background:var(--soft);border:2px solid var(--panel);margin-left:-14px}
+.lv-bthumbs img:first-child{margin-left:0}
+.lv-bt{display:flex;flex-direction:column;gap:5px;min-width:0}
+.lv-bt b{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lv-bp{height:6px;border-radius:4px;background:var(--line);overflow:hidden;display:flex;max-width:420px}
+.lv-bp i{display:block;height:100%;background:var(--ok)}
+.lv-bp i.bad{background:var(--err)}
+.lv-bbody{border-top:1px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;gap:8px;background:var(--soft)}
+.lv-bbody .lv-job{background:var(--panel)}
+.lv-bsel{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.lv-bk{display:inline-flex;align-items:center;padding:4px;cursor:pointer}
+.lv-bk input{width:16px;height:16px;cursor:pointer}
+.lv-q{margin-top:5px;color:var(--warn)}
+@media (max-width:720px){
+  .lv-bh{grid-template-columns:minmax(0,1fr)}
+  .lv-bthumbs{display:none}
+  .lv-bh .lv-ja{justify-content:flex-start;flex-wrap:wrap}
+  .lv-views{margin-right:0;padding-right:0;border-right:0;width:100%}
+}
