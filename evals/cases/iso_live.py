@@ -55,6 +55,23 @@ def run(rep, env):
         rep.check("参数:超出范围的值被收回合法范围", o["zoom"] == 1.3 and o["seconds"] == 5.0 and o["focus_y"] == 0 and o["fit"] == "crop", str(o))
         jid = r.json()["ids"][0]
 
+        # 任务列表:状态在服务端筛选 + 分页 + 汇总(排队的任务很多时,已完成的不能被挤出列表)
+        extra = []
+        for n_ in range(5):   # 再造 5 个排队中的、让「最新的几个」全是排队中
+            extra += user.post("/api/live/jobs", json={"items": [{"draft_id": did, "image": "lv_b.png"}], "opts": {"zoom": 1.05 + n_ * 0.02}}).json()["ids"]
+        old_done = db.q_exec("INSERT INTO live_jobs(draft_id,image,opts,status,stage,mode,created_by) VALUES(?,?,?,'done','live','zoom','')", did, "lv_a.png", '{"zoom": 1.01}').lastrowid
+        extra.append(old_done)
+        sm = user.get("/api/live/jobs/summary").json()
+        newest = user.get("/api/live/jobs?limit=3").json()
+        done_only = user.get("/api/live/jobs?status=done&limit=3").json()
+        run_only = user.get("/api/live/jobs?status=run").json()
+        rep.check("任务列表:汇总各状态的数量", sm["all"] == sm["run"] + sm["done"] + sm["err"] and sm["done"] >= 1 and sm["run"] >= 6, str(sm))
+        rep.check("任务列表:status=done 只返回已完成的(不被最新的排队任务挤掉)", done_only and all(x["status"] == "done" for x in done_only) and len(done_only) == min(3, sm["done"]) and any(x["id"] == old_done for x in user.get("/api/live/jobs?status=done").json()))
+        rep.check("任务列表:status=run 只返回排队中 / 进行中的", run_only and all(x["status"] in ("pending", "running") for x in run_only) and len(run_only) == sm["run"])
+        rep.check("任务列表:offset 翻页,汇总里有发起人", [x["id"] for x in user.get("/api/live/jobs?limit=2&offset=1").json()] == [x["id"] for x in user.get("/api/live/jobs?limit=3").json()[1:3]]
+                  and isinstance(sm["who"], dict) and sum(sm["who"].values()) == sm["all"] and newest)
+        db.q_exec(f"DELETE FROM live_jobs WHERE id IN ({','.join(str(i) for i in extra)})")   # 清掉自己造的,不影响后面的检查
+
         # Mac 端
         from fastapi.testclient import TestClient
         anon = TestClient(env.app)

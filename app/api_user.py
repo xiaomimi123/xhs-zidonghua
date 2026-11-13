@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from . import llm, worker, exporter, imagegen, compliance, mirror, lengthcap, autorun, products, qianfan, loop, thumbs, ptype
+from . import llm, worker, exporter, imagegen, compliance, mirror, lengthcap, autorun, products, qianfan, loop, thumbs, ptype, version
 from .auth import (require_user, user_ok, is_admin, check_pw, hash_pw, make_token, make_staff_token, current_staff, staff_mode, login_required,
                    throttle, CURRENT, SESSION_DAYS)
 from .api_collector import collector_summary
@@ -37,6 +37,12 @@ class LoginIn(BaseModel):
 
 
 _DUMMY_HASH = hash_pw("dummy-password-for-timing")
+
+
+@public.get("/version")
+def version_info():
+    """当前部署的版本号(页面左下角显示;回滚时对照用)。不需要登录。"""
+    return version.info()
 
 
 @public.get("/session")

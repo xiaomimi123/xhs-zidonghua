@@ -776,5 +776,13 @@ function myPassword() {
   };
 }
 
+// 左下角版本号:点一下复制「版本 · 提交 · 构建时间」,回滚 / 反馈问题时报给我
+fetch("/api/version").then(r => r.json()).then(v => {
+  const el = $("#ver"); if (!el) return;
+  el.hidden = false; el.innerHTML = `<b>${esc(v.version)}${v.dirty ? "+" : ""}</b><span>${esc(v.commit || "本地开发")}${v.built ? " · " + esc(v.built.slice(5)) : ""}</span>`;
+  const txt = `${v.version}${v.dirty ? "+(含未提交改动)" : ""} ${v.commit} ${v.built}`.trim();
+  el.title = [txt, v.subject, "点击复制"].filter(Boolean).join("\n");
+  el.onclick = () => copyText(txt).then(() => toast("已复制版本信息:" + txt), () => toast(txt));
+}).catch(() => { });
 fetch("/api/session").then(r => r.ok ? r.json() : Promise.reject()).then(s => s.ok ? (loadWho(), render()) : gate())
   .catch(() => { document.body.innerHTML = `<div class="gate"><div class="card" style="padding:32px;text-align:center;max-width:420px"><h2 style="margin:0 0 8px">服务端版本不匹配</h2><p class="sub">网页已更新,但服务还在运行旧版本。请关闭 run.bat 窗口后重新双击启动。</p></div></div>`; });

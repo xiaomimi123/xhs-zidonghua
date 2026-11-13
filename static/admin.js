@@ -697,5 +697,10 @@ function gate() {
   } });
 }
 
+fetch("/api/version").then(r => r.json()).then(v => {
+  const el = $("#ver"); if (!el) return;
+  el.hidden = false; el.innerHTML = `<b>${esc(v.version)}${v.dirty ? "+" : ""}</b><span>${esc(v.commit || "本地开发")}${v.built ? " · " + esc(v.built.slice(5)) : ""}</span>`;
+  el.title = [`${v.version} ${v.commit} ${v.built}`.trim(), v.subject].filter(Boolean).join("\n");
+}).catch(() => { });
 fetch("/api/admin/session").then(r => r.ok ? r.json() : Promise.reject()).then(s => s.ok ? render() : gate())
   .catch(() => { document.body.innerHTML = `<div class="gate"><div class="card" style="padding:32px;text-align:center;max-width:420px"><h2 style="margin:0 0 8px">服务端版本不匹配</h2><p class="sub">网页已更新,但服务还在运行旧版本。请关闭 run.bat 窗口后重新双击启动。</p></div></div>`; });

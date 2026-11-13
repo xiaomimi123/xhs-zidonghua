@@ -33,14 +33,14 @@ async function fLive() {
   clearTimeout(LV.timer);
   let sc, sj;
   [LV.lib, LV.runs, LV.st, LV.jobs, LV.motions, sc, LV.prods, sj] = await Promise.all([api("/api/library?brief=1"), api("/api/runs?limit=200").catch(() => []),
-    api("/api/live/status").catch(() => null), api("/api/live/jobs").catch(() => []), api("/api/live/motions").catch(() => []),
+    api("/api/live/status").catch(() => null), lvFetchJobs().then(() => LV.jobs).catch(() => []), api("/api/live/motions").catch(() => []),
     api("/api/live/scenes").catch(() => ({ scenes: [] })), api("/api/products").catch(() => []),
     api("/api/live/bg_options").catch(() => ({ items: [], default: [] }))]);
   LV.scenes = sc.scenes || []; LV.bgItems = sj.items || []; LV.bgDefault = sj.default || [];
   if (!LV.bg.items) LV.bg.items = new Set(LV.bgDefault);
   LV.lib = LV.lib.filter(d => d.images.length);
   if (!LV.motions.some(m => m.key === LV.opts.motion)) LV.opts.motion = (LV.motions[0] || {}).key || "sway";
-  if (!LV.tab) LV.tab = LV.jobs.length ? "jobs" : "pick";   // 已经有任务就先看任务,不用翻过长长的选图列表
+  if (!LV.tab) LV.tab = LV.sum?.all ? "jobs" : "pick";   // 已经有任务就先看任务,不用翻过长长的选图列表
   $("#main").innerHTML = `<div id="lvst"></div>
     <div class="seg lv-seg" role="tablist" id="lvseg"><button role="tab" data-t="pick">选图</button><button role="tab" data-t="up">上传</button><button role="tab" data-t="jobs">任务<em id="lvn"></em></button></div>
     <section id="lvpick"><div class="lv-h"><h3>从成品库选图</h3><span class="sub">点图片选中,一张图 = 一个 Live 图;封面最常用</span>
@@ -56,11 +56,12 @@ async function fLive() {
   $("#lvtodo").onclick = () => { LV.todo = !LV.todo; LV.page = 1; $("#lvtodo").classList.toggle("on", LV.todo); lvGrid(); };
   $("#lvrun").onchange = e => { LV.pid = +e.target.value; LV.page = 1; lvGrid(); };
   $("#lvclear").onclick = async () => {
-    if (!LV.jobs.some(j => j.status === "done")) return toast("没有已完成的任务");
+    if (!LV.sum?.done) return toast("没有已完成的任务");
     if (!confirm("清除全部已完成的任务和成品文件?(已经传到 iPhone 的就不需要留着了)")) return;
     try { const r = await api("/api/live/jobs/clear_done", "POST"); toast(`已清除 ${r.deleted} 个`); lvRefresh(); } catch (e) { toast(e.message, 1); }
   };
-  $("#lvfilter").onclick = e => { const b = e.target.closest("[data-jf]"), w = e.target.closest("[data-jw]"); if (b) { LV.jf = b.dataset.jf; lvJobs(); } else if (w) { LV.who = w.dataset.jw; lvJobs(); } };
+  $("#lvfilter").onclick = e => { const b = e.target.closest("[data-jf]"), w = e.target.closest("[data-jw]"); if (b) { LV.jf = b.dataset.jf; LV.jp = 1; lvRefresh(); } else if (w) { LV.who = w.dataset.jw; LV.jp = 1; lvRefresh(); } };
+  $("#lvjobs").addEventListener("click", e => { const g = e.target.closest("[data-jpg]"); if (g && !g.disabled) { LV.jp = +g.dataset.jpg; lvRefresh().then(() => $("#lvtasks")?.scrollIntoView({ block: "start" })); } });
   $("#lvgrid").onclick = e => {
     const pg = e.target.closest("[data-pg]"); if (pg) { if (pg.disabled) return; LV.page = +pg.dataset.pg; lvGrid(); return $("#lvgrid").scrollIntoView({ behavior: "smooth", block: "start" }); }
     const t = e.target.closest("[data-k]"); if (!t) return;
@@ -272,7 +273,7 @@ async function lvSubmit() {
 async function lvRefresh() {
   clearTimeout(LV.timer);
   if (state.tab !== "live" || !$("#lvjobs")) return;
-  try { [LV.st, LV.jobs] = await Promise.all([api("/api/live/status"), api("/api/live/jobs")]); } catch (e) { if (!LV.st) { $("#lvst").innerHTML = `<div class="banner err">${esc(e.message)}</div>`; } }
+  try { [LV.st] = await Promise.all([api("/api/live/status"), lvFetchJobs()]); } catch (e) { if (!LV.st) { $("#lvst").innerHTML = `<div class="banner err">${esc(e.message)}</div>`; } }
   if (state.tab !== "live" || !$("#lvjobs")) return;
   lvStatus(); lvJobs();
   LV.timer = setTimeout(lvRefresh, 3000);
@@ -302,17 +303,24 @@ function lvStatus() {
   $("#lvhowb").onclick = () => { LV.showHow = !open; $("#lvhow").hidden = !LV.showHow; $("#lvhowb").textContent = `怎么启动 ${LV.showHow ? "▴" : "▾"}`; $("#lvhowb").setAttribute("aria-expanded", LV.showHow); };
 }
 
+// 任务列表按页从服务端取(状态、发起人也在服务端筛):排队的任务很多时,不会把已完成的挤出列表
+const LV_JSIZE = 30;
+async function lvFetchJobs() {
+  const by = encodeURIComponent(LV.who || ""), st = LV.jf === "all" ? "" : LV.jf;
+  const [jobs, sum] = await Promise.all([api(`/api/live/jobs?status=${st}&by=${by}&limit=${LV_JSIZE}&offset=${((LV.jp || 1) - 1) * LV_JSIZE}`), api(`/api/live/jobs/summary?by=${by}`)]);
+  LV.jobs = jobs; LV.sum = sum;
+}
 function lvJobs() {
-  const all = LV.jobs, act = all.filter(j => j.status === "pending" || j.status === "running").length;
-  const cnt = { all: all.length, run: act, done: all.filter(j => j.status === "done").length, err: all.filter(j => j.status === "error").length };
-  $("#lvsum").textContent = all.length ? `共 ${all.length} 个${act ? `,${act} 个进行中` : ""}` : "";
-  const n = $("#lvn"); if (n) { n.textContent = act || all.length || ""; n.className = act ? "run" : ""; n.title = act ? "进行中的任务数" : "任务总数"; }
-  $("#lvfilter").innerHTML = all.length ? [["all", "全部"], ["run", "进行中"], ["done", "已完成"], ["err", "失败"]].map(([k, l]) => `<button class="chip ${LV.jf === k ? "on" : ""}" data-jf="${k}" ${cnt[k] ? "" : "disabled"}>${l} ${cnt[k]}</button>`).join("") : "";
-  const by = { all: () => true, run: j => j.status === "pending" || j.status === "running", done: j => j.status === "done", err: j => j.status === "error" };
-  if (!cnt[LV.jf]) LV.jf = "all";
-  const who = [...new Set(all.map(j => j.by || "管理员"))];   // 管理员能看到所有人的任务:有多个发起人时,每条标出是谁做的,并能按人筛选
-  if (!who.includes(LV.who)) LV.who = "";
-  const js = all.filter(by[LV.jf]).filter(j => !LV.who || (j.by || "管理员") === LV.who);
+  const sm = LV.sum || { all: 0, run: 0, done: 0, err: 0, who: {} }, all = LV.jobs, act = sm.run;
+  const cnt = { all: sm.all, run: sm.run, done: sm.done, err: sm.err };
+  $("#lvsum").textContent = sm.all ? `共 ${sm.all} 个${act ? `,${act} 个进行中` : ""}` : "";
+  const n = $("#lvn"); if (n) { n.textContent = act || sm.all || ""; n.className = act ? "run" : ""; n.title = act ? "进行中的任务数" : "任务总数"; }
+  $("#lvfilter").innerHTML = sm.all || LV.who ? [["all", "全部"], ["run", "进行中"], ["done", "已完成"], ["err", "失败"]].map(([k, l]) => `<button class="chip ${LV.jf === k ? "on" : ""}" data-jf="${k}" ${cnt[k] ? "" : "disabled"}>${l} ${cnt[k]}</button>`).join("") : "";
+  if (LV.jf !== "all" && !cnt[LV.jf]) { LV.jf = "all"; LV.jp = 1; return lvRefresh(); }   // 这个状态已经没有任务了,回到「全部」
+  const who = Object.keys(sm.who || {});   // 管理员能看到所有人的任务:有多个发起人时,每条标出是谁做的,并能按人筛选
+  if (LV.who && !who.includes(LV.who)) { LV.who = ""; LV.jp = 1; return lvRefresh(); }
+  const js = all;
+  if (!js.length && LV.jp > 1) { LV.jp = 1; return lvRefresh(); }   // 数据变少,当前页已经不存在
   $("#lvfilter").innerHTML += who.length > 1 ? `<span class="sub" style="margin-left:8px">发起人</span>` + [["", "全部"], ...who.map(w => [w, w])].map(([k, l]) => `<button class="chip ${LV.who === k ? "on" : ""}" data-jw="${esc(k)}">${esc(l)}</button>`).join("") : "";
   $("#lvjobs").innerHTML = js.length ? `<div class="lv-jobs">${js.map(j => {
     const [lab, cls] = lvState(j), o = j.opts || {}, motion = j.mode === "motion";
@@ -329,7 +337,7 @@ function lvJobs() {
         ${j.status === "error" || j.status === "done" ? `<button class="btn ghost sm" data-a="retry" title="${motion && j.has_video ? "视频保留,只重做实况" : "按原参数重新生成"}">${j.status === "error" ? "重试" : "重做"}</button>` : ""}
         ${motion && j.has_video && j.status !== "running" ? `<button class="btn ghost sm" data-a="regen" title="丢掉这条视频,重新生成一条">重拍视频</button>` : ""}
         ${j.status !== "running" ? `<button class="btn ghost sm danger" data-a="del" aria-label="删除">删除</button>` : ""}</div></article>`;
-  }).join("")}</div>` : all.length ? `<div class="empty"><b>这个筛选下没有任务</b>换个状态看看</div>` : `<div class="empty"><b>还没有 Live 图任务</b>在「选图」里点选图片,或到「上传」里传自己的图,再点「做成 Live 图」</div>`;
+  }).join("")}</div>${pager(LV.jp || 1, cnt[LV.jf], LV_JSIZE, "jpg")}` : sm.all ? `<div class="empty"><b>这个筛选下没有任务</b>换个状态看看</div>` : `<div class="empty"><b>还没有 Live 图任务</b>在「选图」里点选图片,或到「上传」里传自己的图,再点「做成 Live 图」</div>`;
 }
 
 async function lvJobClick(e) {

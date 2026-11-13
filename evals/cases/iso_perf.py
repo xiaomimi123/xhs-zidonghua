@@ -161,6 +161,19 @@ def run(rep, env):
     probe.unlink()
     mirror._DISK.update(mb=0.0, at=0.0, busy=False)
     rep.check("图片目录大小:缓存期内不重新扫描;过期后先返回旧值、后台刷新出新值", cached == base and stale == base and fresh >= base + 2.9, f"{base} {cached} {stale} {fresh}")
+    # 版本号:没有 version.json 显示 dev;有就原样给出;文件坏了也不报错
+    from app import version as ver
+    old_file, tmpf = ver.FILE, Path(tempfile.mkdtemp()) / "version.json"
+    try:
+        ver.FILE = tmpf
+        v0 = api_user.version_info()
+        tmpf.write_text(json.dumps({"version": "v1.99", "commit": "abc1234", "dirty": True, "built": "2026-11-13 10:00", "subject": "测试"}, ensure_ascii=False), encoding="utf-8")
+        v1 = api_user.version_info()
+        tmpf.write_text("{坏的", encoding="utf-8")
+        v2 = api_user.version_info()
+    finally:
+        ver.FILE = old_file
+    rep.check("版本号:没有文件 = dev;有文件原样给出;文件损坏也不报错", v0["version"] == "dev" and v1["version"] == "v1.99" and v1["commit"] == "abc1234" and v1["dirty"] is True and v2["version"] == "dev", str((v0, v1, v2)))
     off = api_user.list_runs(limit=2, offset=1)
     full = api_user.list_runs(limit=500)
     rep.check("任务页分页:offset 跳过前 N 个,总数接口和列表一致", [x["id"] for x in off] == [x["id"] for x in full[1:3]] and api_user.runs_count()["total"] == len(full))

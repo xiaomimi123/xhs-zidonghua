@@ -1185,3 +1185,15 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 .fl-run.s-run .fl-rf .go,.fl-run.s-run .fl-rf .sub{color:var(--run)}
 
 .kl-mine{display:flex;align-items:center;justify-content:center;gap:4px}
+
+/* 左下角版本号 */
+.ver{all:unset;box-sizing:border-box;cursor:pointer;display:flex;align-items:baseline;gap:8px;margin:8px 10px 0;padding:6px 8px;border-radius:var(--r-sm);font-size:12px;color:var(--sub);width:calc(100% - 20px)}
+.ver[hidden]{display:none}
+.ver:hover{background:var(--soft)}
+.ver b{font-size:13px;color:var(--ink);font-variant-numeric:tabular-nums}
+.ver span{font-size:11px;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ver:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.side.admin .ver{color:oklch(65% .01 60)}.side.admin .ver b{color:oklch(92% .005 60)}.side.admin .ver:hover{background:oklch(26% .01 50)}
+@media(max-width:720px){.ver{display:none}}
+.ver{flex-direction:column;align-items:flex-start;gap:1px}
+.ver span{max-width:100%}

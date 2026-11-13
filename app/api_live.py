@@ -151,18 +151,38 @@ def status():
             "image": {"pending": n("pending", "image") + n("pending", "bg"), "running": n("running", "image") + n("running", "bg")}}
 
 
+_JOB_STATUS = {"run": "j.status IN ('pending','running')", "done": "j.status='done'", "err": "j.status='error'"}
+_WHO = "COALESCE(NULLIF(j.created_by,''), '管理员')"
+
+
 @router.get("/jobs")
-def list_jobs(limit: int = Query(200, le=500)):
+def list_jobs(limit: int = Query(200, le=500), offset: int = Query(0, ge=0), status: str = "", by: str = ""):
+    """任务列表,按编号从新到旧。status = run / done / err 在服务端筛选(排队的任务很多时,不能只取最新的 N 个再在页面上筛:
+    已完成的会被排队中的挤出去);by = 发起人。"""
     with conn() as c:
         _requeue_stale(c)
     w, a = owner_sql("j")
-    rows = q_all("SELECT j.*, COALESCE(NULLIF(j.title,''), d.title) AS shown FROM live_jobs j LEFT JOIN drafts d ON d.id=j.draft_id WHERE 1=1" + w + " ORDER BY j.id DESC LIMIT ?", *a, limit)
+    if status in _JOB_STATUS:
+        w += " AND " + _JOB_STATUS[status]
+    if by:
+        w += f" AND {_WHO}=?"; a = [*a, by]
+    rows = q_all("SELECT j.*, COALESCE(NULLIF(j.title,''), d.title) AS shown FROM live_jobs j LEFT JOIN drafts d ON d.id=j.draft_id WHERE 1=1" + w + " ORDER BY j.id DESC LIMIT ? OFFSET ?", *a, limit, offset)
     return [{"id": j["id"], "draft_id": j["draft_id"], "title": j["shown"] or f"#{j['id']}", "image": j["image"], "opts": j["opts"],
              "thumb": j["image"] or (j["gen"] or {}).get("orig", ""), "scene": (j["gen"] or {}).get("scene", "") if j["src"] == "bgswap" else "",
              "src": j["src"], "status": j["status"], "stage": j["stage"], "mode": j["mode"], "error": j["error"], "worker": j["worker"], "created": j["created"],
              "finished_at": j["finished_at"] or "", "size": j["result_size"] or 0, "has_video": _video_path(j["id"]).is_file(),
              "motion": MOTIONS.get((j["opts"] or {}).get("motion"), {}).get("label", ""),
              "has_result": j["status"] == "done" and _result_path(j["id"]).is_file(), "by": j["created_by"]} for j in rows]
+
+
+@router.get("/jobs/summary")
+def jobs_summary(by: str = ""):
+    """任务页顶部的数字:各状态各有多少(按发起人筛选时只算这个人的),以及有哪些发起人(不受筛选影响,筛选按钮要一直在)。"""
+    w, a = owner_sql("j")
+    who = {r["w"]: r["n"] for r in q_all(f"SELECT {_WHO} AS w, COUNT(*) n FROM live_jobs j WHERE 1=1" + w + " GROUP BY w ORDER BY n DESC", *a)}
+    w2, a2 = (w + f" AND {_WHO}=?", [*a, by]) if by else (w, a)
+    c = {r["s"]: r["n"] for r in q_all("SELECT j.status AS s, COUNT(*) n FROM live_jobs j WHERE 1=1" + w2 + " GROUP BY j.status", *a2)}
+    return {"all": sum(c.values()), "run": c.get("pending", 0) + c.get("running", 0), "done": c.get("done", 0), "err": c.get("error", 0), "who": who}
 
 
 @router.post("/jobs")

@@ -50,3 +50,4 @@ collector/ego/*
 # Live 视频 worker 的运行日志
 tools/livephoto/*.log
 tools/livephoto/*.log.err
+app/version.json
