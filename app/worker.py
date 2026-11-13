@@ -329,7 +329,7 @@ def replan_images(did: int):
         raise ValueError("这篇没有内页配图")
     pr = _one("SELECT product_id, track FROM projects WHERE id=?", d["project_id"])
     prod = products.get(pr["product_id"]) if pr else None
-    raw = llm.inner_image_prompts(d["title"], d["content"], k, (prod or {}).get("name", ""))
+    raw = llm.inner_image_prompts(d["title"], d["content"], k, (prod or {}).get("name", ""), products.block(prod) if prod else "")
     new = covers.inner_prompts(raw, k, pr["track"] if pr else "", did, d["title"], prod)
     ps = [d["image_prompts"][0], *new]
     names = list(d["images"])
@@ -339,12 +339,12 @@ def replan_images(did: int):
     submit_images(did)
 
 
-def _image_prompt(title: str, p: str, with_product: bool = False, scene: str = "") -> str:
+def _image_prompt(title: str, p: str, with_product: bool = False, scene: str = "", avoid: str = "") -> str:
     """给生图提示词加保险:不把标题塞进去(否则模型会把标题画成海报字并自编图标),并限定图里能出现的文字(防止编出英文口号或功效说法)。
     有产品参考图时,要求保持产品外观和包装不变。"""
     tail = "图中的文字只能是引号里的这些简体中文,不要添加任何其他文字。" if compliance.image_texts([p]) else "画面中不要出现任何文字、字母或水印。"
     head = "以参考图中的产品为主体,严格保持产品的外观、颜色、包装和包装上的文字不变。" if with_product else ""
-    return f"{head}{f'场景:{scene}。' if scene else ''}{p.rstrip('。')}。{covers.UGC_STYLE}。不要标题大字、图标、对错符号、箭头、序号或标注。{tail}"
+    return f"{head}{f'场景:{scene}。' if scene else ''}{p.rstrip('。')}。{covers.ugc_style()}。{avoid + '。' if avoid else ''}不要标题大字、图标、对错符号、箭头、序号或标注。{tail}"
 
 
 def _render_cover(did: int, cc: dict, refs: list) -> str:
@@ -396,6 +396,7 @@ def _run_images(did, redo_all=False):
     # 图片列表和提示词按位置一一对应,没生成成功的位置是空串;旧数据长度对不上就当作都还没生成
     names = [""] * len(prompts) if redo_all or len(d["images"]) != len(prompts) else list(d["images"])
     lock, errs, todo = threading.Lock(), {}, []
+    avoid = products.avoid_text(products.get_spec(prod, generate=False)) if prod else ""
 
     def save():   # 出一张显示一张(多张并行时用同一把锁,避免互相覆盖)
         with lock:
@@ -420,7 +421,7 @@ def _run_images(did, redo_all=False):
             if i == 0 and cc.get("layout"):  # 程序排版的封面:文字不让 AI 画,需要实拍背景的版式只生成一张无字实拍图
                 nm = _render_cover(did, cc, refs)
             else:
-                nm = imagegen.generate_image(_image_prompt(d["title"], p, bool(refs), covers.scene(pr["track"] if pr else "", did, i, prod) if cc.get("layout") else ""), f"d{did}_{i + 1}_{int(time.time())}", **({"refs": refs} if refs else {}))
+                nm = imagegen.generate_image(_image_prompt(d["title"], p, bool(refs), covers.scene(pr["track"] if pr else "", did, i, prod) if (cc.get("layout") and len((p or "").strip()) < 24) else "", avoid), f"d{did}_{i + 1}_{int(time.time())}", **({"refs": refs} if refs else {}))
             with lock:
                 names[i] = nm
         except Exception as e:

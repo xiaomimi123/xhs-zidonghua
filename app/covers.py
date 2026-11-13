@@ -30,22 +30,34 @@ COMPOSE = {
 }
 # 生图统一风格:要的是普通人用手机随手拍的生活照,不是棚拍广告大片(商业感太重会一眼被认出是 AI / 广告)
 UGC_STYLE = ("手机随手拍的生活照风格:iPhone 直出没有修图,家里的自然光(可以略微过曝或偏暗),构图随意不追求完美,"
-             "背景里有日常的生活杂物,带一点手机的噪点和虚焦;不是棚拍,不是广告大片,没有专业布光,不要精致摆盘")
+             "背景整洁自然,只有一两件日常小物,带一点手机的噪点和虚焦;不是棚拍,不是广告大片,没有专业布光,不要精致摆盘。"
+             "画面里不要出现烟雾、蒸汽或热气(热饮的杯口除外),不要出现成团的纸巾、污渍和杂乱堆放的杂物")
+# 偶尔(约三分之一的图)带一点「随手拍」的痕迹,让画面有生活感,但不乱:不是纸巾团、水渍、杂物堆
+LIGHT_TRACES = ["桌角有一个用过的杯子", "旁边摊开着一本书", "桌上放着手机", "旁边有一个拆开的快递盒", "杯垫上留着一圈浅浅的水印",
+                "椅背上搭着一件外套", "旁边有一双筷子随意搁着"]
+
+
+def ugc_style(rng=None) -> str:
+    """生图统一风格;约三分之一的图额外带一点随手拍的痕迹(整洁为主,偶尔有生活感)。"""
+    rng = rng or random
+    return UGC_STYLE + (f"。可以带一点随手拍的痕迹:{rng.choice(LIGHT_TRACES)}" if rng.random() < 0.34 else "")
+
+
 # 场景库:每个场景一个名字,按产品类型挑能放的场景(咖啡不放在炒菜的灶台边,零食不放在厨房烹饪场景)
 SCENES = {
-    "table": "家里的餐桌一角,窗边自然光,旁边有碗筷和没收拾的杯子",
-    "breakfast": "早餐桌上有面包、水果和牛奶,手边放着主体,侧逆光,桌面有水渍和面包屑",
-    "rice": "刚做好的饭菜俯拍,碗盘随意摆放,桌面有水渍和纸巾",
+    "table": "家里的餐桌一角,窗边自然光,桌面整洁,旁边有碗筷",
+    "breakfast": "早餐桌上有面包、水果和牛奶,手边放着主体,侧逆光,桌面有一点面包屑",
+    "rice": "家常饭菜的餐桌俯拍,一碗白米饭和两样家常小菜,碗盘摆放自然",
     "office": "办公室工位桌面,午休时间,键盘和水杯一角入镜",
-    "desk_night": "夜晚台灯下的书桌一角,暖黄灯光,桌上有书和零食包装",
+    "desk_night": "夜晚台灯下的书桌一角,暖黄灯光,桌上有书和笔记本",
     "sofa": "沙发前的茶几,边吃边拍,旁边有手机和遥控器",
     "cafe": "咖啡馆靠窗的小桌,木质桌面,绿植虚化",
     "coffee_corner": "家里的咖啡角:台面上有杯子、小勺子和奶壶,整洁的居家角落,自然光",
-    "window_tea": "窗边的小桌上下午茶,杯子冒着热气,旁边有书和手机,午后光线",
-    "kitchen": "厨房台面,旁边有调料瓶和砧板,食材随手放着,明亮的自然光",
-    "stove": "灶台边正在做饭,台面有些油渍和调料",
+    "window_tea": "窗边的小桌上下午茶,桌上有杯子、书和手机,午后光线",
+    "kitchen": "厨房台面,明亮的自然光,台面整洁,旁边有几个调味瓶",
+    "stove": "灶台边的台面,家常做饭的场景,锅具和调料放得整齐,不要出现烟雾",
     "hand": "一只手拿着主体举在镜头前,背景是虚化的室内",
-    "bag": "买回家放在桌上的状态,购物袋还没收,日常杂乱",
+    "bag": "刚买回家放在桌上的状态,旁边是拆开的快递盒",
     "picnic": "户外野餐垫上,自然光,有水果和面包点缀",
 }
 FOOD_SCENES = list(SCENES.values())   # 全部美食场景(Live 页的场景下拉等要列出所有场景的地方用)
@@ -56,6 +68,7 @@ KIND_POOLS = {
     "cook": ["kitchen", "stove", "table", "rice", "hand", "bag", "breakfast"],
     "mixed": ["window_tea", "coffee_corner", "kitchen", "breakfast", "office", "table", "hand"],   # 既能冲饮又能入菜(肉桂粉、姜黄粉这类):不放灶台
     "food": ["table", "breakfast", "rice", "hand", "office", "sofa", "desk_night", "bag"],
+    "side": ["table", "rice", "breakfast", "hand", "bag", "office"],   # 下饭佐餐的小菜(腐乳、酱菜、榨菜):配饭、配粥、拌面,不放咖啡角
 }
 # 产品资料里「可以带出产品的场景」的关键词 → 优先用哪些场景
 TAG_KEYS = [("办公|工位|提神|上班", "office"), ("早餐|佐餐", "breakfast"), ("下午茶|咖啡角|冲泡|饮用|热饮|拿铁|睡前", "window_tea"), ("咖啡角|自制咖啡", "coffee_corner"),
@@ -68,18 +81,21 @@ def product_kind(prod: dict | None) -> str:
     if not prod:
         return "food"
     prof = prod.get("profile") or {}
+    k = (prof.get("shoot") or {}).get("kind")   # AI 按这个产品生成的拍摄规格里的类型,比下面的关键词猜测准
+    if k in KIND_POOLS:
+        return k
     text = f"{prod.get('name') or ''} {prod.get('category') or prof.get('category') or ''}"
-    scenes = " ".join(prof.get("scenes") or [])
+    scenes = re.sub(r"下午茶|茶歇", "", " ".join(prof.get("scenes") or []))   # 「办公室下午茶零食」不是冲饮,别因为有个「茶」字就当饮品
     if _SNACK.search(text) and not _DRINK.search(text.replace("可可", "")):
         return "snack"
     d, c = bool(_DRINK.search(text) or _DRINK.search(scenes)), bool(_COOK.search(text) or _COOK.search(scenes))
     return "mixed" if d and c else "drink" if d else "cook" if c else "snack" if _SNACK.search(scenes) else "food"
 GENERIC_SCENES = [
-    "家里书桌一角,自然光,桌上有水杯和笔记本,随手放着", "客厅茶几俯拍,遥控器和杂志随意摆放",
+    "家里书桌一角,自然光,桌上有水杯和笔记本", "客厅茶几俯拍,遥控器和杂志摆在一旁",
     "手持特写,背景是家里虚焦的客厅", "卧室床头柜一角,台灯暖光,旁边有手机充电线",
-    "阳台窗台,午后光线,旁边有晾着的衣物和绿植", "办公桌面一角,工位上有键盘和咖啡杯",
-    "餐边柜台面,日常杂物随意堆放", "浴室台面,镜子边,日常用品随手放着",
-    "沙发扶手旁,一只手拿着主体,背景是家里", "餐桌一角,自然光,桌面有些许杂物",
+    "阳台窗台,午后光线,旁边有绿植", "办公桌面一角,工位上有键盘和咖啡杯",
+    "餐边柜台面,摆着几件日常用品", "浴室台面,镜子边,日常用品摆放整齐",
+    "沙发扶手旁,一只手拿着主体,背景是家里", "餐桌一角,自然光,桌面整洁",
 ]
 
 NO_TEXT = "画面中不要出现任何文字、字母、标签或水印"
@@ -114,17 +130,43 @@ def scene(track: str, did: int, i: int, prod: dict | None = None) -> str:
     return cand[(did * 3 + i * 7) % len(cand)]
 
 
-# 拍法:同一个场景也能拍出不一样的画面(机位 × 光线 × 画面状态)。只换场景的话,同一产品反复生成,画面会越来越像
+# 拍法:同一个场景也能拍出不一样的画面(机位 × 光线 × 画面状态)。只换场景的话,同一产品反复生成,画面会越来越像。
+# 参考图里产品常常是「盒子 + 罐子并排」,模型会照搬这个摆法,所以「画面状态」里要有会真正改变构图的选项(只拍一件、手拿着、错开摆放…)
 LOOK_ANGLES = ["平视角度,手机离主体约半米", "从上往下俯拍", "45 度侧前方拍,手机略微倾斜", "近距离特写,主体占画面大半,背景虚焦",
                "稍远一点,带出更多周围环境", "低机位,贴近桌面略微仰拍"]
 LOOK_LIGHTS = ["白天窗边的自然光", "偏暗的室内灯光,略微暖黄", "午后斜射的阳光,有明显的光影", "傍晚偏暖的光线", "阴天柔和偏冷的光线"]
-LOOK_STATES = ["画面里没有人,只有产品和周围物品", "一只手入镜,正拿着或扶着产品", "旁边有刚用过的痕迹(喝过的杯子、拆开的包装)",
-               "产品偏向画面一侧,另一侧是生活杂物", "产品摆得略有倾斜,像随手一放"]
-LOOKS = [f"{a};{l};{s}" for a in LOOK_ANGLES for l in LOOK_LIGHTS for s in LOOK_STATES]   # 150 种
+LOOK_STATES = ["只拍其中一件产品(有多件包装时只拍最主要的那一件),占画面三分之一左右", "一只手拿着产品,其余包装不入镜",
+               "产品放在画面前景,周围的物品前后错开摆放,有一点遮挡、不要整齐排成一排(产品只有一个,不要重复出现)", "产品偏向画面一侧,另一侧是几件日常小物", "产品摆得略有倾斜,像随手一放,旁边有用过的痕迹(喝过的杯子、拆开的包装)",
+               "产品放在桌角,周围的生活物品占画面大半"]
+LOOKS = [f"{a};{l};{s}" for a in LOOK_ANGLES for l in LOOK_LIGHTS for s in LOOK_STATES]   # 180 种
+
+
+PAIR_WEIGHT = {"high": 3.0, "mid": 1.5, "low": 0.4}
+
+
+def pick_pairings(count: int, pairings: list[dict], used: dict | None = None, rng=None) -> list[str]:
+    """给每张图挑一个「搭配」(产品拍摄规格里的真实吃法 / 搭配)。按频率权重分配名额:常用的多、少用的很少(如腐乳配馒头约每 12 张一次),
+    而且是按名额轮流出现,不是碰运气;这个产品以前生成过的也算进去,所以反复生成长期看比例也对得上。没有搭配清单返回空串。"""
+    rng = rng or random
+    pairings = [x for x in (pairings or []) if x.get("name")]
+    if not pairings:
+        return [""] * count
+    w = {x["name"]: PAIR_WEIGHT.get(x.get("freq"), 1.5) for x in pairings}
+    total = sum(w.values())
+    use = {k: (used or {}).get(k, 0) for k in w}
+    n, out = sum(use.values()), []
+    for _ in range(count):
+        # 缺口 = 按权重应该出现的次数 - 已经出现的次数;缺口最大的先上,并列的随机
+        name = max(w, key=lambda k: w[k] / total * (n + 1) - use[k] + rng.random() * 1e-6)
+        out.append(name)
+        use[name] += 1
+        n += 1
+    return out
 
 
 def pick_looks(count: int, scenes: list[str], used: dict | None = None, rng=None) -> list[tuple[str, str]]:
-    """给一批图各挑一个(场景, 拍法):先挑用得最少的场景(一批里先把不同场景用一遍),再在这个场景里挑没用过的拍法。
+    """给一批图各挑一个(场景, 拍法):先挑用得最少的场景(一批里先把不同场景用一遍),再挑拍法。
+    拍法分机位 / 光线 / 画面状态三项,每项都尽量不重复(用过的次数少的优先),所以连着挑几张,三项都会换,不会只换场景。
     used = {(场景, 拍法): 用过几次}:这个产品以前生成过的,会被避开,所以反复点「生成」也不会越来越像。"""
     rng = rng or random
     looks = LOOKS[:]
@@ -132,17 +174,22 @@ def pick_looks(count: int, scenes: list[str], used: dict | None = None, rng=None
     scenes = list(scenes) or [""]
     taken = dict(used or {})
     scene_use: dict[str, int] = {}
-    for (sc, _), n in taken.items():
+    comp: dict[tuple[int, str], int] = {}   # (第几项, 内容) -> 用过几次
+    for (sc, lk), n in taken.items():
         scene_use[sc] = scene_use.get(sc, 0) + n
+        for k, part in enumerate(lk.split(";")):
+            comp[(k, part)] = comp.get((k, part), 0) + n
     out = []
     for _ in range(count):
         order = scenes[:]
         rng.shuffle(order)
         sc = min(order, key=lambda x: scene_use.get(x, 0))
-        lk = min(looks, key=lambda x: taken.get((sc, x), 0))
+        lk = min(looks, key=lambda x: (taken.get((sc, x), 0), sum(comp.get((k, p), 0) for k, p in enumerate(x.split(";")))))
         out.append((sc, lk))
         scene_use[sc] = scene_use.get(sc, 0) + 1
         taken[(sc, lk)] = taken.get((sc, lk), 0) + 1
+        for k, part in enumerate(lk.split(";")):
+            comp[(k, part)] = comp.get((k, part), 0) + 1
     return out
 
 
@@ -244,8 +291,8 @@ def cover_line(cc: dict) -> str:
 
 def photo_prompt(cc: dict, with_product: bool) -> str:
     head = "以参考图中的产品为主体,严格保持产品的外观、颜色、包装和包装上的文字不变。" if with_product else ""
-    return (f"{head}{cc.get('scene') or '产品特写,放在家里的桌面上,背景是日常的生活杂物'}。{COMPOSE.get(cc.get('layout') + '_1' if cc.get('variant') == 1 and (cc.get('layout') + '_1') in COMPOSE else cc.get('layout'), '主体居中')}。"
-            f"{UGC_STYLE},3:4 竖构图。{NO_TEXT}。")
+    return (f"{head}{cc.get('scene') or '产品特写,放在家里整洁的桌面上,背景是日常的家居环境'}。{COMPOSE.get(cc.get('layout') + '_1' if cc.get('variant') == 1 and (cc.get('layout') + '_1') in COMPOSE else cc.get('layout'), '主体居中')}。"
+            f"{ugc_style()},3:4 竖构图。{NO_TEXT}。")
 
 
 def inner_prompts(raw, k: int, track: str, did: int, title: str, prod: dict | None = None) -> list[str]:

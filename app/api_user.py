@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from . import llm, worker, exporter, imagegen, compliance, mirror, lengthcap, autorun, products, qianfan, loop, thumbs, ptype, version
+from . import llm, worker, exporter, imagegen, compliance, mirror, lengthcap, autorun, products, qianfan, loop, thumbs, ptype, version, product_check
 from .auth import (require_user, user_ok, is_admin, check_pw, hash_pw, make_token, make_staff_token, current_staff, staff_mode, login_required,
                    throttle, CURRENT, SESSION_DAYS)
 from .api_collector import collector_summary
@@ -265,6 +265,26 @@ class ProductEdit(BaseModel):
     forbid: str = ""
     keep: list[str] = []   # 保留的原图文件名
     add: list[str] = []    # 新上传的图(data URL)
+
+
+class ProductCheckIn(BaseModel):
+    name: str = ""
+    images: list[str] = []         # 新上传的图(data URL)
+    keep: list[str] = []           # 编辑产品时保留的原图文件名
+    selling_points: str = ""
+    audience: str = ""
+    forbid: str = ""
+    product_id: int = 0            # 编辑时传:查重复图时不和自己比
+
+
+@router.post("/api/products/check")
+def check_product(c: ProductCheckIn):
+    """提交产品前的素材检查:传错图、混进别的产品的图、文案像指令 / 复制了别的产品的、太长被截断…只返回提醒,由页面让用户选继续还是回去改。"""
+    try:
+        new = products.decode_images(c.images) if c.images else []
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"warnings": product_check.check(c.name, new, c.keep, c.selling_points, c.audience, c.forbid, c.product_id)}
 
 
 @router.put("/api/products/{pid}")

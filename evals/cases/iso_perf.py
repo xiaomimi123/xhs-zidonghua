@@ -212,11 +212,109 @@ def run(rep, env):
     sc7 = covers.scene_pool("美食", None)
     pk = covers.pick_looks(len(sc7), sc7, None, _r.Random(1))
     only = sc7[0]
-    used_ = {(only, lk): 1 for lk in covers.LOOKS[:140]}
+    used_ = {(only, lk): 1 for lk in covers.LOOKS[:170]}
     pk2 = covers.pick_looks(10, [only], used_, _r.Random(2))
-    rep.check("场景池 + 拍法:一批里每个场景先用一遍;拍法一共 150 种且互不重复;用过的拍法被避开",
-              len({x[0] for x in pk}) == len(sc7) and len(covers.LOOKS) == len(set(covers.LOOKS)) == 150
-              and {x[1] for x in pk2} == set(covers.LOOKS[140:]) and len(sc7) >= 6, str((len(sc7), len({x[0] for x in pk}))))
+    pk6 = covers.pick_looks(6, sc7, None, _r.Random(7))
+    parts = [x[1].split(";") for x in pk6]
+    rep.check("拍法:连着挑 6 张,机位 / 光线 / 画面状态三项都在换(不是只换场景)", len({p_[0] for p_ in parts}) == 6 and len({p_[1] for p_ in parts}) >= 5 and len({p_[2] for p_ in parts}) == 6, str(parts))
+    rep.check("场景池 + 拍法:一批里每个场景先用一遍;拍法一共 180 种且互不重复;用过的拍法被避开",
+              len({x[0] for x in pk}) == len(sc7) and len(covers.LOOKS) == len(set(covers.LOOKS)) == 180
+              and {x[1] for x in pk2} == set(covers.LOOKS[170:]) and len(sc7) >= 6, str((len(sc7), len({x[0] for x in pk}))))
+    # ---- 产品拍摄规格 + 出图规则(去掉冒烟 / 纸巾 / 杂乱 / 自相矛盾的场景叠加)----
+    import random as _rr
+    from app import covers as cv, llm as llm_, products as pr_, worker as wk_
+    banned = ("冒着热气", "纸巾", "杂乱", "没收拾", "随手放着", "食材随手放着", "杂物随意堆放", "刚做好")
+    allsc = list(cv.SCENES.values()) + list(cv.GENERIC_SCENES)
+    rep.check("场景库:不再含冒热气 / 纸巾 / 杂乱 / 没收拾 / 食材随手放这类词", not [t for t in allsc for w_ in banned if w_ in t], str([t for t in allsc if any(w_ in t for w_ in banned)]))
+    st = [cv.ugc_style(_rr.Random(i)) for i in range(400)]
+    share = sum("随手拍的痕迹" in x for x in st) / 400
+    rep.check("生图风格:整洁自然为主,不画热气 / 成团纸巾 / 杂物堆;约三分之一的图带一点随手拍的痕迹",
+              all("不要出现烟雾、蒸汽或热气" in x and "手机随手拍的生活照风格" in x for x in st) and 0.2 < share < 0.5 and "生活杂物" not in cv.UGC_STYLE, str(share))
+    jerky = {"name": "原切猪肉脯", "profile": {"category": "猪肉脯", "scenes": ["办公室下午茶零食", "追剧解馋零食"]}}
+    rep.check("产品类型:「下午茶零食」不再被当成冲饮;AI 规格里的类型优先(腐乳 = 下饭佐餐)",
+              cv.product_kind(jerky) == "snack" and cv.product_kind({"name": "腐乳", "profile": {"scenes": ["早餐佐餐"], "shoot": {"kind": "side"}}}) == "side"
+              and "coffee_corner" not in cv.KIND_POOLS["side"] and cv.product_kind({"name": "x", "profile": {"shoot": {"kind": "乱写"}}}) != "乱写")
+    prs = [{"name": "白粥", "freq": "high"}, {"name": "拌面", "freq": "mid"}, {"name": "夹馒头", "freq": "low"}]
+    picks = cv.pick_pairings(300, prs, None, _rr.Random(3))
+    rep.check("搭配轮换:少用的搭配(馒头)很少出现,常用的多,但不会总是同一个", picks.count("夹馒头") / 300 < 0.15 and picks.count("白粥") > picks.count("夹馒头") * 2 and len(set(picks[:12])) >= 2
+              and cv.pick_pairings(3, [], None) == ["", "", ""], str({k: picks.count(k) for k in set(picks)}))
+    used_b = cv.pick_pairings(40, prs, {"白粥": 200}, _rr.Random(4))
+    rep.check("搭配轮换:这个产品以前用过很多的搭配会被避开", used_b.count("白粥") < used_b.count("拌面"), str({k: used_b.count(k) for k in set(used_b)}))
+    old_chat = llm_.chat
+    try:
+        llm_.chat = lambda system, user, temperature=1.0: {"kind": "乱写", "serve": "cold", "pairings": [{"name": "白粥", "freq": "high"}, {"name": "夹馒头", "freq": "超低"}, {"name": ""}, "拌面"],
+                                                           "avoid": ["烟雾蒸汽", "", "别的品牌", "a", "b", "c", "d", "e"], "shoot_note": "x" * 100}
+        sp = llm_.shoot_spec("腐乳", "豆腐乳")
+    finally:
+        llm_.chat = old_chat
+    rep.check("拍摄规格:模型给的内容被整理成固定格式(类型不合规丢掉、频率不合规当偶尔、avoid 最多 6 条)",
+              sp["kind"] == "" and sp["serve"] == "cold" and [x["name"] for x in sp["pairings"]] == ["白粥", "夹馒头", "拌面"] and sp["pairings"][1]["freq"] == "mid"
+              and len(sp["avoid"]) == 6 and len(sp["shoot_note"]) == 60, str(sp))
+    spec_ok = {"kind": "side", "serve": "room", "pairings": prs, "avoid": ["别的品牌豆腐乳", "姜蒜"], "shoot_note": "瓶子放在饭桌上"}
+    rep.check("拍摄规格:画像里有就直接用(不再调 AI);没有且调用失败返回空规格;生成的会缓存",
+              pr_.get_spec({"id": 1, "name": "x", "profile": {"shoot": spec_ok}}) == spec_ok and pr_.get_spec({"id": 1, "name": "x", "profile": {}}, generate=False) == {})
+    saved, old_ss, old_sv = [], llm_.shoot_spec, pr_.save_spec
+    try:
+        llm_.shoot_spec = lambda *a_, **k_: spec_ok
+        pr_.save_spec = lambda pid_, sp_: saved.append((pid_, sp_))
+        pp = {"id": 7, "name": "腐乳", "profile": {}}
+        got = pr_.get_spec(pp)
+        llm_.shoot_spec = lambda *a_, **k_: (_ for _ in ()).throw(RuntimeError("没有 Key"))
+        got2 = pr_.get_spec({"id": 8, "name": "x", "profile": {}})
+    finally:
+        llm_.shoot_spec, pr_.save_spec = old_ss, old_sv
+    rep.check("拍摄规格:生成后缓存到产品画像;AI 调用失败返回空且不缓存", got == spec_ok and saved == [(7, spec_ok)] and pp["profile"]["shoot"] == spec_ok and got2 == {} and len(saved) == 1)
+    blk = pr_.block({"id": 1, "name": "腐乳", "profile": {"shoot": spec_ok}})
+    rep.check("写笔记的产品资料里带上拍摄规格:搭配和频率 / 不要出现 / 冷热 / 少用整篇最多一张",
+              "夹馒头(少用,整篇最多一张)" in blk and "白粥(常用)" in blk and "姜蒜" in blk and "不要冒" not in blk and "常温" in blk and "最多一张" in blk and "纸巾团" in blk, blk[-400:])
+    rep.check("「不要出现」不重复:规格里已经写了热气 / 蒸汽 / 冒烟就不再自动补;热饮不补;没有规格返回空串",
+              pr_.avoid_text({"serve": "room", "avoid": ["热气蒸汽", "姜蒜"]}) == "不要出现:热气蒸汽、姜蒜" and pr_.avoid_text({"serve": "hot", "avoid": ["姜蒜"]}) == "不要出现:姜蒜" and pr_.avoid_text({}) == "")
+    ip = wk_._image_prompt("标题", "餐桌上一碗白粥配一小碟腐乳", True, "", pr_.avoid_text(spec_ok))
+    rep.check("生图提示词:带上「不要出现」(规格里的 + 不是热饮就不要热气),不再自带杂物", "不要出现:别的品牌豆腐乳、姜蒜、热气和蒸汽" in ip and "生活杂物" not in ip and "场景:" not in ip, ip[:240])
+    # ---- 上传产品时的素材检查 ----
+    import base64 as _b64
+    from app import product_check as pc, products as pdt
+    from PIL import Image as _Im
+
+    def _png(color, size=(800, 1000)):
+        buf = io.BytesIO()
+        _Im.new("RGB", size, color).save(buf, "PNG")
+        return buf.getvalue()
+
+    du = lambda b: "data:image/png;base64," + _b64.b64encode(b).decode()
+    img_a, img_b, img_c, img_d, img_small = _png((200, 30, 30)), _png((30, 200, 30)), _png((30, 30, 200)), _png((200, 200, 30)), _png((90, 90, 90), (300, 300))
+    pid_cin = pdt.create("肉桂粉(检查用)", [du(img_a)], selling_points="锡兰肉桂,香气温润")
+    db.q_exec("UPDATE products SET category='肉桂粉' WHERE id=?", pid_cin)
+    ws = pc.check("姜黄粉(检查用)", [(img_a, "png"), (img_b, "png"), (img_b, "png"), (img_c, "png"), (img_small, "png")], None,
+                  "姜黄 + 肉桂经典搭配\n**口感风味**", "帮我收集一些家庭主妇、中年人", "", 0, vision=False)
+    msgs = [w["msg"] for w in ws]
+    rep.check("素材检查:图和别的产品里的一样 / 上传的图自己重复 / 分辨率偏低 / 超过 3 张只取前 3 张,都提醒出来",
+              any("第 1 张图和产品「肉桂粉(检查用)」里的图完全一样" in m for m in msgs) and any("第 3 张图和第 2 张重复" in m for m in msgs)
+              and any("第 5 张图分辨率偏低" in m for m in msgs) and any("只会取前 3 张" in m for m in msgs), str(msgs))
+    rep.check("素材检查:文案里有别的产品的关键词(肉桂)/ 像给 AI 的指令 / 带格式符号,都提醒;warn 排在 tip 前面",
+              any("另一个产品「肉桂粉(检查用)」的关键词「肉桂」" in m for m in msgs) and any("像是给 AI 的指令" in m for m in msgs)
+              and any("格式符号" in m for m in msgs) and [w["level"] for w in ws] == sorted([w["level"] for w in ws], key=lambda x: 0 if x == "warn" else 1), str(msgs))
+    long_ws = pc.check("腐乳", [(img_d, "png")], None, "卖点" * 300, "人群" * 80, "", 0, vision=False)
+    empty_ws = pc.check("腐乳", [(img_d, "png")], None, "", "", "", 0, vision=False)
+    ok_ws = pc.check("国圣腐乳", [(img_d, "png")], None, "米酱发酵,咸香入味 / 配白粥拌面", "家庭主妇、中老年人", "治疗、功效", 0, vision=False)
+    rep.check("素材检查:文案太长会被截断的提醒;没填卖点给建议;规范的素材不报问题",
+              any("「卖点」有 600 字" in w["msg"] for w in long_ws) and any("「适合人群」有 160 字" in w["msg"] for w in long_ws)
+              and any(w["level"] == "tip" and "没有填卖点" in w["msg"] for w in empty_ws) and ok_ws == [], str((long_ws, empty_ws, ok_ws)))
+    edit_ws = pc.check("肉桂粉(检查用)", [(img_a, "png")], None, "", "", "", pid_cin, vision=False)   # 编辑自己:不和自己的图比
+    rep.check("素材检查:编辑产品时不把自己的图当成「重复」", not any("完全一样" in w["msg"] for w in edit_ws), str(edit_ws))
+    old_vc = llm_.vision_chat
+    try:
+        llm_.vision_chat = lambda system, text, images, **k_: '{"issues": [{"index": 2, "reason": "是肉桂粉的罐子"}, {"index": 9, "reason": "越界的不要"}, {"index": "x"}]}'
+        vws = pc.check("姜黄粉", [(img_a, "png"), (img_b, "png")], None, "姜黄冲饮", "上班族", "", 0, vision=True)
+        llm_.vision_chat = lambda *a_, **k_: (_ for _ in ()).throw(RuntimeError("没配看图接口"))
+        vws2 = pc.check("姜黄粉", [(img_a, "png")], None, "姜黄冲饮", "上班族", "", 0, vision=True)
+    finally:
+        llm_.vision_chat = old_vc
+    rep.check("素材检查:看图模型指出哪张不是这个产品就提醒(越界序号忽略);看图出错 / 没配接口时不影响其他检查",
+              [w["msg"] for w in vws if "可能不是这个产品" in w["msg"]] == ["第 2 张图可能不是这个产品:是肉桂粉的罐子"] and not any("可能不是" in w["msg"] for w in vws2))
+    ep = api_user.check_product(api_user.ProductCheckIn(name="姜黄粉", images=[du(img_a)], selling_points="x", audience="上班族"))
+    rep.check("素材检查接口:返回提醒;图片格式不对返回 400", any("完全一样" in w["msg"] for w in ep["warnings"]) and _raises2(lambda: api_user.check_product(api_user.ProductCheckIn(name="x", images=["不是图片"]))))
+    pdt.delete(pid_cin)
     off = api_user.list_runs(limit=2, offset=1)
     full = api_user.list_runs(limit=500)
     rep.check("任务页分页:offset 跳过前 N 个,总数接口和列表一致", [x["id"] for x in off] == [x["id"] for x in full[1:3]] and api_user.runs_count()["total"] == len(full))

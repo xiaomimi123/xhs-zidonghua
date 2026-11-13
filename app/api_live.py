@@ -405,39 +405,60 @@ def create_from_product(p: GenIn):
     # 每张图一个(场景, 拍法),避开这个产品以前用过的:同一产品反复生成,画面才不会越来越像
     from . import covers
     prod_ = products.get(gen["product_id"]) if gen.get("product_id") else None
+    spec = products.get_spec(prod_) if prod_ else {}   # 产品拍摄规格:类型 / 搭配(带频率) / 不要出现的东西;没有就让 AI 生成一次
+    prod_ = products.get(gen["product_id"]) if gen.get("product_id") else None   # 生成规格后重新取,画像里有了规格,场景池按它的类型挑
     scenes = [gen["scene"]] if gen["scene"] else covers.scene_pool("美食", prod_)
-    looks = covers.pick_looks(p.count, scenes, _used_looks(gen))
+    used_looks, used_pairs = _gen_history(gen)
+    looks = covers.pick_looks(p.count, scenes, used_looks)
+    pairs = covers.pick_pairings(p.count, spec.get("pairings") or [], used_pairs)
+    avoid = products.avoid_text(spec)
     ids = []
     for k in range(p.count):
         g = dict(gen, idx=seed + k * 3, scene=looks[k][0], look=looks[k][1], auto=not gen["scene"])
+        if pairs[k]:
+            g["pairing"] = pairs[k]
+        if avoid:
+            g["avoid"] = avoid
         ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen,owner_id) VALUES(NULL,'',?,?,?,'image',?,'gen',?,?)",
                           ojs, who, opts["mode"], title, json.dumps(g, ensure_ascii=False), my_id()).lastrowid)
     return {"created": len(ids), "ids": ids}
 
 
 def _used_looks(gen: dict) -> dict:
-    """这个产品(或这组上传的产品图)以前生成过的 {(场景, 拍法): 次数},只看最近 400 张。"""
+    return _gen_history(gen)[0]
+
+
+def _gen_history(gen: dict) -> tuple[dict, dict]:
+    """这个产品(或这组上传的产品图)以前生成过的:({(场景, 拍法): 次数}, {搭配: 次数}),只看最近 400 张。"""
     if gen.get("product_id"):
         pid = int(gen["product_id"])
         like, like2 = f'%"product_id": {pid},%', f'%"product_id": {pid}}}%'
     elif gen.get("refs"):
         like = like2 = f'%{gen["refs"][0]}%'
     else:
-        return {}
+        return {}, {}
     used: dict = {}
+    pairs: dict = {}
     for r in q_all("SELECT gen FROM live_jobs WHERE src='gen' AND (gen LIKE ? OR gen LIKE ?) ORDER BY id DESC LIMIT 400", like, like2):
         g = r["gen"] or {}
         if g.get("look"):
             k = (g.get("scene") or "", g["look"])
             used[k] = used.get(k, 0) + 1
-    return used
+        if g.get("pairing"):
+            pairs[g["pairing"]] = pairs.get(g["pairing"], 0) + 1
+    return used, pairs
 
 
 def _gen_prompt(g: dict) -> str:
     from . import covers, worker
     scene = g.get("scene") or covers.scene("美食", g.get("idx", 0), 1)
     if g.get("look"):
-        scene = f"{scene}。拍法:{g['look']}"   # 机位、光线、画面状态:同一场景也要拍出不一样的画面
+        # 机位、光线、画面状态:同一场景也要拍出不一样的画面。参考图只用来保持产品外观,摆放和构图要按拍法重新设计
+        scene = f"{scene}。拍法:{g['look']}。构图和摆放按这个拍法重新设计,不要照搬参考图里产品的摆放方式"
+    if g.get("pairing"):
+        scene += f"。画面里的搭配:{g['pairing']}"   # 产品拍摄规格里的真实吃法,按频率轮换(少用的搭配很少出现)
+    if g.get("avoid"):
+        scene += f"。{g['avoid']}"
     subject = g.get("note") or "产品是画面里的主角,摆在或拿在真实生活场景中,像用户自己随手拍的分享照"
     return worker._image_prompt("", subject, True, scene)
 

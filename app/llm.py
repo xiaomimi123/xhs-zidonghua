@@ -177,7 +177,7 @@ WRITE_SYSTEM = """你是资深小红书博主。严格按照给定「拆解卡�
  "content": "正文,不含话题标签",
  "tags": ["话题1","话题2","...共5-8个,不带#"],
  "cover": {{"title": "封面主标题,<=14字,抓人,可以和标题不同", "sub": "副标题,<=18字,没有就空字符串", "points": ["清单、教程类给 3-4 个要点,每条<=12字;不是清单教程就给空数组"], "num": "标题里的核心数字,如3,没有就空字符串", "unit": "数字后的量词短语,如「种吃法」,<=6字,没有就空字符串", "tag": "角标,<=4字,如「亲测」「避坑」,没有就空字符串", "scene": "封面实拍背景的画面描述,<=60字:点名主体、场景、光线;场景要像普通人在家随手拍的(家里餐桌/厨房台面/书桌,自然光),不要棚拍、纯色背景、专业布光;画面里不能有文字"}},
- "image_prompts": ["内页配图提示词,条数以用户消息里【配图数量】为准(0 条就给空数组);每条是可直接交给生图模型的中文画面描述,必须点名画面主体(如「一杯姜黄咖啡」),并且画的是正文里某一步/某个要点真实会看到的东西(如正文讲「奶太烫→香料结团」就画一杯结团的奶茶);各条换不同的场景和拍摄角度;像手机随手拍的生活照(家里的自然光、随意构图、背景有生活杂物,不要棚拍广告感),不要标题字、图标、对错符号、箭头、礼盒等和正文无关的道具;画面里不要出现任何文字、字母、标签,不要英文"]}}"""
+ "image_prompts": ["内页配图提示词,条数以用户消息里【配图数量】为准(0 条就给空数组);每条是可直接交给生图模型的中文画面描述,必须点名画面主体(如「一杯姜黄咖啡」),并且画的是正文里某一步/某个要点真实会看到的东西(如正文讲「奶太烫→香料结团」就画一杯结团的奶茶);各条换不同的场景和拍摄角度;像手机随手拍的生活照(家里的自然光、随意构图、背景整洁自然、最多一两件日常小物,不要棚拍广告感;不要纸巾团、水渍、杂物堆;除热饮外不要写热气、冒烟、热腾腾、刚出锅),不要标题字、图标、对错符号、箭头、礼盒等和正文无关的道具;画面里不要出现任何文字、字母、标签,不要英文"]}}"""
 
 
 def _card(playbook: dict) -> str:
@@ -195,16 +195,18 @@ INNER_SYSTEM = """你是小红书笔记的配图策划。根据成稿正文,为�
 要求:
 - 每条画的是正文里某一步、某个要点或某个结果真实会看到的东西,条与条对应正文不同位置,按正文顺序。
 - 必须点名画面主体(食材、成品、器具、动作),写清场景和拍摄角度。
-- 画面风格是普通人用手机随手拍的生活照:家里的自然光、构图随意、背景有日常杂物;不要棚拍、纯色背景、专业布光、精致摆盘这类广告大片感。
+- 画面风格是普通人用手机随手拍的生活照:家里的自然光、构图随意、背景整洁自然,最多一两件日常小物,偶尔带一点随手拍的痕迹(如一个用过的杯子);不要棚拍、纯色背景、专业布光、精致摆盘这类广告大片感,也不要纸巾团、水渍、杂物堆这类凌乱的东西。
+- 除热饮外,不要写热气、冒烟、热腾腾、刚出锅、蒸汽这类会让画面冒烟的词;冷的、常温的食物不要有热气。
+- 几张图的搭配、场景、拍摄角度各不相同。产品资料里有拍摄规格的,按里面的搭配和频率来:标「少用」的整篇最多一张,常见搭配也不要每张都一样(例如不要每张都是白粥配馒头)。
 - 不要画标题字、图标、对错符号、箭头、序号、标注卡片,不要礼盒、节日装饰等和正文无关的道具。
-- 场景要符合产品真实的使用方式:冲泡饮品(咖啡、茶、奶类)放在餐桌、咖啡角、办公桌、茶几、窗边,不要放在灶台、炒锅、冒烟的厨房;零食点心放在桌面、沙发;只有烹饪调味类才出现厨房灶台。
+- 场景要符合产品真实的使用方式:冲泡饮品(咖啡、茶、奶类)放在餐桌、咖啡角、办公桌、茶几、窗边,不要放在灶台、炒锅、油烟重的厨房;零食点心放在桌面、沙发;只有烹饪调味类才出现厨房灶台。
 - 画面里不要出现任何文字、字母、标签。
 严格输出 JSON:{{"image_prompts": ["提示词1","提示词2",...共 {k} 条]}}"""
 
 
-def inner_image_prompts(title: str, content: str, k: int, product: str = "") -> list[str]:
-    """按成稿正文重新策划内页配图提示词(不含封面),返回 k 条。"""
-    user = f"标题:{title}\n产品:{product or '未指定'}\n\n正文:\n{content[:2500]}"
+def inner_image_prompts(title: str, content: str, k: int, product: str = "", block: str = "") -> list[str]:
+    """按成稿正文重新策划内页配图提示词(不含封面),返回 k 条。block = 产品资料(含拍摄规格:搭配和频率、不要出现的东西)。"""
+    user = f"标题:{title}\n产品:{product or '未指定'}\n\n正文:\n{content[:2500]}{block}"
     out = chat(INNER_SYSTEM.format(k=k), user, temperature=0.7)
     return [str(x).strip() for x in (out.get("image_prompts") or []) if str(x).strip()][:k]
 
@@ -526,6 +528,46 @@ def describe_product(name: str, images: list, track_names: list[str]) -> dict:
             "selling_points": lst("selling_points", 4, 20), "scenes": lst("scenes", 4, 16),
             "keywords": [k for k in lst("keywords", 6, 10) if len(k) >= 2],
             "broader": [k for k in lst("broader", 2, 8) if len(k) >= 2], "uses": [k for k in lst("uses", 4, 8) if len(k) >= 2]}
+
+
+# ---------- 产品拍摄规格:按产品自动生成一次,所有出图环节(封面、内页配图、Live 场景图)都读它 ----------
+SHOOT_SYSTEM = """你是小红书食品 / 生活用品的图片策划。根据产品资料,给这个产品定一份「拍摄规格」,让以后给它配图时画面符合真实使用方式,不重样,不出怪画面。输出 JSON:
+- kind:产品类型,只能是以下之一:
+  drink(冲泡饮品:咖啡、茶、奶茶粉、麦片、可可粉、固体饮料)/ snack(零食点心:饼干、坚果、肉干、肉脯、糖果)/ cook(烹饪调味:酱油、香料、食用油、复合调味料)/
+  mixed(既能冲饮又能入菜)/ side(下饭佐餐的小菜:腐乳、酱菜、榨菜、辣酱)/ food(其他一般食品)。以产品真实的主要吃法为准,别被包装文案里的个别词带偏
+  (比如「姜黄粉固体饮料」是冲饮,不是厨房香料;「下午茶零食」是零食,不是饮品)。
+- serve:吃的时候是 hot(热的,会冒热气)/ cold(冷的)/ room(常温)。只有 hot 的画面才允许有热气。
+- pairings:这个产品真实常见的搭配或吃法(食品类 5-9 个,非食品给空数组),每个 {"name": "搭配名,2-8 个字", "freq": "high / mid / low"}。
+  freq 决定出现频率,按这个分配:high 最多 2 个(最典型、最不容易出错的吃法);mid 2-3 个;其余都写 low。
+  特别注意:「谁都会第一个想到、已经被写烂的刻板搭配」必须写 low,哪怕它是真实吃法
+  (例如腐乳夹馒头、咖啡配面包、牛奶配饼干:真实,但不能每张图都是它)。要覆盖不同的吃法(主食、配菜、做法、直接吃、冲饮…),别全是同一类。
+- avoid:这个产品的画面里绝对不要出现的东西,3-6 条,每条 4-14 个字。要想到「容易被模型错误联想」的东西
+  (例如冲饮粉不要出现姜、蒜、洋葱等生食材;腌制小菜不要出现烟雾蒸汽;别的品牌或别的产品)。
+- shoot_note:一句话拍摄提示,不超过 40 字(例如「瓶子放在饭桌上,配饭配粥,不要冒热气」)。
+只输出 JSON:{"kind": "", "serve": "", "pairings": [{"name": "", "freq": ""}], "avoid": [""], "shoot_note": ""}"""
+
+SHOOT_KINDS = ("drink", "snack", "cook", "mixed", "side", "food")
+
+
+def shoot_spec(name: str, category: str = "", selling_points: str = "", audience: str = "", scenes: list | None = None,
+               uses: list | None = None, appearance: str = "") -> dict:
+    """给一个产品生成拍摄规格(整理成固定格式,模型给的内容不合规就丢掉那一项,不会带进画面提示词)。"""
+    user = (f"产品名称:{name}\n品类:{category or '未知'}\n外观:{appearance or '未知'}\n卖点:{(selling_points or '无')[:300]}\n"
+            f"适合人群:{(audience or '无')[:80]}\n适合的场景:{'、'.join(scenes or []) or '无'}\n常见用法:{'、'.join(uses or []) or '无'}")
+    out = chat(SHOOT_SYSTEM, user, temperature=0.3)
+    kind = str(out.get("kind") or "").strip()
+    serve = str(out.get("serve") or "").strip()
+    pairings = []
+    for x in out.get("pairings") or []:
+        n = str((x or {}).get("name") if isinstance(x, dict) else x or "").strip()[:10]
+        f = str((x or {}).get("freq") if isinstance(x, dict) else "mid").strip().lower()
+        if n and f in ("high", "mid", "low"):
+            pairings.append({"name": n, "freq": f})
+        elif n:
+            pairings.append({"name": n, "freq": "mid"})
+    return {"kind": kind if kind in SHOOT_KINDS else "", "serve": serve if serve in ("hot", "cold", "room") else "",
+            "pairings": pairings[:10], "avoid": [str(a).strip()[:16] for a in (out.get("avoid") or []) if str(a).strip()][:6],
+            "shoot_note": str(out.get("shoot_note") or "").strip()[:60]}
 
 
 # ---------- 补全赛道:笔记库沉淀的笔记没有项目,没人告诉它属于哪个赛道 ----------

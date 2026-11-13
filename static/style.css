@@ -1197,3 +1197,17 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 @media(max-width:720px){.ver{display:none}}
 .ver{flex-direction:column;align-items:flex-start;gap:1px}
 .ver span{max-width:100%}
+
+/* 上传产品:怎么传、怎么填的提示,生图参考图角标,素材检查弹窗 */
+.pc-tip{margin:6px 0 10px;padding:10px 12px;border-radius:10px;background:var(--soft);font-size:12px;line-height:1.65;color:var(--sub)}
+.pc-tip b{color:var(--ink)}
+.pc-tip ul{margin:4px 0 0;padding-left:18px}
+.pc-eg{margin-top:6px}.pc-eg summary{cursor:pointer;color:var(--accent-ink)}
+.pc-eg p{margin:6px 0 0;padding:8px 10px;background:var(--panel);border-radius:8px;border:1px dashed var(--line-2)}
+.fl-refno{position:absolute;top:-6px;left:-6px;z-index:1;width:20px;height:20px;border-radius:50%;background:var(--accent);color:#fff;font-style:normal;font-size:11px;font-weight:600;line-height:20px;text-align:center}
+.pc-dlg{width:100%;max-width:560px;max-height:80vh;overflow:auto;padding:20px}
+.pc-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.pc-list li{padding:9px 12px;border-radius:8px;font-size:13px;line-height:1.6;background:var(--warn-wash);border-left:3px solid var(--warn)}
+.pc-list li.tip{background:var(--soft);border-left-color:var(--line-2);color:var(--sub)}
+.pc-t{display:inline-block;margin-right:8px;padding:0 6px;border-radius:99px;font-size:11px;background:var(--panel);color:var(--warn)}
+.pc-list li.tip .pc-t{color:var(--sub)}

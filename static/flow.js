@@ -77,15 +77,23 @@ async function fNew() {
     <div class="seg"><button class="${prod ? "on" : ""}" data-fmode="product">我有产品</button><button class="${prod ? "" : "on"}" data-fmode="track">按赛道</button></div>
     ${prod ? `${list.length ? `<span class="fl-lbl">已有产品</span><div class="fl-chips">${list.map(x => `<button class="chip ${P.pick === x.id ? "on" : ""}" data-fpick="${x.id}">${esc(x.name)}</button>`).join("")}${P.pick ? `<button class="chip" data-fpick="0">+ 新产品</button>` : ""}</div>` : ""}
       ${picked && FL.edit?.id === picked.id ? editForm(FL.edit)
-      : picked ? `<div class="fl-ups">${picked.images.map(u => `<span class="fl-up"><img src="${esc(u)}" alt=""></span>`).join("")}</div>
+      : picked ? `<div class="fl-ups">${picked.images.map((u, i) => `<span class="fl-up">${i < 3 ? `<i class="fl-refno" title="生图时会用这张当参考">${i + 1}</i>` : ""}<img src="${esc(u)}" alt=""></span>`).join("")}</div>
         <div class="fl-pinfo"><div><b>${esc(picked.name)}</b><p class="sub">${[picked.price, picked.selling_points && "卖点:" + picked.selling_points, picked.audience && "人群:" + picked.audience, picked.forbid && "不写:" + picked.forbid].filter(Boolean).map(esc).join(" · ") || "没有补充资料"}</p></div>
           <button class="btn gray sm" data-fedit>编辑</button><button class="btn ghost sm danger" data-fdel>${FL.delSure === picked.id ? "再点一次确认删除" : "删除"}</button></div>`
       : `<label class="fl-lbl" for="fpname">产品名称</label><input id="fpname" placeholder="如:国圣台湾风味豆腐乳" value="${esc(P.name)}">
-        <span class="fl-lbl">产品图 · 建议 2–6 张,包装正面最重要</span>
-        <div class="fl-ups">${P.files.map((u, i) => `<span class="fl-up"><img src="${u}" alt=""><button data-frm="${i}" aria-label="移除第 ${i + 1} 张">×</button></span>`).join("")}<label class="fl-add">+ 上传<input id="ffile" type="file" accept="image/*" multiple hidden></label></div>
-        <details class="fl-more"><summary>补充资料(可选,写得越准,文案越贴合)</summary>
-          <div class="fl-two"><input id="fpprice" placeholder="价格,如 29.9 元 / 罐" value="${esc(P.price)}"><input id="fpaud" placeholder="适合人群,如 上班族" value="${esc(P.aud)}"></div>
-          <input id="fpsp" placeholder="卖点,如 古法发酵 · 小罐装" value="${esc(P.sp)}"><input id="fpforbid" placeholder="不能出现的说法,如 不写疗效" value="${esc(P.forbid)}">
+        <span class="fl-lbl">产品图</span><div class="pc-tip"><b>怎么传才好用</b><ul>
+        <li>建议 3–6 张:<b>① 包装正面</b>(白底最好)、<b>② 开盖 / 内容物特写</b>、<b>③ 1–2 张真实使用或食用场景</b></li>
+        <li>一次只传<b>一个产品</b>,图里不要出现别的产品或别的品牌</li>
+        <li>生图时只取<b>前 3 张</b>当参考(带数字角标的就是),把最能代表产品的放在最前面</li></ul></div>
+        <div class="fl-ups">${P.files.map((u, i) => `<span class="fl-up">${i < 3 ? `<i class="fl-refno" title="生图时会用这张当参考">${i + 1}</i>` : ""}<img src="${u}" alt=""><button data-frm="${i}" aria-label="移除第 ${i + 1} 张">×</button></span>`).join("")}<label class="fl-add">+ 上传<input id="ffile" type="file" accept="image/*" multiple hidden></label></div>
+        <details class="fl-more"><summary>补充资料(可选,写得越准,文案越贴合)</summary><div class="pc-tip"><b>填写要点</b><ul>
+          <li><b>卖点</b>:3–5 条短句,只写这个产品,不要复制别的产品的文案</li>
+          <li><b>适合人群</b>:只写人群本身,如「上班族、控糖人群」;不要写给 AI 的指令(如「帮我收集…」)</li>
+          <li><b>不能出现的说法</b>:如「治疗、功效」这类词,逗号隔开</li></ul>
+          <details class="pc-eg"><summary>看一个填写范例</summary><p><b>名称</b>:国圣米酱豆腐乳<br><b>卖点</b>:米酱发酵,咸香入味 / 绵密细腻,不辣不刺激 / 配白粥、拌面、拌饭都合适<br>
+          <b>适合人群</b>:家庭主妇、中老年人<br><b>不能出现的说法</b>:治疗、功效</p></details></div>
+          <div class="fl-two"><input id="fpprice" placeholder="价格,如 29.9 元 / 罐" value="${esc(P.price)}"><input id="fpaud" placeholder="适合人群,只写人群,如 上班族、控糖人群" value="${esc(P.aud)}"></div>
+          <input id="fpsp" placeholder="卖点,3–5 条短句,如 米酱发酵 · 绵密不齁 · 配饭配粥" value="${esc(P.sp)}"><input id="fpforbid" placeholder="不能出现的说法,如 不写疗效" value="${esc(P.forbid)}">
           <label class="sub">赛道 <select id="fptrack"><option value="">自动识别</option>${TRACKS.map(([t]) => `<option ${P.track === t ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label></details>`}`
     : `<span class="fl-lbl">赛道</span><div class="fl-chips">${TRACKS.map(([t]) => `<button class="chip ${t === FL.track ? "on" : ""}" data-ftrack="${esc(t)}">${esc(t)}</button>`).join("")}</div>
       <label class="fl-lbl" for="fkw">关键词(可选,不填由系统按赛道挑选)</label><input id="fkw" placeholder="如:快手早餐,多个用逗号分隔" value="${esc(FL.kw)}">
@@ -146,6 +154,10 @@ async function fNew() {
     keepEdit(); const E = FL.edit;
     if (!E.name.trim()) return toast("产品名称不能为空", 1);
     if (!E.keep.length && !E.add.length) return toast("至少保留一张产品图", 1);
+    const btn_ = $("[data-fesave]"); btn_ && (btn_.disabled = true, btn_.textContent = "检查中…");
+    const go_ = await checkProduct({ name: E.name, images: E.add, keep: E.keep.map(u => u.split("/").pop()), selling_points: E.sp, audience: E.aud, forbid: E.forbid, product_id: E.id });
+    btn_ && (btn_.disabled = false, btn_.textContent = "保存产品");
+    if (!go_) return;
     try {
       await api(`/api/products/${E.id}`, "PUT", { name: E.name, price: E.price, selling_points: E.sp, audience: E.aud, forbid: E.forbid, keep: E.keep.map(u => u.split("/").pop()), add: E.add });
       FL.edit = null; toast("产品已保存"); fNew();
@@ -172,6 +184,11 @@ async function fNew() {
       if (!FL.track) return err("先选一个赛道");
       body = { ...body, track: FL.track, keywords: FL.kw.split(/[,，、\n]+/).map(s => s.trim()).filter(Boolean) };
     }
+    if (prod && !picked) {   // 新产品:先检查素材(传错图、混进别的产品、文案像指令…),有问题让用户选继续还是回去改
+      $("#fstart").disabled = true; $("#fstart").textContent = "检查素材中…";
+      const go_ = await checkProduct({ name: P.name, images: P.files, selling_points: P.sp, audience: P.aud, forbid: P.forbid });
+      if (!go_) { $("#fstart").disabled = false; $("#fstart").textContent = "开始生成"; return; }
+    }
     $("#fstart").disabled = true; $("#fstart").textContent = prod && !picked ? "上传中…" : "创建中…";
     try {
       const r = await api("/api/auto", "POST", body);
@@ -186,10 +203,34 @@ const PTYPES = [["", "系统默认", "有产品:产品软文为主,加一部分�
   ["rev", "测评", "有评价维度的单款 / 多款对比"], ["biz", "商业硬文", "品牌 / 商家视角的产品介绍(参考笔记较少)"], ["mix", "软文 + 教程 + 测评", "三类混合,按 5:3:2 分配"]];
 const PTYPE_MIX = { soft: { 产品软文: 1 }, tut: { 教程: 1 }, rev: { 测评: 1 }, biz: { 商业硬文: 1 }, mix: { 产品软文: 5, 教程: 3, 测评: 2 } };
 
+// 提交产品前检查素材(传错图、混进别的产品的图、文案像指令 / 复制了别的产品的、太长被截断…)。
+// 只提醒不拦着:有需要注意的问题时弹出清单,用户选「回去修改」或「仍然继续」;只有建议时不打断;检查本身出错也直接放行。
+async function checkProduct(body) {
+  let ws = [];
+  try { ws = (await api("/api/products/check", "POST", body)).warnings || []; } catch { return true; }
+  const warn = ws.filter(w => w.level === "warn");
+  if (!warn.length) { if (ws[0]) toast("小建议:" + ws[0].msg); return true; }
+  return new Promise(done => {
+    const m = document.createElement("div"); m.className = "mask"; m.style.zIndex = 60;
+    m.innerHTML = `<div class="card pc-dlg" role="dialog" aria-modal="true" aria-label="素材检查">
+      <div class="card-h"><b>素材检查:有 ${warn.length} 个地方建议先看一下</b></div>
+      <p class="sub" style="margin:0 0 8px">这些素材会直接影响生成的文案和配图(传错图、混进别的产品,生成的图里就会出现别的产品)。可以回去改,也可以确认没问题后继续。</p>
+      <ul class="pc-list">${ws.map(w => `<li class="${w.level}"><span class="pc-t">${esc(w.where)}</span>${esc(w.msg)}</li>`).join("")}</ul>
+      <div class="fl-acts" style="justify-content:flex-end;margin-top:14px"><button class="btn gray" data-pc="back">回去修改</button><button class="btn" data-pc="go">仍然继续</button></div></div>`;
+    const end = r => { m.remove(); document.removeEventListener("keydown", key); done(r); };
+    const key = e => { if (e.key === "Escape") end(false); };
+    m.onclick = e => { const b = e.target.closest("[data-pc]"); if (b) end(b.dataset.pc === "go"); else if (e.target === m) end(false); };
+    document.addEventListener("keydown", key); document.body.appendChild(m); m.querySelector('[data-pc="back"]').focus();
+  });
+}
+
 function editForm(E) {
   return `<div class="fl-edit"><label class="fl-lbl" for="fename">产品名称</label><input id="fename" value="${esc(E.name)}">
-    <span class="fl-lbl">产品图 · 点 × 去掉,至少留一张</span>
-    <div class="fl-ups">${E.keep.map((u, i) => `<span class="fl-up"><img src="${esc(u)}" alt=""><button data-fekeep="${i}" aria-label="去掉这张">×</button></span>`).join("")}${E.add.map((u, i) => `<span class="fl-up"><img src="${u}" alt=""><button data-feadd="${i}" aria-label="去掉这张">×</button></span>`).join("")}<label class="fl-add">+ 添加<input id="fefile" type="file" accept="image/*" multiple hidden></label></div>
+    <span class="fl-lbl">产品图 · 点 × 去掉,至少留一张</span><div class="pc-tip"><b>怎么传才好用</b><ul>
+        <li>建议 3–6 张:<b>① 包装正面</b>(白底最好)、<b>② 开盖 / 内容物特写</b>、<b>③ 1–2 张真实使用或食用场景</b></li>
+        <li>一次只传<b>一个产品</b>,图里不要出现别的产品或别的品牌</li>
+        <li>生图时只取<b>前 3 张</b>当参考(带数字角标的就是),把最能代表产品的放在最前面</li></ul></div>
+    <div class="fl-ups">${E.keep.map((u, i) => `<span class="fl-up">${i < 3 ? `<i class="fl-refno" title="生图时会用这张当参考">${i + 1}</i>` : ""}<img src="${esc(u)}" alt=""><button data-fekeep="${i}" aria-label="去掉这张">×</button></span>`).join("")}${E.add.map((u, i) => `<span class="fl-up">${E.keep.length + i < 3 ? `<i class="fl-refno" title="生图时会用这张当参考">${E.keep.length + i + 1}</i>` : ""}<img src="${u}" alt=""><button data-feadd="${i}" aria-label="去掉这张">×</button></span>`).join("")}<label class="fl-add">+ 添加<input id="fefile" type="file" accept="image/*" multiple hidden></label></div>
     <div class="fl-two"><input id="feprice" placeholder="价格,如 29.9 元 / 罐" value="${esc(E.price)}"><input id="feaud" placeholder="适合人群,如 上班族" value="${esc(E.aud)}"></div>
     <input id="fesp" placeholder="卖点,如 古法发酵 · 小罐装" value="${esc(E.sp)}" style="margin-top:10px"><input id="feforbid" placeholder="不能出现的说法,如 不写疗效" value="${esc(E.forbid)}" style="margin-top:10px">
     <div class="fl-acts" style="margin-top:12px;justify-content:flex-end"><button class="btn gray sm" data-fecancel>取消</button><button class="btn sm" data-fesave>保存产品</button></div></div>`;
