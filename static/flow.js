@@ -1,6 +1,6 @@
 // ---------- 流水线界面:新建任务 / 任务 / 成品库 / 笔记预览 ----------
 // 员工只做三件事:新建任务 → 看进度 → 拿成品。原来的五步手动流程收在「高级」里。
-const FL = { mode: "product", track: "", kw: "", count: 10, P: { name: "", files: [], price: "", sp: "", aud: "", forbid: "", track: "", pick: 0 },
+const FL = { mode: "product", track: "", kw: "", count: 10, P: { name: "", files: [], price: "", sp: "", aud: "", forbid: "", size: "", track: "", pick: 0 },
   filter: "all", pid: 0, picking: false, picked: new Set(), pv: null, sig: "", account: "", acc: "", accts: null, plan: {}, angles: new Set(), angAcc: "", accKw: {} };
 const fetchAccts = async () => FL.accts || (FL.accts = await api("/api/qianfan/accounts").catch(() => []));
 const when = s => { const d = new Date((s || "").replace(" ", "T") + "Z"); return isNaN(d) ? "" : `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
@@ -86,7 +86,7 @@ async function fNew() {
     ${prod ? `${list.length ? `<span class="fl-lbl">已有产品</span><div class="fl-chips">${list.map(x => `<button class="chip ${P.pick === x.id ? "on" : ""}" data-fpick="${x.id}">${esc(x.name)}</button>`).join("")}${P.pick ? `<button class="chip" data-fpick="0">+ 新产品</button>` : ""}</div>` : ""}
       ${picked && FL.edit?.id === picked.id ? editForm(FL.edit)
       : picked ? `<div class="fl-ups">${picked.images.map((u, i) => imgTile("v", u, i, picked.images.length)).join("")}</div>
-        <div class="fl-pinfo"><div><b>${esc(picked.name)}</b><p class="sub">${[picked.price, picked.selling_points && "卖点:" + picked.selling_points, picked.audience && "人群:" + picked.audience, picked.forbid && "不写:" + picked.forbid].filter(Boolean).map(esc).join(" · ") || "没有补充资料"}</p></div>
+        <div class="fl-pinfo"><div><b>${esc(picked.name)}</b><p class="sub">${[picked.price, picked.selling_points && "卖点:" + picked.selling_points, picked.audience && "人群:" + picked.audience, picked.forbid && "不写:" + picked.forbid, picked.size_note && "大小:" + picked.size_note].filter(Boolean).map(esc).join(" · ") || "没有补充资料"}</p></div>
           <button class="btn gray sm" data-fedit>编辑</button><button class="btn ghost sm danger" data-fdel>${FL.delSure === picked.id ? "再点一次确认删除" : "删除"}</button></div>`
       : `<label class="fl-lbl" for="fpname">产品名称</label><input id="fpname" placeholder="如:国圣台湾风味豆腐乳" value="${esc(P.name)}">
         <span class="fl-lbl">产品图 · 点图片放大,拖动或点 ‹ › 调整顺序</span><div class="pc-tip"><b>怎么传才好用</b><ul>
@@ -102,6 +102,8 @@ async function fNew() {
           <b>适合人群</b>:家庭主妇、中老年人<br><b>不能出现的说法</b>:治疗、功效</p></details></div>
           <div class="fl-two"><input id="fpprice" placeholder="价格,如 29.9 元 / 罐" value="${esc(P.price)}"><input id="fpaud" placeholder="适合人群,只写人群,如 上班族、控糖人群" value="${esc(P.aud)}"></div>
           <input id="fpsp" placeholder="卖点,3–5 条短句,如 米酱发酵 · 绵密不齁 · 配饭配粥" value="${esc(P.sp)}"><input id="fpforbid" placeholder="不能出现的说法,如 不写疗效" value="${esc(P.forbid)}">
+          <label class="fl-lbl" for="fpsize" style="margin-top:12px">产品实际大小(可选)<span class="sub"> 不填由 AI 按品类和规格估;填了生图时产品和手、杯子、碗的比例更准</span></label>
+          <input id="fpsize" maxlength="100" placeholder="如 罐高 9cm、直径 6cm,单手可握;盒子比罐子大一圈" value="${esc(P.size)}">
           <label class="sub">赛道 <select id="fptrack"><option value="">自动识别</option>${TRACKS.map(([t]) => `<option ${P.track === t ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label></details>`}`
     : `<span class="fl-lbl">赛道</span><div class="fl-chips">${TRACKS.map(([t]) => `<button class="chip ${t === FL.track ? "on" : ""}" data-ftrack="${esc(t)}">${esc(t)}</button>`).join("")}</div>
       <label class="fl-lbl" for="fkw">关键词(可选,不填由系统按赛道挑选)</label><input id="fkw" placeholder="如:快手早餐,多个用逗号分隔" value="${esc(FL.kw)}">
@@ -131,14 +133,14 @@ async function fNew() {
   }
   const keep = () => {
     if ($("#fkw")) FL.kw = $("#fkw").value;
-    for (const [k, id] of [["name", "fpname"], ["price", "fpprice"], ["aud", "fpaud"], ["sp", "fpsp"], ["forbid", "fpforbid"], ["track", "fptrack"]]) if ($("#" + id)) P[k] = $("#" + id).value;
+    for (const [k, id] of [["name", "fpname"], ["price", "fpprice"], ["aud", "fpaud"], ["sp", "fpsp"], ["forbid", "fpforbid"], ["size", "fpsize"], ["track", "fptrack"]]) if ($("#" + id)) P[k] = $("#" + id).value;
   };
   $("#main").onclick = e => {
     const t = e.target;
     const pt = t.closest("[data-fptype]"); if (pt) { keep(); FL.ptype = pt.dataset.fptype; return fNew(); }
     const m = t.closest("[data-fmode]"); if (m) { keep(); FL.mode = m.dataset.fmode; return fNew(); }
     const pk = t.closest("[data-fpick]"); if (pk) { keep(); P.pick = +pk.dataset.fpick; FL.edit = null; FL.delSure = 0; return fNew(); }
-    if (t.closest("[data-fedit]")) { FL.edit = { id: picked.id, name: picked.name, price: picked.price || "", sp: picked.selling_points || "", aud: picked.audience || "", forbid: picked.forbid || "", imgs: picked.images.map(u => ({ u })) }; return fNew(); }
+    if (t.closest("[data-fedit]")) { FL.edit = { id: picked.id, name: picked.name, price: picked.price || "", sp: picked.selling_points || "", aud: picked.audience || "", forbid: picked.forbid || "", size: picked.size_note || "", imgs: picked.images.map(u => ({ u })) }; return fNew(); }
     if (t.closest("[data-fecancel]")) { FL.edit = null; return fNew(); }
     const er = t.closest("[data-fermv]"); if (er) { keepEdit(); FL.edit.imgs.splice(+er.dataset.fermv, 1); return fNew(); }
     const zm = t.closest("[data-zoom]"); if (zm) { const [k, i] = zm.dataset.zoom.split(":"); return lightbox(imgList(k), +i); }
@@ -177,7 +179,7 @@ async function fNew() {
     if (k1 === k2 && i1 !== "" ) moveImg(k1, +i1, +i2);
   };
   $("#main").onkeydown = e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("img[data-zoom]")) { e.preventDefault(); e.target.click(); } };
-  const keepEdit = () => { const E = FL.edit; if (!E) return; for (const [k, id] of [["name", "fename"], ["price", "feprice"], ["aud", "feaud"], ["sp", "fesp"], ["forbid", "feforbid"]]) if ($("#" + id)) E[k] = $("#" + id).value; };
+  const keepEdit = () => { const E = FL.edit; if (!E) return; for (const [k, id] of [["name", "fename"], ["price", "feprice"], ["aud", "feaud"], ["sp", "fesp"], ["forbid", "feforbid"], ["size", "fesize"]]) if ($("#" + id)) E[k] = $("#" + id).value; };
   const saveEdit = async () => {
     keepEdit(); const E = FL.edit;
     if (!E.name.trim()) return toast("产品名称不能为空", 1);
@@ -190,7 +192,7 @@ async function fNew() {
     btn_ && (btn_.disabled = false, btn_.textContent = "保存产品");
     if (!go_) return;
     try {
-      await api(`/api/products/${E.id}`, "PUT", { name: E.name, price: E.price, selling_points: E.sp, audience: E.aud, forbid: E.forbid, keep: pp.keep, add: pp.images, order: pp.order });
+      await api(`/api/products/${E.id}`, "PUT", { name: E.name, price: E.price, selling_points: E.sp, audience: E.aud, forbid: E.forbid, size_note: E.size || "", keep: pp.keep, add: pp.images, order: pp.order });
       FL.edit = null; toast("产品已保存"); fNew();
     } catch (e) { toast(e.message, 1); }
   };
@@ -210,7 +212,7 @@ async function fNew() {
     if (prod) {
       if (!picked && !P.name.trim()) return err("填一下产品名称");
       if (!picked && !P.files.length) return err("至少上传一张产品图");
-      body = { ...body, track: P.track, ...(picked ? { product_id: picked.id } : { product: { name: P.name, images: P.files, price: P.price, selling_points: P.sp, audience: P.aud, forbid: P.forbid } }) };
+      body = { ...body, track: P.track, ...(picked ? { product_id: picked.id } : { product: { name: P.name, images: P.files, price: P.price, selling_points: P.sp, audience: P.aud, forbid: P.forbid, size_note: P.size } }) };
     } else {
       if (!FL.track) return err("先选一个赛道");
       body = { ...body, track: FL.track, keywords: FL.kw.split(/[,，、\n]+/).map(s => s.trim()).filter(Boolean) };
@@ -223,7 +225,7 @@ async function fNew() {
     $("#fstart").disabled = true; $("#fstart").textContent = prod && !picked ? "上传中…" : "创建中…";
     try {
       const r = await api("/api/auto", "POST", body);
-      FL.P = { name: "", files: [], price: "", sp: "", aud: "", forbid: "", track: "", pick: 0 }; FL.kw = "";
+      FL.P = { name: "", files: [], price: "", sp: "", aud: "", forbid: "", size: "", track: "", pick: 0 }; FL.kw = "";
       setProject(r.id); toast("已开始,流水线会自动跑完"); openRun(r.id);
     } catch (e) { err(e.message); $("#fstart").disabled = false; $("#fstart").textContent = "开始生成"; }
   };
@@ -264,6 +266,7 @@ function editForm(E) {
     <div class="fl-ups">${E.imgs.map((x, i) => imgTile("e", x.u, i, E.imgs.length, `<button type="button" data-fermv="${i}" aria-label="去掉这张">×</button>`)).join("")}<label class="fl-add">+ 添加<input id="fefile" type="file" accept="image/*" multiple hidden></label></div>
     <div class="fl-two"><input id="feprice" placeholder="价格,如 29.9 元 / 罐" value="${esc(E.price)}"><input id="feaud" placeholder="适合人群,如 上班族" value="${esc(E.aud)}"></div>
     <input id="fesp" placeholder="卖点,如 古法发酵 · 小罐装" value="${esc(E.sp)}" style="margin-top:10px"><input id="feforbid" placeholder="不能出现的说法,如 不写疗效" value="${esc(E.forbid)}" style="margin-top:10px">
+    <input id="fesize" maxlength="100" placeholder="产品实际大小(可选),如 罐高 9cm、直径 6cm,单手可握" value="${esc(E.size || "")}" style="margin-top:10px">
     <div class="fl-acts" style="margin-top:12px;justify-content:flex-end"><button class="btn gray sm" data-fecancel>取消</button><button class="btn sm" data-fesave>保存产品</button></div></div>`;
 }
 

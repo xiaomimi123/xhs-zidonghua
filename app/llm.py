@@ -1,4 +1,5 @@
 import json
+import re
 import time
 import httpx
 from .db import get_settings
@@ -544,7 +545,11 @@ SHOOT_SYSTEM = """你是小红书食品 / 生活用品的图片策划。根据�
 - avoid:这个产品的画面里绝对不要出现的东西,3-6 条,每条 4-14 个字。要想到「容易被模型错误联想」的东西
   (例如冲饮粉不要出现姜、蒜、洋葱等生食材;腌制小菜不要出现烟雾蒸汽;别的品牌或别的产品)。
 - shoot_note:一句话拍摄提示,不超过 40 字(例如「瓶子放在饭桌上,配饭配粥,不要冒热气」)。
-只输出 JSON:{"kind": "", "serve": "", "pairings": [{"name": "", "freq": ""}], "avoid": [""], "shoot_note": ""}"""
+- scenes:这个产品最适合出现的 6-8 个具体场景,每个 ≤ 40 字,写清地点和 2-3 件合理的小道具(要符合产品真实的吃法 / 用法);
+  不同场景要各不相同(家里、办公、出行、户外…);不要写纸巾、水渍、杂物堆、热气、冒烟、刚出锅这类词。
+- size:这个产品的实际大小,≤ 60 字。写清每一件包装的大致尺寸和它们的相对大小(谁大谁小),以及拿在手里是什么感觉。
+  根据品类和包装上的规格(如「50g 罐」「248g 袋」)按常见大小估计,例如「玻璃罐高约 9cm、直径约 6cm,单手可握;外盒约 8×8×9cm,比罐子大一圈」。
+只输出 JSON:{"kind": "", "serve": "", "pairings": [{"name": "", "freq": ""}], "avoid": [""], "shoot_note": "", "scenes": [""], "size": ""}"""
 
 SHOOT_KINDS = ("drink", "snack", "cook", "mixed", "side", "food")
 
@@ -565,9 +570,20 @@ def shoot_spec(name: str, category: str = "", selling_points: str = "", audience
             pairings.append({"name": n, "freq": f})
         elif n:
             pairings.append({"name": n, "freq": "mid"})
+    bad = ["纸巾", "餐巾", "抽纸", "水渍", "杂乱", "杂物堆", "热气", "冒烟", "蒸汽", "刚出锅", "热腾腾", "没收拾"]   # 模型自己写的专属场景里带这些词的丢掉
+    if kind != "cook":
+        bad += ["灶台", "炒锅", "油烟"]   # 只有烹饪调味类的产品才会出现灶台
+    # 标成「少用」的搭配(如腐乳夹馒头)不能又写进专属场景里,不然频率控制就白做了:专属场景里出现它的关键词就丢掉
+    low_cores = {re.sub(r"^(搭配|夹|配|拌|抹|蘸|炒|加|蒸|煮|泡)+", "", x["name"]) for x in pairings if x["freq"] == "low"}
+    bad += [c for c in low_cores if len(c) >= 2]
+    scenes = []
+    for x in out.get("scenes") or []:
+        t = str(x or "").strip()[:60]
+        if len(t) >= 6 and not any(w in t for w in bad) and t not in scenes:
+            scenes.append(t)
     return {"kind": kind if kind in SHOOT_KINDS else "", "serve": serve if serve in ("hot", "cold", "room") else "",
             "pairings": pairings[:10], "avoid": [str(a).strip()[:16] for a in (out.get("avoid") or []) if str(a).strip()][:6],
-            "shoot_note": str(out.get("shoot_note") or "").strip()[:60]}
+            "shoot_note": str(out.get("shoot_note") or "").strip()[:60], "scenes": scenes[:8], "size": str(out.get("size") or "").strip()[:80]}
 
 
 # ---------- 补全赛道:笔记库沉淀的笔记没有项目,没人告诉它属于哪个赛道 ----------

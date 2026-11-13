@@ -382,6 +382,81 @@ def run(rep, env):
     db.q_exec("DELETE FROM autoruns WHERE project_id IN (?,?,?)", p_a, p_adm, p_ghost)
     db.q_exec("DELETE FROM projects WHERE id IN (?,?,?)", p_a, p_adm, p_ghost)
     db.q_exec("DELETE FROM staff WHERE username='t_by_a'")
+    # ---- 场景模板扩充 / AI 专属场景 / 产品实际大小 / 新建产品接口 / 场景下拉按产品给 ----
+    from app import api_live as al_, covers as cv3
+    bad_w = ("冒着热气", "纸巾", "杂乱", "没收拾", "随手放着", "刚做好", "水渍")
+    rep.check("场景库:34 种模板;每个类型的场景池里的键都存在、没有重复;所有模板都不含冒热气 / 纸巾 / 杂乱这类词;换背景页的备选保持精简(14 种)",
+              len(cv3.SCENES) == 34 and all(k in cv3.SCENES and len(v) == len(set(v)) for v in cv3.KIND_POOLS.values() for k in v)
+              and not [t for t in cv3.SCENES.values() if any(w_ in t for w_ in bad_w)] and len(cv3.BG_SCENES) == 14 and min(len(v) for v in cv3.KIND_POOLS.values()) >= 11)
+    keys_all = list(cv3.SCENES)
+    ok_step = True
+    for n_ in (4, 6, 7, 10, 12, 14, 15, 21):   # 场景池大小是 7、14、21 这种和旧步长 7 不互质的数时,原来同一篇里每张都是同一个场景
+        cv3.KIND_POOLS["tmpk"] = keys_all[:min(n_, len(keys_all))] if n_ <= len(keys_all) else keys_all
+        pk_ = {"name": "x", "profile": {"shoot": {"kind": "tmpk"}}}
+        ok_step = ok_step and all(len({cv3.scene("美食", d_, k, pk_) for k in range(1, 5)}) == 4 for d_ in range(0, 12))
+    cv3.KIND_POOLS.pop("tmpk", None)
+    rep.check("场景挑选:场景池大小是 7 / 14 / 21 这种和旧步长不互质的数时,同一篇里连着的几张也不会重复", ok_step)
+    own = ["窗边的小圆桌上放着一杯燕麦奶和一本书", "办公室午休时的工位,手边是笔记本和水杯"]
+    pool_ai = cv3.scene_pool("美食", {"name": "x", "profile": {"shoot": {"kind": "drink", "scenes": own}}})
+    rep.check("场景池:AI 为这个产品推荐的专属场景排在前面,后面是这个类型的模板场景,不重复", pool_ai[:2] == own and len(pool_ai) == 2 + len(cv3.KIND_POOLS["drink"]) and len(set(pool_ai)) == len(pool_ai))
+    old_chat3 = llm_.chat
+    try:
+        llm_.chat = lambda system, user, temperature=1.0: {"kind": "side", "serve": "room", "pairings": [], "avoid": [], "shoot_note": "",
+                                                           "scenes": ["餐桌上一碗白粥配一瓶腐乳,窗边自然光", "桌面有纸巾和水渍的餐桌", "短", "餐桌上一碗白粥配一瓶腐乳,窗边自然光", "办公室午休,桌上放着饭盒和一瓶腐乳"] + ["场景%d,在某处放着东西" % i for i in range(10)],
+                                                           "size": "玻璃罐高约 9cm、直径 6cm,单手可握"}
+        sp3 = llm_.shoot_spec("腐乳", "豆腐乳")
+    finally:
+        llm_.chat = old_chat3
+    rep.check("拍摄规格:专属场景整理(带纸巾 / 水渍的丢掉、太短的丢掉、重复的去重、最多 8 个),带上实际大小",
+              len(sp3["scenes"]) == 8 and "餐桌上一碗白粥配一瓶腐乳,窗边自然光" in sp3["scenes"] and not any("纸巾" in x for x in sp3["scenes"]) and sp3["scenes"].count("餐桌上一碗白粥配一瓶腐乳,窗边自然光") == 1
+              and sp3["size"].startswith("玻璃罐高约 9cm"), str(sp3))
+    mk_sc = lambda kind_: {"kind": kind_, "serve": "room", "pairings": [{"name": "夹馒头", "freq": "low"}, {"name": "配白粥", "freq": "high"}], "avoid": [], "shoot_note": "",
+                           "scenes": ["户外野餐桌,馒头、瓶子、野餐篮", "办公室茶水间,便当盒、餐巾、一瓶腐乳", "厨房灶台,面条碗、调料架、一瓶腐乳", "午餐饭桌,白米饭、竹筷、一小碟腐乳", "家庭早餐桌,白粥配腐乳、木质托盘"], "size": "x"}
+    old_chat4 = llm_.chat
+    try:
+        llm_.chat = lambda system, user, temperature=1.0: mk_sc("side")
+        sp_side = llm_.shoot_spec("腐乳", "豆腐乳")
+        llm_.chat = lambda system, user, temperature=1.0: mk_sc("cook")
+        sp_cook = llm_.shoot_spec("腐乳", "豆腐乳")
+    finally:
+        llm_.chat = old_chat4
+    rep.check("拍摄规格·专属场景:带「少用」搭配的关键词(馒头)/ 餐巾 / 非烹饪类产品的灶台 都丢掉;烹饪调味类产品保留灶台",
+              sp_side["scenes"] == ["午餐饭桌,白米饭、竹筷、一小碟腐乳", "家庭早餐桌,白粥配腐乳、木质托盘"] and "厨房灶台,面条碗、调料架、一瓶腐乳" in sp_cook["scenes"]
+              and not any("餐巾" in x or "馒头" in x for x in sp_cook["scenes"]), str((sp_side["scenes"], sp_cook["scenes"])))
+    pid_z = pdt.create("大小测试", [du(img_a)], size_note="罐高 8cm,单手可握")
+    z0 = pdt.get(pid_z)
+    db.q_exec("UPDATE products SET profile=? WHERE id=?", json.dumps({"shoot": {"kind": "drink", "size": "AI 估:罐高 10cm", "pairings": [], "avoid": []}}), pid_z)
+    z1 = pdt.get(pid_z)
+    pdt.update(pid_z, name="大小测试", keep=z1["images"], add=None, order=None)   # 不传 size_note = 不改
+    z2 = pdt.get(pid_z)
+    pdt.update(pid_z, name="大小测试", keep=z1["images"], add=None, order=None, size_note="")   # 传空 = 清掉,改用 AI 估的
+    z3 = pdt.get(pid_z)
+    rep.check("产品实际大小:用户填的优先于 AI 估的;更新时不传不改、传空清掉(改用 AI 估的);写进给大模型的产品资料",
+              z0["size_note"] == "罐高 8cm,单手可握" and pdt.size_text(z1) == "罐高 8cm,单手可握" and z2["size_note"] == "罐高 8cm,单手可握" and z3["size_note"] == ""
+              and pdt.size_text(z3) == "AI 估:罐高 10cm" and "罐高 8cm,单手可握" in pdt.block(z1) and "AI 估:罐高 10cm" in pdt.block(z3)
+              and pdt.listing()[-1]["size_note"] in ("", "罐高 8cm,单手可握"))
+    ip3 = wk_._image_prompt("", "一碗白粥配一瓶腐乳", True, "", "", "罐高 9cm")
+    rep.check("笔记内页配图的提示词也带产品实际大小", "产品的真实大小:罐高 9cm" in ip3 and "真实比例" in ip3 and "真实大小" not in wk_._image_prompt("", "x", True, "", "", ""))
+    r_new = api_user.create_product(api_user.ProductIn(name="接口新建", images=[du(img_b)], selling_points="x", size_note="高 5cm"))
+    n_new = pdt.get(r_new["id"])
+    rep.check("新建产品接口:返回产品 id,保存名称 / 图 / 实际大小;图片不合法返回 400", n_new["name"] == "接口新建" and n_new["size_note"] == "高 5cm" and len(n_new["images"]) == 1
+              and _raises2(lambda: api_user.create_product(api_user.ProductIn(name="x", images=["不是图片"]))) and _raises2(lambda: api_user.create_product(api_user.ProductIn(name=" ", images=[du(img_c)]))))
+    db.q_exec("UPDATE products SET profile=? WHERE id=?", json.dumps({"shoot": {"kind": "side", "size": "罐高约 9cm", "pairings": [{"name": "白粥", "freq": "high"}], "avoid": [], "scenes": own}}, ensure_ascii=False), pid_z)
+    sc_z = al_.scenes(pid_z)
+    rep.check("场景下拉按产品给:专属场景在前、类型名、AI 场景个数、实际大小(用户没填 = AI 估的)、搭配;不带产品是通用的;找不到产品 404",
+              sc_z["scenes"][:2] == own and sc_z["kind"] == "下饭佐餐" and sc_z["ai"] == 2 and sc_z["size"] == "罐高约 9cm" and sc_z["size_user"] is False and sc_z["pairings"] == ["白粥"] and sc_z["ready"]
+              and "scenes" in al_.scenes() and not al_.scenes()["scenes"][0] in own and _raises2(lambda: al_.scenes(99999999)))
+    vwarn_old = llm_.vision_chat
+    try:
+        llm_.vision_chat = lambda system, text, images, **k_: '{"issues": [], "first_ok": false, "first_reason": "是手持近景,看不到完整包装"}'
+        fw = pc.check("腐乳", [(img_a, "png")], None, "x", "上班族", "", 0, vision=True)
+        llm_.vision_chat = lambda system, text, images, **k_: '{"issues": [], "first_ok": true}'
+        fw2 = pc.check("腐乳", [(img_a, "png")], None, "x", "上班族", "", 0, vision=True)
+    finally:
+        llm_.vision_chat = vwarn_old
+    rep.check("素材检查:第 1 张不是白底完整包装图时给建议(tip),是的不提示", any(w["level"] == "tip" and "第 1 张最好是白底" in w["msg"] and "看不到完整包装" in w["msg"] for w in fw) and not any("第 1 张最好" in w["msg"] for w in fw2), str(fw))
+    for z_ in (pid_z, r_new["id"]):
+        pdt.delete(z_)
     off = api_user.list_runs(limit=2, offset=1)
     full = api_user.list_runs(limit=500)
     rep.check("任务页分页:offset 跳过前 N 个,总数接口和列表一致", [x["id"] for x in off] == [x["id"] for x in full[1:3]] and api_user.runs_count()["total"] == len(full))

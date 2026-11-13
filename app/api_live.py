@@ -362,11 +362,26 @@ def create_from_upload(p: UploadIn):
     return {"created": made, "skipped": skipped, "ids": ids}
 
 
+KIND_LABELS = {"drink": "冲泡饮品", "snack": "零食点心", "cook": "烹饪调味", "mixed": "冲饮兼入菜", "side": "下饭佐餐", "food": "一般食品"}
+
+
 @router.get("/scenes")
-def scenes():
+def scenes(product_id: int = 0):
+    """场景下拉的备选项。不带 product_id 是通用的(换背景页用);带了就按这个产品给:AI 为它推荐的专属场景在前,再加上它这个类型适合的模板场景
+    (产品还没有拍摄规格时,这里会让 AI 生成一次,要几秒)。"""
+    if product_id:
+        prod = products.get(product_id)
+        if not prod:
+            raise HTTPException(404, "找不到这个产品")
+        spec = products.get_spec(prod)
+        prod = products.get(product_id)
+        from . import covers
+        return {"scenes": covers.scene_pool("美食", prod), "kind": KIND_LABELS.get(covers.product_kind(prod), ""), "ai": len(spec.get("scenes") or []),
+                "size": products.size_text(prod, spec), "size_user": bool((prod.get("size_note") or "").strip()), "pairings": [x["name"] for x in spec.get("pairings") or []],
+                "ready": bool(spec)}
     """产品图生成场景图时可选的生活场景(和成品库配图用同一套场景库)。"""
     from . import covers
-    return {"scenes": list(dict.fromkeys(covers.FOOD_SCENES + covers.GENERIC_SCENES))}
+    return {"scenes": list(dict.fromkeys(covers.BG_SCENES + covers.GENERIC_SCENES))}
 
 
 class GenIn(BaseModel):
@@ -412,9 +427,12 @@ def create_from_product(p: GenIn):
     looks = covers.pick_looks(p.count, scenes, used_looks)
     pairs = covers.pick_pairings(p.count, spec.get("pairings") or [], used_pairs)
     avoid = products.avoid_text(spec)
+    size = products.size_text(prod_, spec) if prod_ else ""
     ids = []
     for k in range(p.count):
         g = dict(gen, idx=seed + k * 3, scene=looks[k][0], look=looks[k][1], auto=not gen["scene"])
+        if size:
+            g["size"] = size
         if pairs[k]:
             g["pairing"] = pairs[k]
         if avoid:
@@ -459,6 +477,8 @@ def _gen_prompt(g: dict) -> str:
         scene += f"。画面里的搭配:{g['pairing']}"   # 产品拍摄规格里的真实吃法,按频率轮换(少用的搭配很少出现)
     if g.get("avoid"):
         scene += f"。{g['avoid']}"
+    if g.get("size"):   # 产品实际大小:不然模型不知道多大,盒子和罐子的相对大小、产品和手的比例每张都不一样
+        scene += f"。产品的真实大小:{g['size']};画面里产品要和手、杯子、碗等周围的东西保持真实比例,不要画得过大或过小"
     subject = g.get("note") or "产品是画面里的主角,摆在或拿在真实生活场景中,像用户自己随手拍的分享照"
     return worker._image_prompt("", subject, True, scene)
 

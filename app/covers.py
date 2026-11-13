@@ -60,15 +60,40 @@ SCENES = {
     "bag": "刚买回家放在桌上的状态,旁边是拆开的快递盒",
     "picnic": "户外野餐垫上,自然光,有水果和面包点缀",
 }
-FOOD_SCENES = list(SCENES.values())   # 全部美食场景(Live 页的场景下拉等要列出所有场景的地方用)
+SCENES.update({
+    "congee": "早餐桌上一碗白粥配两样小菜,侧面自然光,桌面整洁",
+    "noodle": "餐桌上一碗拌好的面条,旁边放着筷子和小碟,俯拍",
+    "lunchbox": "午休时的办公桌,打开的便当盒和一杯水,旁边放着手机",
+    "dinner": "晚饭前的餐桌,几样家常菜摆好,暖色顶灯",
+    "dipping": "围坐吃饭的餐桌一角,几个小蘸料碟和筷子",
+    "prep": "备菜的厨房台面,切好的蔬菜装在小碗里,砧板干净",
+    "pantry": "橱柜里整齐摆放的调味品和罐头,柜门打开",
+    "bedside": "床头柜上亮着暖光台灯,旁边是一本书,睡前的氛围",
+    "deskcup": "办公桌上靠近电脑的位置,旁边有一个杯子和一本笔记本",
+    "blender": "厨房台面上的破壁机旁,放着水果和燕麦",
+    "yoga": "运动后的客厅地垫旁,一瓶水和毛巾叠放整齐",
+    "dorm": "宿舍书桌一角,台灯、书和水杯整齐摆放",
+    "school": "学生书桌,摊开的作业本和笔袋,台灯亮着",
+    "movie": "雨夜的客厅,沙发上的小毯子和茶几上的零食",
+    "car": "车里副驾驶前的置物台,旁边有一瓶水和一个小包",
+    "gym": "健身房更衣柜前的长凳,一个运动包和水杯",
+    "park": "公园长椅上,身旁是树荫和一个布袋,午后光线",
+    "camping": "露营折叠桌,旁边是帐篷一角和保温杯",
+    "balcony": "阳台的小圆桌,旁边有绿植和一杯茶,午后光线",
+    "windowsill": "窗台上,午后阳光,旁边有一盆绿植",
+})
+# 换背景页的备选背景只用最初的 14 种(那里是一排按钮,几十个会挤满页面);其余场景按产品类型在生成场景图时使用
+BG_SCENE_KEYS = ["table", "breakfast", "rice", "office", "desk_night", "sofa", "cafe", "coffee_corner", "window_tea", "kitchen", "stove", "hand", "bag", "picnic"]
+BG_SCENES = [SCENES[k] for k in BG_SCENE_KEYS]
+FOOD_SCENES = list(SCENES.values())   # 全部美食场景
 # 按产品类型能出现的场景(灶台、锅具只给真正需要烹饪的产品)
 KIND_POOLS = {
-    "drink": ["window_tea", "coffee_corner", "cafe", "office", "breakfast", "sofa", "hand", "desk_night"],
-    "snack": ["office", "sofa", "desk_night", "window_tea", "picnic", "hand", "bag"],
-    "cook": ["kitchen", "stove", "table", "rice", "hand", "bag", "breakfast"],
-    "mixed": ["window_tea", "coffee_corner", "kitchen", "breakfast", "office", "table", "hand"],   # 既能冲饮又能入菜(肉桂粉、姜黄粉这类):不放灶台
-    "food": ["table", "breakfast", "rice", "hand", "office", "sofa", "desk_night", "bag"],
-    "side": ["table", "rice", "breakfast", "hand", "bag", "office"],   # 下饭佐餐的小菜(腐乳、酱菜、榨菜):配饭、配粥、拌面,不放咖啡角
+    "drink": ["window_tea", "coffee_corner", "cafe", "office", "breakfast", "sofa", "hand", "desk_night", "bedside", "deskcup", "blender", "balcony", "yoga", "dorm"],
+    "snack": ["office", "sofa", "desk_night", "window_tea", "picnic", "hand", "bag", "lunchbox", "dorm", "school", "movie", "car", "gym", "park", "camping"],
+    "cook": ["kitchen", "stove", "table", "rice", "hand", "bag", "breakfast", "prep", "pantry", "dinner", "noodle", "dipping"],
+    "mixed": ["window_tea", "coffee_corner", "kitchen", "breakfast", "office", "table", "hand", "blender", "bedside", "pantry", "balcony"],   # 既能冲饮又能入菜(肉桂粉、姜黄粉这类):不放灶台
+    "food": ["table", "breakfast", "rice", "hand", "office", "sofa", "desk_night", "bag", "lunchbox", "dinner", "congee", "noodle"],
+    "side": ["table", "rice", "breakfast", "hand", "bag", "office", "congee", "noodle", "lunchbox", "dinner", "dipping"],   # 下饭佐餐的小菜(腐乳、酱菜、榨菜):配饭、配粥、拌面,不放咖啡角
 }
 # 产品资料里「可以带出产品的场景」的关键词 → 优先用哪些场景
 TAG_KEYS = [("办公|工位|提神|上班", "office"), ("早餐|佐餐", "breakfast"), ("下午茶|咖啡角|冲泡|饮用|热饮|拿铁|睡前", "window_tea"), ("咖啡角|自制咖啡", "coffee_corner"),
@@ -121,13 +146,16 @@ def scene_pool(track: str, prod: dict | None = None) -> list[str]:
     pool = KIND_POOLS[product_kind(prod)]
     labels = " ".join(((prod or {}).get("profile") or {}).get("scenes") or [])
     pref = [k for pat, k in TAG_KEYS if re.search(pat, labels) and k in pool]
-    return [SCENES[k] for k in dict.fromkeys(pref + pool)]
+    own = [x for x in (((prod or {}).get("profile") or {}).get("shoot") or {}).get("scenes") or [] if isinstance(x, str) and x.strip()]   # AI 按这个产品推荐的专属场景
+    return list(dict.fromkeys(own + [SCENES[k] for k in dict.fromkeys(pref + pool)]))
 
 
 def scene(track: str, did: int, i: int, prod: dict | None = None) -> str:
     """配图的场景方向:同一篇里每张换一个。"""
     cand = scene_pool(track, prod)
-    return cand[(did * 3 + i * 7) % len(cand)]
+    n = len(cand)
+    step = next(k for k in (7, 5, 11, 3, 13, 1) if math.gcd(k, n) == 1)   # 步长要和场景数互质,同一篇里连着的几张才不会重复(场景数是 7 或 14 时,原来固定的 7 会让每张都是同一个)
+    return cand[(did * 3 + i * step) % n]
 
 
 # 拍法:同一个场景也能拍出不一样的画面(机位 × 光线 × 画面状态)。只换场景的话,同一产品反复生成,画面会越来越像。

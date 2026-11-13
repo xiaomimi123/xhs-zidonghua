@@ -366,6 +366,11 @@ def _m012_kind(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
 
 
+def _m016_product_size(c):
+    """产品的实际大小(用户填的,优先于 AI 估的):生图时要求产品和周围的手、杯子、碗保持真实比例,不要忽大忽小。"""
+    add_column(c, "products", "size_note", "TEXT DEFAULT ''")
+
+
 def _m015_task_by(c):
     """采集任务的发起人(登录名)。有项目的任务发起人看项目;没有项目的(如达人库里员工点「获取联系方式」)原来没记,从这版起记在这里。"""
     add_column(c, "crawl_tasks", "created_by", "TEXT DEFAULT ''")
@@ -402,6 +407,7 @@ MIGRATIONS = [
     (13, "ptype", _m013_ptype),
     (14, "task_lease", _m014_task_lease),
     (15, "task_by", _m015_task_by),
+    (16, "product_size", _m016_product_size),
     # (2, "说明", _m002_xxx),
 ]
 

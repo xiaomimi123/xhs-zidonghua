@@ -1227,3 +1227,13 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 /* 任务页:发起人 */
 .fl-by{color:var(--accent-ink)}
 .lv-who{margin-bottom:12px;align-items:center}
+
+/* Live 新建产品:图片角标 / 前后移 */
+.lv-pv .fl-refno{top:3px;left:3px;width:18px;height:18px;line-height:18px;font-size:10px}
+.lv-pv .fl-mv{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;padding:2px;opacity:0;transition:opacity .12s}
+.lv-pv:hover .fl-mv,.lv-pv:focus-within .fl-mv{opacity:1}
+.lv-pv .fl-mv button{position:static;width:22px;height:22px;border-radius:6px;font-size:14px}
+.lv-pv .fl-mv button:disabled{opacity:.3;cursor:default}
+@media (hover:none){.lv-pv .fl-mv{opacity:1}}
+.lv-newp{margin-top:6px}
+.lv-pinfo{margin:8px 0 0}

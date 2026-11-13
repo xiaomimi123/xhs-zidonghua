@@ -39,13 +39,13 @@ def decode_images(data_urls: list[str]) -> list[tuple[bytes, str]]:
     return out
 
 
-def create(name: str, data_urls: list[str], price: str = "", selling_points: str = "", audience: str = "", forbid: str = "") -> int:
+def create(name: str, data_urls: list[str], price: str = "", selling_points: str = "", audience: str = "", forbid: str = "", size_note: str = "") -> int:
     name = name.strip()[:40]
     if not name:
         raise ValueError("请填写产品名称")
     imgs = decode_images(data_urls)
-    pid = q_exec("INSERT INTO products(name,price,selling_points,audience,forbid) VALUES(?,?,?,?,?)",
-                 name, price.strip()[:40], selling_points.strip()[:500], audience.strip()[:100], forbid.strip()[:200]).lastrowid
+    pid = q_exec("INSERT INTO products(name,price,selling_points,audience,forbid,size_note) VALUES(?,?,?,?,?,?)",
+                 name, price.strip()[:40], selling_points.strip()[:500], audience.strip()[:100], forbid.strip()[:200], (size_note or "").strip()[:100]).lastrowid
     names = []
     for b, ext in imgs:
         n = f"p{pid}_{secrets.token_hex(4)}.{ext}"
@@ -56,7 +56,7 @@ def create(name: str, data_urls: list[str], price: str = "", selling_points: str
 
 
 def update(pid: int, name: str, price: str = "", selling_points: str = "", audience: str = "", forbid: str = "",
-           keep: list[str] | None = None, add: list[str] | None = None, order: list[str] | None = None):
+           keep: list[str] | None = None, add: list[str] | None = None, order: list[str] | None = None, size_note: str | None = None):
     """改产品资料和图片。keep:保留的原图文件名;add:新上传的图(data URL)。至少留一张图。
     order:页面上的图片顺序,["k:文件名"] 是保留的原图,["a:0"] 是新上传的第几张;不传就是原图在前、新图在后。
     顺序很重要:生图时只取前几张当参考。换了图(或前 4 张的构成变了)就清掉上次的识别结果,下次生成会重新识别;只是调整顺序不清。"""
@@ -89,8 +89,9 @@ def update(pid: int, name: str, price: str = "", selling_points: str = "", audie
         if old not in kept:
             (DIR / old).unlink(missing_ok=True)
     changed = set(names) != set(p["images"]) or set(names[:4]) != set(p["images"][:4])
-    q_exec("UPDATE products SET name=?, price=?, selling_points=?, audience=?, forbid=?, images=?" + (", profile='{}'" if changed else "") + " WHERE id=?",
-           name, price.strip()[:40], selling_points.strip()[:500], audience.strip()[:100], forbid.strip()[:200], json.dumps(names), pid)
+    q_exec("UPDATE products SET name=?, price=?, selling_points=?, audience=?, forbid=?, images=?, size_note=?" + (", profile='{}'" if changed else "") + " WHERE id=?",
+           name, price.strip()[:40], selling_points.strip()[:500], audience.strip()[:100], forbid.strip()[:200], json.dumps(names),
+           p.get("size_note") or "" if size_note is None else (size_note or "").strip()[:100], pid)
 
 
 def get(pid: int | None) -> dict | None:
@@ -141,6 +142,11 @@ def get_spec(p: dict | None, generate: bool = True) -> dict:
 PAIR_FREQ_TEXT = {"high": "常用", "mid": "偶尔", "low": "少用,整篇最多一张"}
 
 
+def size_text(p: dict | None, spec: dict | None = None) -> str:
+    """产品的实际大小:用户填的优先,没填用 AI 按品类和规格估的。"""
+    return ((p or {}).get("size_note") or "").strip() or ((spec if spec is not None else get_spec(p, generate=False)) or {}).get("size", "")
+
+
 def avoid_text(spec: dict | None) -> str:
     """生图提示词里「不要出现」的那一句:规格里列的 + 不是热饮就不要热气。没有规格返回空串。"""
     spec = spec or {}
@@ -152,7 +158,7 @@ def avoid_text(spec: dict | None) -> str:
 
 def listing() -> list[dict]:
     return [{"id": p["id"], "name": p["name"], "category": p["category"], "price": p["price"],
-             "selling_points": p["selling_points"], "audience": p["audience"], "forbid": p["forbid"],
+             "selling_points": p["selling_points"], "audience": p["audience"], "forbid": p["forbid"], "size_note": p.get("size_note") or "",
              "images": [f"/product_images/{i}" for i in p["images"]], "created": p["created"]}
             for p in q_all("SELECT * FROM products ORDER BY id DESC")]
 
@@ -176,9 +182,11 @@ def block(p: dict | None) -> str:
     spec = get_spec(p)
     if spec:
         pairs = "、".join(f"{x['name']}({PAIR_FREQ_TEXT.get(x['freq'], '偶尔')})" for x in spec.get("pairings") or [])
-        rows += [("拍摄规格·真实的搭配和吃法(括号是出现频率)", pairs), ("拍摄规格·画面里不要出现", "、".join(spec.get("avoid") or [])),
+        rows += [("产品真实大小(画面里要和手、杯子、碗等保持这个比例)", size_text(p, spec)), ("拍摄规格·真实的搭配和吃法(括号是出现频率)", pairs), ("拍摄规格·画面里不要出现", "、".join(spec.get("avoid") or [])),
                  ("拍摄规格·冷热", {"hot": "热饮,杯口可以有一点热气,别的东西不要冒热气", "cold": "冷食,画面里不要有热气蒸汽", "room": "常温食品,画面里不要有热气蒸汽"}.get(spec.get("serve") or "")),
                  ("拍摄规格·提示", spec.get("shoot_note"))]
+    if not spec and p.get("size_note"):   # 没有拍摄规格(没配 Key 等)时,用户自己填的大小也要带上
+        rows.append(("产品真实大小(画面里要和手、杯子、碗等保持这个比例)", p["size_note"]))
     lines = [f"- {k}:{v}" for k, v in rows if v]
     forbid = f"\n- 不能出现的说法:{p['forbid']}" if p.get("forbid") else ""
     return ("\n\n【产品资料】以下是作者提供的真实产品资料,可以直接写进笔记;不要超出这些资料编造功效、成分、销量、价格。\n"

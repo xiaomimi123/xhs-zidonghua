@@ -2,7 +2,8 @@
 // 服务端只管队列和文件;视频由装了 ComfyUI 的电脑生成(tools/livephoto/video_worker.py),
 // 实况的动画渲染和 .pvt 打包在 MacBook 上跑(tools/livephoto/mac_worker.py)。
 const LV = { tab: "", lib: [], runs: [], motions: [], scenes: [], prods: [], bgItems: [], bgDefault: [], upMode: "up", jf: "all", who: "", showHow: null,
-  bg: { files: [], items: null, extra: "", scenes: new Set(), custom: "" }, up: { files: [] }, gen: { files: [], product: 0, scene: "", note: "", count: 1 },
+  bg: { files: [], items: null, extra: "", scenes: new Set(), custom: "" }, up: { files: [] }, gen: { files: [], product: 0, scene: "", note: "", count: 1, pname: "", psp: "", psize: "" },
+  pinfo: {},   // 产品 id → 场景下拉等信息({scenes, kind, ai, size, …}),选了产品才去取
   pid: 0, todo: false, page: 1, sel: new Map(), jobs: [], st: null, timer: 0,
   opts: Object.assign({ mode: "motion", motion: "sway", seconds: 5, zoom: 1.08, focus_y: 0.35, fit: "crop" }, (() => { try { return JSON.parse(localStorage.lvOpts || "{}"); } catch { return {}; } })()) };
 try { LV.upMode = localStorage.lvUpMode || "up"; } catch { }
@@ -143,7 +144,7 @@ function lvBar() {
 }
 
 // ---------- 上传:三种做法 ----------
-const lvThumbs = (files, key) => files.length ? files.map((f, i) => `<span class="lv-pv"><img src="${esc(f.url)}" alt=""><button data-rm="${key}:${i}" aria-label="移除">×</button></span>`).join("") : "";
+const lvThumbs = (files, key) => files.length ? files.map((f, i) => `<span class="lv-pv">${key === "gen" && i < 3 ? `<i class="fl-refno" title="生图时会用这张当参考">${i + 1}</i>` : ""}<img src="${esc(f.url)}" alt=""><button data-rm="${key}:${i}" aria-label="移除">×</button>${key === "gen" ? `<span class="fl-mv"><button type="button" data-lmv="${key}:${i}:-1" aria-label="往前移一位" ${i === 0 ? "disabled" : ""}>‹</button><button type="button" data-lmv="${key}:${i}:1" aria-label="往后移一位" ${i === files.length - 1 ? "disabled" : ""}>›</button></span>` : ""}</span>`).join("") : "";
 async function lvPick(files, bucket, max) {
   const room = max - bucket.length; if (room <= 0) return toast(`最多 ${max} 张`, 1);
   for (const f of [...files].slice(0, room)) {
@@ -166,7 +167,7 @@ function lvPlan() {
     imgs = B.files.length; const sc = Math.max(1, Math.min(4, B.scenes.size + (B.custom.trim() ? 1 : 0)));
     tasks = imgs * sc * takes; gen = imgs * sc; if (!imgs) need = "先上传实拍图"; else if (!B.items.size && !B.extra.trim()) need = "选一下背景是什么";
   } else {
-    tasks = G.count; gen = G.count; if (!(G.product || G.files.length)) need = "先选产品或上传产品图";
+    tasks = G.count; gen = G.count; if (G.product === -1) need = "先保存产品"; else if (!G.product) need = "先选一个产品,或新建产品";
   }
   const sec = tasks * (motion ? LV_VIDEO_SEC : 12) + Math.ceil(gen / 2) * LV_GEN_SEC;
   return { tasks, gen, mins: Math.max(1, Math.round(sec / 60)), need, takes, motion };
@@ -179,6 +180,33 @@ function lvUpSync() {
     <div><dt>预计耗时</dt><dd>约 ${p.mins} 分钟</dd></div></dl>`;
   btn.disabled = !!p.need; btn.textContent = p.need ? "提交" : `提交 ${p.tasks} 个任务`;
 }
+// 选了产品才去取:这个产品能用的场景(AI 为它推荐的专属场景在前)、类型、实际大小。第一次要让 AI 生成拍摄规格,要几秒
+async function lvProdInfo(id) {
+  if (LV.pinfo[id] && !LV.pinfo[id].error) return;
+  LV.pinfo[id] = { loading: true };
+  try { LV.pinfo[id] = await api(`/api/live/scenes?product_id=${id}`); } catch { LV.pinfo[id] = { error: true }; }
+  if (state.tab === "live" && LV.upMode === "gen" && LV.gen.product === id) lvUpload();
+}
+const lvProdBlock = (prod, G) => {
+  const info = LV.pinfo[prod.id] || { loading: true };
+  const txt = info.loading ? "正在为这个产品准备场景(第一次约需几秒)…" : info.error ? "没能自动识别这个产品,先用通用场景模板。"
+    : `类型:${esc(info.kind || "未识别")}${info.ai ? ` · AI 另外为它推荐了 ${info.ai} 个专属场景` : ""}${info.size ? ` · 产品大小:${esc(info.size)}${info.size_user ? "" : "(AI 估计,不准请到「新建任务 → 编辑产品」里改)"}` : ""}`;
+  return `<div class="lv-pvs">${prod.images.slice(0, 3).map((u, i) => `<span class="lv-pv"><i class="fl-refno">${i + 1}</i><img src="${esc(u)}" alt=""></span>`).join("")}</div>
+    <p class="sub lv-pinfo" aria-live="polite">${txt}</p>`;
+};
+const lvNewProd = (G, drop) => `<div class="lv-newp">
+  <label class="f">产品名称 <span class="sub">必填,建议「品牌 + 品类」,如 国圣米酱豆腐乳</span></label><input id="lvpname" maxlength="40" value="${esc(G.pname)}" placeholder="产品名称">
+  <div class="pc-tip"><b>怎么传才好用</b><ul>
+    <li><b>第 1 张用白底的包装正面图</b>(产品完整露出),它决定包装文字和产品形状</li>
+    <li>有盒子又有罐子时,再传一张<b>两者并排的合影</b>,让模型知道它们谁大谁小</li>
+    <li>一次只传一个产品,最多 6 张;生图时用前 3 张(带数字角标的),可以点 ‹ › 调整顺序</li></ul></div>
+  ${drop("lvdrop2", "点击选择产品图,或拖到这里(1~6 张)")}<div class="lv-pvs" id="lvpv2">${lvThumbs(G.files, "gen")}</div>
+  <details class="fl-more"><summary>补充资料(可选,填了出图更准)</summary>
+    <label class="f">卖点 <span class="sub">3–5 条短句,只写这个产品</span></label><input id="lvpsp" maxlength="300" value="${esc(G.psp)}" placeholder="如 米酱发酵 · 绵密不齁 · 配饭配粥">
+    <label class="f">产品实际大小 <span class="sub">不填就由 AI 按品类和规格估</span></label><input id="lvpsize" maxlength="100" value="${esc(G.psize)}" placeholder="如 罐高 9cm、直径 6cm,单手可握;盒子比罐子大一圈"></details>
+  <button type="button" class="btn" id="lvpsave" style="margin-top:12px">保存产品并继续</button>
+  <p class="sub" style="margin:8px 0 0">保存后产品会出现在产品列表里,下次直接选,不用再传。</p></div>`;
+
 function lvUpload() {
   const sec = $("#lvup"), G = LV.gen, B = LV.bg, m = LV.upMode, prod = LV.prods.find(p => p.id === G.product);
   const drop = (id, text) => `<label class="lv-drop" id="${id}" tabindex="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 16V5m0 0l-4 4m4-4l4 4M5 19h14"/></svg><span>${text}</span><input type="file" accept="image/*" multiple hidden></label>`;
@@ -195,13 +223,13 @@ function lvUpload() {
       <input id="lvscx" maxlength="80" placeholder="或自己写一个背景,例如:阳台木桌,午后阳光" value="${esc(B.custom)}">`,
     gen: `<h3>产品图 → 随手拍场景图</h3><p class="sub">用你的产品图当参考,让生图模型画一张手机随手拍风格的生活场景图,产品外观和包装文字尽量保持不变。<b>整张图都是 AI 重画的</b>;想保留实拍的原图,请用「换背景」。</p>
       <label class="f">产品</label>
-      <select id="lvprod"><option value="0">上传新的产品图</option>${LV.prods.filter(p => p.images.length).map(p => `<option value="${p.id}" ${G.product === p.id ? "selected" : ""}>${esc(p.name)}(${p.images.length} 张图)</option>`).join("")}</select>
-      ${prod ? `<div class="lv-pvs">${prod.images.slice(0, 3).map(u => `<span class="lv-pv"><img src="${esc(u)}" alt=""></span>`).join("")}</div>`
-        : `${drop("lvdrop2", "点击选择产品图,或拖到这里(1~3 张,包装正面最重要)")}<div class="lv-pvs" id="lvpv2">${lvThumbs(G.files, "gen")}</div>`}
-      <div class="lv-two"><div><label class="f">场景</label><select id="lvscene"><option value="">自动(每张换场景和拍法,避开这个产品用过的)</option>${LV.scenes.map(s => `<option value="${esc(s)}" ${G.scene === s ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
+      <select id="lvprod"><option value="0" ${!G.product ? "selected" : ""}>请选择产品…</option>${LV.prods.filter(p => p.images.length).map(p => `<option value="${p.id}" ${G.product === p.id ? "selected" : ""}>${esc(p.name)}(${p.images.length} 张图)</option>`).join("")}<option value="-1" ${G.product === -1 ? "selected" : ""}>＋ 新建产品(上传产品图)</option></select>
+      ${G.product === -1 ? lvNewProd(G, drop) : prod ? lvProdBlock(prod, G) + `
+      <div class="lv-two"><div><label class="f">场景 <span class="sub">按这个产品的类型挑,不会出现不合适的</span></label><select id="lvscene"><option value="">自动(每张换场景和拍法,避开这个产品用过的)</option>${(() => { const info = LV.pinfo[prod.id] || {}, sc = info.scenes || [], ai = info.ai || 0, opt = x => `<option value="${esc(x)}" ${G.scene === x ? "selected" : ""}>${esc(x)}</option>`;
+          return (ai ? `<optgroup label="AI 为这个产品推荐的场景">${sc.slice(0, ai).map(opt).join("")}</optgroup>` : "") + `<optgroup label="${ai ? "适合这类产品的场景" : "场景模板"}">${sc.slice(ai).map(opt).join("")}</optgroup>`; })()}</select></div>
         <div><label class="f">生成几张</label><select id="lvcount">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<option value="${n}" ${G.count === n ? "selected" : ""}>${n} 张</option>`).join("")}</select></div></div>
-      <p class="sub" style="margin:8px 0 0">指定了场景也一样:每张会换机位、光线和画面状态(有没有手入镜、旁边的杂物),同一产品反复生成不会越来越像。</p>
-      <label class="f">画面补充 <span class="sub">可选</span></label><input id="lvnote" maxlength="100" placeholder="例如:一只手拿着罐子、旁边有一杯刚冲好的拿铁" value="${esc(G.note)}">`,
+      <p class="sub" style="margin:8px 0 0">指定了场景也一样:每张会换机位、光线和画面状态(有没有手入镜等),同一产品反复生成不会越来越像。</p>
+      <label class="f">画面补充 <span class="sub">可选</span></label><input id="lvnote" maxlength="100" placeholder="例如:一只手拿着罐子、旁边有一杯刚冲好的拿铁" value="${esc(G.note)}">` : ""}`,
   }[m];
   sec.innerHTML = `<details class="lv-tipd"><summary>选图小提示</summary><p>${LV_TIP}</p></details>
     <div class="lv-modes" role="tablist" aria-label="上传方式">${LV_MODES.map(([k, t, d]) => `<button role="tab" class="lv-mode ${k === m ? "on" : ""}" data-m="${k}" aria-selected="${k === m}"><b>${t}</b><span>${d}</span></button>`).join("")}</div>
@@ -219,10 +247,14 @@ function lvUpload() {
     el.ondrop = async e => { e.preventDefault(); el.classList.remove("over"); await lvPick(e.dataTransfer.files, bucket, max); lvUpload(); };
     el.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.querySelector("input").click(); } };
   };
-  wireDrop("lvdrop1", LV.up.files, 9); wireDrop("lvdrop2", G.files, 3); wireDrop("lvdrop3", B.files, 3);
+  wireDrop("lvdrop1", LV.up.files, 9); wireDrop("lvdrop2", G.files, 6); wireDrop("lvdrop3", B.files, 3);
+  if (m === "gen" && G.product > 0 && !LV.pinfo[G.product]) lvProdInfo(G.product);
   sec.onclick = e => {
     const md = e.target.closest("[data-m]");
     if (md) { LV.upMode = md.dataset.m; try { localStorage.lvUpMode = LV.upMode; } catch { } return lvUpload(); }
+    const mv = e.target.closest("[data-lmv]");   // 新产品的图:前后移一位(前 3 张会用来生图)
+    if (mv) { const [, i, d] = mv.dataset.lmv.split(":"), to = +i + +d; if (to >= 0 && to < G.files.length) G.files.splice(to, 0, G.files.splice(+i, 1)[0]); return lvUpload(); }
+    if (e.target.closest("#lvpsave")) return lvSaveProduct();
     const r = e.target.closest("[data-rm]");
     if (r) { const [k, i] = r.dataset.rm.split(":"); ({ up: LV.up.files, gen: G.files, bg: B.files })[k].splice(+i, 1); return lvUpload(); }
     const sj = e.target.closest("[data-bgi]");
@@ -236,16 +268,37 @@ function lvUpload() {
   };
   sec.onchange = e => {
     if (e.target.dataset.o) return lvCtlChange(e);
-    if (e.target.id === "lvprod") { G.product = +e.target.value; return lvUpload(); }
+    if (e.target.id === "lvprod") { G.product = +e.target.value; G.scene = ""; return lvUpload(); }
     if (e.target.id === "lvscene") G.scene = e.target.value;
     if (e.target.id === "lvcount") { G.count = +e.target.value; lvUpSync(); }
   };
   sec.oninput = e => {
     if (e.target.id === "lvnote") G.note = e.target.value;
+    if (e.target.id === "lvpname") G.pname = e.target.value;
+    if (e.target.id === "lvpsp") G.psp = e.target.value;
+    if (e.target.id === "lvpsize") G.psize = e.target.value;
     if (e.target.id === "lvsubx") { B.extra = e.target.value; lvUpSync(); }
     if (e.target.id === "lvscx") { B.custom = e.target.value; lvUpSync(); }
   };
   $("#lvsubmit").onclick = lvSubmit;
+}
+// 新建产品:先检查素材(传错图、混进别的产品、文案像指令…),再保存;保存后后台生成拍摄规格,场景下拉按这个产品给
+async function lvSaveProduct() {
+  const G = LV.gen, name = G.pname.trim(), btn = $("#lvpsave");
+  if (!name) return toast("先填产品名称", 1);
+  if (!G.files.length) return toast("先上传产品图", 1);
+  btn.disabled = true; btn.textContent = "检查素材中…";
+  const imgs = G.files.map(f => f.url);
+  const ok = await checkProduct({ name, images: imgs, selling_points: G.psp, audience: "", forbid: "" });
+  if (!ok) { btn.disabled = false; btn.textContent = "保存产品并继续"; return; }
+  btn.textContent = "保存中…";
+  try {
+    const r = await api("/api/products", "POST", { name, images: imgs, selling_points: G.psp, size_note: G.psize });
+    LV.prods = await api("/api/products").catch(() => LV.prods);
+    Object.assign(G, { product: r.id, files: [], pname: "", psp: "", psize: "", scene: "" });
+    toast("产品已保存,正在为它准备场景");
+    lvUpload();
+  } catch (e) { toast(e.message, 1); btn.disabled = false; btn.textContent = "保存产品并继续"; }
 }
 async function lvSubmit() {
   const btn = $("#lvsubmit"), m = LV.upMode, G = LV.gen, B = LV.bg, takes = LV.opts.mode === "motion" ? +LV.opts.takes || 1 : 1; btn.disabled = true;
@@ -260,8 +313,7 @@ async function lvSubmit() {
       r = await api("/api/live/jobs/bgswap", "POST", { images: B.files.map(f => f.url), names: B.files.map(f => f.name), scenes, background, opts: LV.opts, takes });
       B.files = [];
     } else {
-      const body = { count: G.count, scene: G.scene, note: G.note, opts: LV.opts };
-      if (G.product) body.product_id = G.product; else body.images = G.files.map(f => f.url);
+      const body = { count: G.count, scene: G.scene, note: G.note, opts: LV.opts, product_id: G.product };
       r = await api("/api/live/jobs/generate", "POST", body);
       G.files = [];
     }

@@ -252,13 +252,13 @@ def run(rep, env):
             g2 = user.post("/api/live/jobs/generate", json={"images": [url(png)], "count": 10}).json()["ids"]
             gj2 = [db.q_one("SELECT gen FROM live_jobs WHERE id=?", i)["gen"] for i in g2]
             pairs = [(x["scene"], x["look"]) for x in gj + gj2]
-            rep.check("再生成 10 张:12 张(场景, 拍法)没有重复;两批合起来把场景池里的场景都用到(下一批会先挑用得少的场景,所以单看新一批会少一两种)", len(set(pairs)) == 12 and len({x["scene"] for x in gj + gj2}) == 8, str((len(set(pairs)), len({x["scene"] for x in gj2}), sorted(x["scene"][:6] for x in gj2))))
+            rep.check("再生成 10 张:12 张(场景, 拍法)没有重复;两批合起来把场景池里的场景都用到(下一批会先挑用得少的场景,所以单看新一批会少一两种)", len(set(pairs)) == 12 and len({x["scene"] for x in gj + gj2}) == len(__import__("app.covers", fromlist=["x"]).scene_pool("美食", None)), str((len(set(pairs)), len({x["scene"] for x in gj2}), sorted(x["scene"][:6] for x in gj2))))
             fx = user.post("/api/live/jobs/generate", json={"images": [url(png)], "scene": "厨房台面,旁边有调料瓶和砧板,食材随手放着,明亮的自然光", "count": 6}).json()["ids"]
             gfx = [db.q_one("SELECT gen FROM live_jobs WHERE id=?", i)["gen"] for i in fx]
             rep.check("指定了场景也不重样:6 张同一场景,拍法互不相同", len({x["look"] for x in gfx}) == 6 and all(not x["auto"] for x in gfx) and len({x["scene"] for x in gfx}) == 1)
             from app import products as pdm
             spec_t = {"kind": "side", "serve": "room", "pairings": [{"name": "白粥", "freq": "high"}, {"name": "拌面", "freq": "mid"}, {"name": "夹馒头", "freq": "low"}],
-                      "avoid": ["别的品牌豆腐乳", "姜蒜"], "shoot_note": ""}
+                      "avoid": ["别的品牌豆腐乳", "姜蒜"], "shoot_note": "", "size": "AI 估:罐高约 9cm、单手可握"}
             pid_s = pdm.create("拍摄规格测试", [url(png)])
             db.q_exec("UPDATE products SET profile=? WHERE id=?", json.dumps({"shoot": spec_t}, ensure_ascii=False), pid_s)
             ps = user.post("/api/live/jobs/generate", json={"product_id": pid_s, "count": 8}).json()["ids"]
@@ -267,6 +267,13 @@ def run(rep, env):
             rep.check("产品有拍摄规格:每张带搭配和不要出现;场景池按规格类型(下饭佐餐)挑,不出现咖啡角;提示词里写明搭配和禁止项",
                       all(x.get("pairing") in ("白粥", "拌面", "夹馒头") and "别的品牌豆腐乳" in x.get("avoid", "") for x in gps) and not any("咖啡角" in x["scene"] for x in gps)
                       and f"画面里的搭配:{gps[0]['pairing']}" in pr0 and "不要出现:别的品牌豆腐乳、姜蒜、热气和蒸汽" in pr0, str(gps[0]))
+            rep.check("Live 场景图:任务里带产品实际大小(AI 估的),提示词要求和手、杯子、碗保持真实比例;用户填了大小以用户的为准",
+                      all(x.get("size") == "AI 估:罐高约 9cm、单手可握" for x in gps) and "产品的真实大小:AI 估:罐高约 9cm、单手可握" in pr0 and "真实比例" in pr0)
+            db.q_exec("UPDATE products SET size_note='用户填:罐高 8cm' WHERE id=?", pid_s)
+            ps2 = user.post("/api/live/jobs/generate", json={"product_id": pid_s, "count": 1}).json()["ids"]
+            g_u = db.q_one("SELECT gen FROM live_jobs WHERE id=?", ps2[0])["gen"]
+            rep.check("Live 场景图:用户填了产品大小,用用户的", g_u.get("size") == "用户填:罐高 8cm", str(g_u))
+            db.q_exec(f"DELETE FROM live_jobs WHERE id IN ({','.join(str(i) for i in ps2)})")
             db.q_exec(f"DELETE FROM live_jobs WHERE id IN ({','.join(str(i) for i in ps)})")
             db.q_exec("DELETE FROM products WHERE id=?", pid_s)
             db.q_exec(f"DELETE FROM live_jobs WHERE id IN ({','.join(str(i) for i in g2 + fx)})")   # 清掉自己造的,别抢后面检查要用的生成顺序

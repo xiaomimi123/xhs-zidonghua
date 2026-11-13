@@ -194,6 +194,7 @@ class ProductIn(BaseModel):
     selling_points: str = ""
     audience: str = ""
     forbid: str = ""
+    size_note: str = ""    # 产品实际大小(可选,不填由 AI 按品类和规格估)
 
 
 class AutoIn(BaseModel):
@@ -226,7 +227,7 @@ def auto_start(a: AutoIn):
         else:
             try:
                 ppid = products.create(a.product.name, a.product.images, a.product.price, a.product.selling_points,
-                                       a.product.audience, a.product.forbid)
+                                       a.product.audience, a.product.forbid, a.product.size_note)
             except ValueError as e:
                 raise HTTPException(400, str(e))
         pref, style = _account_pref(acc, a.angles)
@@ -263,9 +264,21 @@ class ProductEdit(BaseModel):
     selling_points: str = ""
     audience: str = ""
     forbid: str = ""
+    size_note: str | None = None   # 产品实际大小;不传 = 不改
     keep: list[str] = []   # 保留的原图文件名
     add: list[str] = []    # 新上传的图(data URL)
     order: list[str] = []  # 页面上的图片顺序:"k:文件名" 原图、"a:序号" 新上传的第几张(可以交错);不传就原图在前
+
+
+@router.post("/api/products")
+def create_product(p: ProductIn):
+    """新建产品(名称 + 产品图 + 可选资料),返回产品 id。Live 页「产品图生成场景」上传新图时用:先有产品资料,场景、搭配、不要出现的东西、实际大小才有依据。"""
+    try:
+        pid = products.create(p.name, p.images, p.price, p.selling_points, p.audience, p.forbid, p.size_note)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    threading.Thread(target=lambda: products.get_spec(products.get(pid)), daemon=True, name="product-spec").start()   # 后台先把拍摄规格生成好,选场景时就不用等
+    return {"id": pid}
 
 
 class ProductCheckIn(BaseModel):
@@ -292,7 +305,7 @@ def check_product(c: ProductCheckIn):
 @router.put("/api/products/{pid}")
 def edit_product(pid: int, e: ProductEdit):
     try:
-        products.update(pid, e.name, e.price, e.selling_points, e.audience, e.forbid, e.keep, e.add, e.order)
+        products.update(pid, e.name, e.price, e.selling_points, e.audience, e.forbid, e.keep, e.add, e.order, e.size_note)
     except ValueError as ex:
         raise HTTPException(400, str(ex))
     return {"ok": True}

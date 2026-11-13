@@ -141,7 +141,8 @@ def _image_warnings(seq: list, exclude_pid: int) -> list[dict]:
 
 CHECK_SYSTEM = """你是产品素材审核员。用户为一个产品上传了几张图,请逐张判断每张图是否属于这个产品(包括它的包装、内容物、手持、使用或食用场景)。
 指出明显不属于的:是别的品牌或别的品类的产品、与产品无关的图(截图、海报文案、二维码、表情包、大段文字)。同一张图里同时出现本产品和别的产品,也要指出。
-没有把握的不要硬说是问题。只输出 JSON:{"issues": [{"index": 图片序号(从 1 开始,按给你的顺序), "reason": "一句话,不超过 30 字"}]};没有问题就给空数组。"""
+没有把握的不要硬说是问题。另外判断第 1 张图是不是「干净背景(最好是白底)、产品完整露出的包装正面图」:是写 true;不是写 false 并在 first_reason 里一句话说明(如「是手持近景,看不到完整包装」)。
+只输出 JSON:{"issues": [{"index": 图片序号(从 1 开始,按给你的顺序), "reason": "一句话,不超过 30 字"}], "first_ok": true, "first_reason": ""};没有问题 issues 就给空数组。"""
 
 
 def _vision_warnings(name: str, paths: list[Path], category: str = "") -> list[dict]:
@@ -165,6 +166,8 @@ def _vision_warnings(name: str, paths: list[Path], category: str = "") -> list[d
             continue
         if 1 <= idx <= len(paths):
             out.append({"level": "warn", "where": "图片", "msg": f"第 {idx} 张图可能不是这个产品:{str(it.get('reason') or '').strip()[:40] or '和产品对不上'}"})
+    if data.get("first_ok") is False:   # 生图时第 1 张最重要:包装文字和产品大小比例都靠它
+        out.append({"level": "tip", "where": "图片", "msg": f"第 1 张最好是白底、产品完整的包装正面图(它决定生成图里的包装文字和产品形状):{str(data.get('first_reason') or '').strip()[:40] or '当前这张不太符合'}。可以拖动换一张到最前面"})
     return out
 
 
