@@ -80,9 +80,9 @@ def run(rep, env):
         rep.check("状态:还没有 Mac 连接时显示离线", not st["online"] and st["pending"] == 2, str(st))
         c = col.get("/api/live/worker/claim?worker=mac-test").json()["job"]
         rep.check("领任务:先进先出,返回参数和原图地址", c and c["id"] == jid and c["opts"]["zoom"] == 1.08 and c["source"].endswith(f"/{jid}/source"), str(c))
-        rep.check("领任务:带上发起人(Mac 端按它分文件夹),没有记录的归管理员", c.get("by") == (db.q_one("SELECT created_by FROM live_jobs WHERE id=?", jid)["created_by"] or "管理员"), str(c))
+        rep.check("领任务:带上发起人和创建日期(Mac 端按「发起人/日期」分文件夹和相册),没有发起人时留空由 Mac 端归「未署名」", c.get("by") == (db.q_one("SELECT created_by FROM live_jobs WHERE id=?", jid)["created_by"] or "") and len(c.get("created", "")) == 10, str(c))
         ow = col.get("/api/live/worker/owners")
-        rep.check("发起人对照表:需要 Token,按任务号给出发起人", anon.get("/api/live/worker/owners").status_code == 401 and ow.status_code == 200 and ow.json()[str(jid)] == c["by"], str(ow.text[:120]))
+        rep.check("发起人对照表:需要 Token,按任务号给出发起人", anon.get("/api/live/worker/owners").status_code == 401 and ow.status_code == 200 and ow.json()[str(jid)] == (c["by"] or "管理员"), str(ow.text[:120]))   # 整理旧文件的脚本用:没有记录的归管理员
         import sys
         from pathlib import Path as _P
         sys.path.insert(0, str(_P(__file__).resolve().parents[2] / "tools" / "livephoto"))
