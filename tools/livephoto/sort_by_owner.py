@@ -12,6 +12,7 @@ import argparse
 import json
 import re
 import shutil
+import time
 import urllib.request
 from pathlib import Path
 
@@ -29,6 +30,7 @@ def main():
     ap.add_argument("--token", required=True)
     ap.add_argument("--root", type=lambda s: Path(s).expanduser(), default=Path("~/LivePhotos").expanduser())
     ap.add_argument("--dry-run", action="store_true", help="只打印要做什么,不真的移动")
+    ap.add_argument("--by-date", action="store_true", help="在发起人下再按日期分层(取文件修改时间;新流程 worker 已自动按任务日期分,这主要整理旧包)")
     a = ap.parse_args()
 
     table = owners(a.server, a.token)
@@ -39,11 +41,12 @@ def main():
         if not who:
             print(f"跳过 {pvt.name}(工作台上查不到发起人)")
             continue
-        dst = a.root / who / pvt.name
+        day = time.strftime("%Y-%m-%d", time.localtime(pvt.stat().st_mtime)) if a.by_date else ""
+        dst = a.root / who / (day or "") / pvt.name if day else a.root / who / pvt.name
         if dst.exists():
-            print(f"跳过 {pvt.name}(目标 {who}/ 里已有)")
+            print(f"跳过 {pvt.name}(目标 {who}/{day or ''}/ 里已有)")
             continue
-        print(f"{pvt.name} → {who}/")
+        print(f"{pvt.name} → {who}/{day or ''}/")
         if not a.dry_run:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(pvt), str(dst))
