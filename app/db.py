@@ -366,6 +366,11 @@ def _m012_kind(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
 
 
+def _m015_task_by(c):
+    """采集任务的发起人(登录名)。有项目的任务发起人看项目;没有项目的(如达人库里员工点「获取联系方式」)原来没记,从这版起记在这里。"""
+    add_column(c, "crawl_tasks", "created_by", "TEXT DEFAULT ''")
+
+
 def _m014_task_lease(c):
     """采集任务的租约:claim_start = 第一次领走的时间(心跳续租有上限,从这里算起);tries = 超时没回传被退回的次数(到上限就标失败)。
     已经在 running 的任务把 claim_start 补成现在,免得老的卡住任务从此被无限续租。"""
@@ -396,6 +401,7 @@ MIGRATIONS = [
     (12, "kind", _m012_kind),
     (13, "ptype", _m013_ptype),
     (14, "task_lease", _m014_task_lease),
+    (15, "task_by", _m015_task_by),
     # (2, "说明", _m002_xxx),
 ]
 

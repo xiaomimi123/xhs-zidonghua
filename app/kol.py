@@ -265,7 +265,9 @@ def request_contact(cid: int) -> dict:
     if contact_used_today() >= cap:
         raise ValueError(f"今天已经获取了 {cap} 位,明天再来(上限可以在管理端调整)")
     params = json.dumps({"creator_id": r["creator_id"], "name": r["name"], "fans": r["fans"], "shop": ""}, ensure_ascii=False)
-    q_exec("INSERT INTO crawl_tasks(project_id,type,query,lim,purpose,label,params) VALUES(NULL,'qianfan','buyer_contact',0,'qianfan',?,?)", r["name"][:30], params)
+    from .auth import CURRENT
+    q_exec("INSERT INTO crawl_tasks(project_id,type,query,lim,purpose,label,params,created_by) VALUES(NULL,'qianfan','buyer_contact',0,'qianfan',?,?,?)",
+           r["name"][:30], params, (CURRENT.get() or {}).get("username", ""))
     q_exec("UPDATE kol_creators SET contact_status='queued', contact_error='' WHERE id=?", cid)
     return {"queued": True}
 

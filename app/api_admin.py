@@ -204,16 +204,32 @@ def set_user_pw(d: PwIn):
 
 
 # ---------- 采集监控 ----------
+# 采集任务的发起人:有项目的看项目的创建人;没有项目的看任务上记的(达人库获取联系方式);沉淀任务是管理员开的;千帆定时同步是系统
+_TASK_WHO = ("CASE WHEN t.project_id IS NOT NULL THEN COALESCE(NULLIF(s.name,''), NULLIF(p.created_by,''), '管理员') "
+             "WHEN COALESCE(t.purpose,'project')='library' THEN '管理员' "
+             "WHEN COALESCE(t.created_by,'')!='' THEN COALESCE(NULLIF(s2.name,''), t.created_by) "
+             "WHEN t.purpose='qianfan' THEN '系统' ELSE '管理员' END")
+_TASK_JOIN = "FROM crawl_tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN staff s ON s.username=p.created_by LEFT JOIN staff s2 ON s2.username=t.created_by"
+
+
+@router.get("/tasks_who")
+def tasks_who():
+    """各发起人的采集任务数(筛选按钮用)。"""
+    return {r["w"]: r["n"] for r in q_all(f"SELECT {_TASK_WHO} AS w, COUNT(*) n {_TASK_JOIN} GROUP BY w ORDER BY n DESC")}
+
+
 @router.get("/tasks")
-def all_tasks(status: str = "", q: str = "", purpose: str = "", limit: int = 200):
+def all_tasks(status: str = "", q: str = "", purpose: str = "", limit: int = 200, by: str = ""):
     where, args = ["1=1"], []
+    if by:
+        where.append(f"{_TASK_WHO}=?"); args.append(by)
     if status:
         where.append("t.status=?"); args.append(status)
     if purpose in ("project", "library"):
         where.append("COALESCE(t.purpose,'project')=?"); args.append(purpose)
     if q:
         where.append("(t.query LIKE ? OR p.track LIKE ? OR t.label LIKE ?)"); args += [f"%{q}%"] * 3
-    return q_all(f"""SELECT t.*, COALESCE(p.track, t.label) AS track, p.keywords FROM crawl_tasks t LEFT JOIN projects p ON p.id=t.project_id
+    return q_all(f"""SELECT t.*, COALESCE(p.track, t.label) AS track, p.keywords, {_TASK_WHO} AS by {_TASK_JOIN}
         WHERE {' AND '.join(where)} ORDER BY t.id DESC LIMIT ?""", *args, min(limit, 1000))
 
 

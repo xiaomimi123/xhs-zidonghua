@@ -341,6 +341,47 @@ def run(rep, env):
     rep.check("素材检查:提示里的「第几张」按页面顺序算(新图拖到了第 1 位)", any("第 1 张图和产品「排序测试」里的图完全一样" in w["msg"] for w in ws_o), str([w["msg"] for w in ws_o]))
     pdt.delete(pid_o)
     pdt.delete(pid_p)
+    # ---- 任务发起人:任务列表 / 详情 / 管理端采集监控都能看到是谁下发的,并能按人筛选 ----
+    from app import api_admin as aa_, auth as auth_, kol as kol_
+    db.q_exec("INSERT INTO staff(username, name, password_hash) VALUES('t_by_a', '发起人甲', 'x')")
+    mkp = lambda cb: db.q_exec("INSERT INTO projects(track, keywords, created_by) VALUES('美食', '[]', ?)", cb).lastrowid
+    p_a, p_adm, p_ghost = mkp("t_by_a"), mkp(""), mkp("已删员工")
+    for pid_ in (p_a, p_adm, p_ghost):
+        db.q_exec("INSERT INTO autoruns(project_id, status, target) VALUES(?, 'done', 1)", pid_)
+    allr = {r["id"]: r for r in api_user.list_runs(limit=500)}
+    rep.check("任务发起人:员工显示姓名、管理员发起的显示「管理员」、员工被删了显示登录名", allr[p_a]["by"] == "发起人甲" and allr[p_adm]["by"] == "管理员" and allr[p_ghost]["by"] == "已删员工")
+    only = api_user.list_runs(limit=500, by="发起人甲")
+    cnt = api_user.runs_count(by="发起人甲")
+    cnt_all = api_user.runs_count()
+    rep.check("任务发起人:按人筛选只返回他的任务;总数跟着筛选走,各发起人的任务数不受筛选影响",
+              [r["id"] for r in only] == [p_a] and cnt["total"] == 1 and cnt["who"]["发起人甲"] == 1 and cnt["who"]["管理员"] >= 1
+              and cnt_all["total"] == sum(cnt_all["who"].values()) and cnt_all["who"] == cnt["who"], str((cnt, cnt_all)))
+    mkt = lambda **k: db.q_exec("INSERT INTO crawl_tasks(type, query, status, project_id, purpose, created_by) VALUES(?, ?, 'pending', ?, ?, ?)",
+                                k.get("type", "keyword"), k["q"], k.get("pid"), k.get("purpose", "project"), k.get("cb", "")).lastrowid
+    t_proj, t_lib, t_qc, t_qs, t_adm = (mkt(q="项目词", pid=p_a), mkt(q="沉淀词", purpose="library"), mkt(type="qianfan", q="buyer_contact", purpose="qianfan", cb="t_by_a"),
+                                        mkt(type="qianfan", q="notes", purpose="qianfan"), mkt(q="管理员项目词", pid=p_adm))
+    tk = {r["id"]: r["by"] for r in aa_.all_tasks(limit=1000)}
+    rep.check("采集监控发起人:项目任务看项目创建人;沉淀任务 = 管理员;达人库获取联系方式看记下的人;千帆定时同步 = 系统",
+              tk[t_proj] == "发起人甲" and tk[t_lib] == "管理员" and tk[t_qc] == "发起人甲" and tk[t_qs] == "系统" and tk[t_adm] == "管理员", str(tk))
+    by_a = [r["id"] for r in aa_.all_tasks(by="发起人甲", limit=1000)]
+    who_t = aa_.tasks_who()
+    rep.check("采集监控发起人:按人筛选;各发起人的任务数(筛选按钮用)", set(by_a) == {t_proj, t_qc} and who_t["发起人甲"] == 2 and "系统" in who_t and "管理员" in who_t, str(who_t))
+    db.q_exec("INSERT OR REPLACE INTO kol_creators(creator_id, name, fans) VALUES('t_by_cid', '联系方式测试', 1000)")
+    old_en = db.get_settings().get("kol_contact_enabled")
+    db.save_settings({"kol_contact_enabled": "1"})
+    tok = auth_.CURRENT.set({"username": "t_by_a", "id": 999, "name": "发起人甲"})
+    try:
+        kol_.request_contact(db.q_one("SELECT id FROM kol_creators WHERE creator_id='t_by_cid'")["id"])
+    finally:
+        auth_.CURRENT.reset(tok)
+        db.save_settings({"kol_contact_enabled": old_en or "0"})
+    rc = db.q_one("SELECT created_by FROM crawl_tasks WHERE query='buyer_contact' AND label='联系方式测试' ORDER BY id DESC")
+    rep.check("达人库获取联系方式:任务上记下是谁点的", rc and rc["created_by"] == "t_by_a", str(rc))
+    db.q_exec("DELETE FROM crawl_tasks WHERE label='联系方式测试' OR id IN (?,?,?,?,?)", t_proj, t_lib, t_qc, t_qs, t_adm)
+    db.q_exec("DELETE FROM kol_creators WHERE creator_id='t_by_cid'")
+    db.q_exec("DELETE FROM autoruns WHERE project_id IN (?,?,?)", p_a, p_adm, p_ghost)
+    db.q_exec("DELETE FROM projects WHERE id IN (?,?,?)", p_a, p_adm, p_ghost)
+    db.q_exec("DELETE FROM staff WHERE username='t_by_a'")
     off = api_user.list_runs(limit=2, offset=1)
     full = api_user.list_runs(limit=500)
     rep.check("任务页分页:offset 跳过前 N 个,总数接口和列表一致", [x["id"] for x in off] == [x["id"] for x in full[1:3]] and api_user.runs_count()["total"] == len(full))

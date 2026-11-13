@@ -321,7 +321,21 @@ def product_image(name: str, w: int = 0):
 STEP_NAMES = {"profiling": "识别产品", "collecting": "采集", "tagging": "分类", "analyzing": "拆解", "writing": "写稿配图", "retrying": "质检"}
 
 
-def _run_info(p: dict, pre: tuple | None = None) -> dict:
+def _staff_names() -> dict[str, str]:
+    return {r["username"]: r["name"] for r in q_all("SELECT username, name FROM staff")}
+
+
+def _who(created_by: str, names: dict[str, str]) -> str:
+    """发起人显示名:员工用姓名(没填姓名用登录名);没有记录的是管理员发起的。"""
+    cb = (created_by or "").strip()
+    return (names.get(cb) or cb) if cb else "管理员"
+
+
+# 任务发起人的 SQL 写法(p = projects,s = 用 p.created_by 关联的 staff)
+_WHO_SQL = "COALESCE(NULLIF(s.name,''), NULLIF(p.created_by,''), '管理员')"
+
+
+def _run_info(p: dict, pre: tuple | None = None, names: dict | None = None) -> dict:
     """一个一键生成任务的概况:名称、阶段条、进度数字、封面图。pre = (进度, 产品, 封面稿子的图片列表):批量查好了就传进来。"""
     if pre:
         pr, prod, imgs = pre
@@ -344,7 +358,8 @@ def _run_info(p: dict, pre: tuple | None = None) -> dict:
             "target": pr.get("target", 0), "status": status, "msg": pr.get("msg", ""), "active": pr.get("active", False),
             "steps": [STEP_NAMES[s] for s in steps], "step": idx, "tasks": pr.get("tasks", [0, 0]), "notes": pr.get("notes", 0),
             "playbooks": pr.get("playbooks", [0, 0]), "drafts": pr.get("drafts", {}), "cover": cover,
-            "library": pr.get("library", 0), "refs": pr.get("refs", 0), "reused": pr.get("reused", 0)}
+            "library": pr.get("library", 0), "refs": pr.get("refs", 0), "reused": pr.get("reused", 0),
+            "by": _who(p.get("created_by"), names if names is not None else _staff_names())}
 
 
 def _runs_info(ps: list[dict]) -> list[dict]:
@@ -357,22 +372,30 @@ def _runs_info(ps: list[dict]) -> list[dict]:
     covers = {r["project_id"]: r["images"] for r in autorun._in_chunks(
         "SELECT project_id, images FROM (SELECT project_id, images, ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY auto_ok DESC, id) AS rn "
         "FROM drafts WHERE project_id IN ({}) AND images!='[]') WHERE rn=1", pids)}
-    return [_run_info(p, (prs.get(p["id"]), prods.get(p.get("product_id")), covers.get(p["id"]))) for p in ps]
+    names = _staff_names()
+    return [_run_info(p, (prs.get(p["id"]), prods.get(p.get("product_id")), covers.get(p["id"])), names) for p in ps]
 
 
 @router.get("/api/runs")
-def list_runs(limit: int = 100, offset: int = 0):
-    """最近的任务,从 offset 起取 limit 个(默认 100,最多 500)。任务页按页取,不一次取全部。"""
+def list_runs(limit: int = 100, offset: int = 0, by: str = ""):
+    """最近的任务,从 offset 起取 limit 个(默认 100,最多 500)。任务页按页取,不一次取全部。by = 只看某个发起人的(管理员能看到所有人的任务)。"""
     limit = min(max(int(limit or 100), 1), 500)
     offset = max(int(offset or 0), 0)
     w, a = owner_sql()
-    return _runs_info(q_all("SELECT p.* FROM projects p JOIN autoruns a ON a.project_id=p.id WHERE 1=1" + w + " ORDER BY a.id DESC LIMIT ? OFFSET ?", *a, limit, offset))
+    if by:
+        w += f" AND {_WHO_SQL}=?"; a = [*a, by]
+    return _runs_info(q_all("SELECT p.* FROM projects p JOIN autoruns a ON a.project_id=p.id LEFT JOIN staff s ON s.username=p.created_by WHERE 1=1" + w
+                            + " ORDER BY a.id DESC LIMIT ? OFFSET ?", *a, limit, offset))
 
 
 @router.get("/api/runs/count")
-def runs_count():
+def runs_count(by: str = ""):
+    """任务总数(by 不空时只算这个发起人的)和各发起人的任务数(不受 by 影响,筛选按钮要一直在)。"""
     w, a = owner_sql()
-    return {"total": q_one("SELECT COUNT(*) c FROM autoruns x JOIN projects p ON p.id=x.project_id WHERE 1=1" + w, *a)["c"]}
+    base = "FROM autoruns x JOIN projects p ON p.id=x.project_id LEFT JOIN staff s ON s.username=p.created_by WHERE 1=1" + w
+    who = {r["w"]: r["n"] for r in q_all(f"SELECT {_WHO_SQL} AS w, COUNT(*) n {base} GROUP BY w ORDER BY n DESC", *a)}
+    total = q_one(f"SELECT COUNT(*) c {base}" + (f" AND {_WHO_SQL}=?" if by else ""), *a, *([by] if by else []))["c"]
+    return {"total": total, "who": who}
 
 
 @router.post("/api/runs/{pid}/rerun")

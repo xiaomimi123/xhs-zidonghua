@@ -104,15 +104,18 @@ async function vTasks() {
       <div class="lib-msg" id="lmsg" role="status" hidden></div></div>
     <div class="lib-foot"><span class="sub">已经在队列里或最近 7 天采过的词会自动跳过。</span><button class="btn ghost sm danger" id="lclr">清空排队中的沉淀任务</button></div>
   </section>
-  <div class="tbar"><div class="seg" id="seg"></div><div class="seg" id="seg2"></div><input class="grow" id="tq" placeholder="搜索关键词 / 赛道" value="${esc(state.tq)}"></div>
-  <section class="card flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>来源</th><th>类型</th><th>搜索内容</th><th>状态</th><th class="num">笔记</th><th>采集端</th><th>时间</th><th></th></tr></thead><tbody id="tb"></tbody></table></div></section>`;
+  <div class="tbar"><div class="seg" id="seg"></div><div class="seg" id="seg2"></div><div class="seg" id="seg3" role="group" aria-label="按发起人筛选"></div><input class="grow" id="tq" placeholder="搜索关键词 / 赛道" value="${esc(state.tq)}"></div>
+  <section class="card flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>来源</th><th>发起人</th><th>类型</th><th>搜索内容</th><th>状态</th><th class="num">笔记</th><th>采集端</th><th>时间</th><th></th></tr></thead><tbody id="tb"></tbody></table></div></section>`;
   let drawSeq = 0;
   const draw = async () => {
     const my = ++drawSeq;  // 每 3 秒的自动刷新可能在删除之前就发出、删除之后才回来:只认最后发起的那一次,旧结果丢掉,免得把已删的任务又画回来
-    const [o, ts, ls] = await Promise.all([api("/api/admin/overview"), api(`/api/admin/tasks?status=${state.tf}&q=${encodeURIComponent(state.tq)}&purpose=${state.tp || ""}`), api("/api/admin/library_stats")]);
+    const [o, ts, ls, who] = await Promise.all([api("/api/admin/overview"), api(`/api/admin/tasks?status=${state.tf}&q=${encodeURIComponent(state.tq)}&purpose=${state.tp || ""}&by=${encodeURIComponent(state.tw || "")}`), api("/api/admin/library_stats"), api("/api/admin/tasks_who")]);
     if (my !== drawSeq) return;
     if (document.activeElement !== $("#lon")) $("#lon").checked = ls.enabled;
     $("#lstat").textContent = `沉淀任务:排队 ${ls.pending} · 进行中 ${ls.running} · 已完成 ${ls.done}${ls.failed ? ` · 失败 ${ls.failed}` : ""};累计为笔记库新增 ${ls.new_total} 篇(近 7 天 ${ls.new_7d} 篇)${ls.enabled ? "" : " · 已暂停,采集端不会领取"}`;
+    const names = Object.keys(who || {});
+    if (state.tw && !names.includes(state.tw)) state.tw = "";
+    $("#seg3").innerHTML = names.length > 1 ? [["", "全部发起人"], ...names.map(n => [n, n])].map(([k, n]) => `<button class="${(state.tw || "") === k ? "on" : ""}" data-w="${esc(k)}">${esc(n)}${k ? `<em>${who[k]}</em>` : ""}</button>`).join("") : "";
     $("#seg2").innerHTML = [["", "全部来源"], ["project", "用户任务"], ["library", "沉淀任务"]].map(([k, n]) => `<button class="${(state.tp || "") === k ? "on" : ""}" data-p="${k}">${n}</button>`).join("");
     const ws = o.collector.workers;
     $("#cols").innerHTML = ws.length ? `<table class="tbl"><thead><tr><th>名称</th><th>IP</th><th>状态</th><th>最近心跳</th><th class="num">累计领取任务</th><th>首次连接</th><th title="采集端是否在用 POST /api/notes/known 跳过已有笔记">跳过已有笔记</th></tr></thead><tbody>${ws.map(w => `<tr><td><b>${esc(w.worker)}</b></td><td class="mono">${esc(w.ip)}</td>
@@ -122,13 +125,13 @@ async function vTasks() {
     const cnt = o.tasks, all = Object.values(cnt).reduce((a, b) => a + b, 0);
     $("#seg").innerHTML = [["", "全部", all], ["pending", "等待", cnt.pending], ["running", "采集中", cnt.running], ["done", "完成", cnt.done], ["failed", "失败", cnt.failed]]
       .map(([k, n, c]) => `<button class="${state.tf === k ? "on" : ""}" data-f="${k}">${n}<em>${c || 0}</em></button>`).join("");
-    $("#tb").innerHTML = ts.map(t => `<tr><td class="sub">${t.id}</td><td class="nowrap">${t.purpose === "library" ? `<span class="tier normal">沉淀</span> ${esc(t.track || "")}` : `${esc(t.track || "-")}<div class="sub">项目 #${t.project_id}</div>`}</td>
-      <td class="nowrap">${{ title: "标题", author: "博主" }[t.type] || "关键词"}</td><td><b>${esc(t.query)}</b></td>
+    $("#tb").innerHTML = ts.map(t => `<tr><td class="sub">${t.id}</td><td class="nowrap">${t.purpose === "library" ? `<span class="tier normal">沉淀</span> ${esc(t.track || "")}` : `${esc(t.track || "-")}<div class="sub">${t.project_id ? "项目 #" + t.project_id : t.purpose === "qianfan" ? "千帆同步" : ""}</div>`}</td>
+      <td class="nowrap">${esc(t.by || "-")}</td><td class="nowrap">${{ title: "标题", author: "博主" }[t.type] || "关键词"}</td><td><b>${esc(t.query)}</b></td>
       <td>${st(t.status)}${t.error ? `<div class="err" title="${esc(t.error)}">${esc(t.error)}</div>` : ""}</td>
       <td class="num">${t.purpose === "library" ? `新增 ${t.new_count} / 共 ${t.note_count}` : `${t.note_count} / ${t.lim}`}</td><td class="sub">${esc(t.worker || "-")}</td>
       <td class="sub nowrap">${esc(lt(t.finished_at || t.claimed_at || t.created))}</td>
       <td class="nowrap"><button class="btn ghost sm" data-retry="${t.id}">${t.status === "pending" ? "" : "重新下发"}</button><button class="btn ghost sm danger" data-del="${t.id}">${state.delT === t.id ? "再点确认删除" : "删除"}</button></td></tr>`).join("")
-      || `<tr><td colspan="9" class="sub" style="text-align:center;padding:40px">没有任务</td></tr>`;
+      || `<tr><td colspan="10" class="sub" style="text-align:center;padding:40px">没有任务</td></tr>`;
     $$("#tb [data-retry]").forEach(b => { if (!b.textContent) b.remove(); });
   };
   const tracks = await api("/api/admin/tracks");
@@ -193,6 +196,7 @@ async function vTasks() {
   $("#main").onclick = async e => {
     const f = e.target.closest("[data-f]"); if (f) { state.tf = f.dataset.f; return draw(); }
     const pp = e.target.closest("[data-p]"); if (pp) { state.tp = pp.dataset.p; return draw(); }
+    const pw = e.target.closest("[data-w]"); if (pw) { state.tw = pw.dataset.w; return draw(); }
     const t = e.target;
     try {
       if (t.dataset.retry) { await api(`/api/admin/tasks/${t.dataset.retry}/retry`, "POST"); return draw(); }

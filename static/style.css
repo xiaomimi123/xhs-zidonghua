@@ -1223,3 +1223,7 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 .fl-up .fl-mv button:disabled{opacity:.3;cursor:default}
 .fl-up img:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 @media (hover:none){.fl-mv{opacity:1}}
+
+/* 任务页:发起人 */
+.fl-by{color:var(--accent-ink)}
+.lv-who{margin-bottom:12px;align-items:center}

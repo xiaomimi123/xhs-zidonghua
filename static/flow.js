@@ -16,7 +16,7 @@ const runPill = r => {
 const segCls = (r, i) => i < r.step ? "done" : i === r.step ? (r.active ? "cur" : ["error", "canceled"].includes(r.status) ? "bad" : "") : "";
 const runCard = r => `<article class="fl-run s-${runState(r)}" data-run="${r.id}" tabindex="0">
   <div class="fl-rh">${r.cover ? `<img src="${esc(thumb(r.cover, 240))}" alt="" loading="lazy" decoding="async">` : `<span class="fl-ph">${r.kind === "product" ? "产品" : "赛道"}</span>`}
-    <div class="fl-rt"><b>${esc(r.name)}</b><span class="sub">${r.target} 篇 · ${when(r.created)}</span></div>${runPill(r)}</div>
+    <div class="fl-rt"><b>${esc(r.name)}</b><span class="sub">${r.target} 篇 · ${when(r.created)}${FL.multiBy && r.by ? ` · <span class="fl-by">发起:${esc(r.by)}</span>` : ""}</span></div>${runPill(r)}</div>
   ${r.status === "done" ? "" : `<div class="fl-track">${r.steps.map((s, i) => `<div class="${segCls(r, i)}"><i></i><span>${s}</span></div>`).join("")}</div>`}
   <div class="fl-rf">${r.status === "done" ? `<span class="ok">合格 ${r.drafts.passed}</span>${r.drafts.failed ? `<span class="warn">需检查 ${r.drafts.failed}</span>` : ""}` : `<span class="sub fl-msg">${esc(r.msg)}</span>`}
     ${r.active ? "" : `<button class="btn gray sm" data-rerun="${r.id}" title="用同样的设置再跑一次">重新运行</button><button class="btn ghost sm danger" data-rdel="${r.id}" data-n="${r.drafts.total ?? r.drafts.finished ?? 0}" title="删除这个任务">${FL.delRun === r.id ? `再点一次确认${(r.drafts.total ?? r.drafts.finished) ? `(含 ${r.drafts.total ?? r.drafts.finished} 篇成品)` : ""}` : "删除"}</button>`}
@@ -280,21 +280,26 @@ async function rerunRun(btn) {
 const openRun = id => { state.runId = id; localStorage.runId = id; go("run"); };
 const RUN_SIZE = 24;   // 任务页每页个数
 async function fRuns() {
-  const draw = (rs, total) => {
-    const pages = Math.max(1, Math.ceil(total / RUN_SIZE));
+  const draw = (rs, total, who = FL.runsWho || {}) => {
+    FL.runsWho = who;
+    const pages = Math.max(1, Math.ceil(total / RUN_SIZE)), names = Object.keys(who);
+    FL.multiBy = names.length > 1;
+    const bar = FL.multiBy ? `<div class="fl-chips lv-who" role="group" aria-label="按发起人筛选"><span class="sub">发起人</span>${[["", "全部"], ...names.map(n => [n, n])].map(([k, l]) => `<button class="chip ${(FL.runsBy || "") === k ? "on" : ""}" data-rby="${esc(k)}">${esc(l)}${k ? ` ${who[k]}` : ""}</button>`).join("")}</div>` : "";
     const grp = (title, cls, list) => list.length ? `<div class="fl-gh ${cls}"><b>${title}</b><span>${list.length}</span></div><div class="fl-runs">${list.map(runCard).join("")}</div>` : "";
     const act = rs.filter(r => r.active), bad = rs.filter(r => !r.active && r.status === "error"), rest = rs.filter(r => !r.active && r.status !== "error");
-    $("#main").innerHTML = rs.length ? `${grp("进行中", "run", act)}${grp("出错,需要处理", "bad", bad)}${grp(act.length || bad.length ? "已完成" : "全部任务", "ok", rest)}${pager(FL.runsPage, total, RUN_SIZE)}`
-      : `<div class="empty"><b>还没有任务</b>选赛道或上传产品,填好篇数就能开始<br><button class="btn" data-go="new">新建任务</button></div>`;
+    $("#main").innerHTML = bar + (rs.length ? `${grp("进行中", "run", act)}${grp("出错,需要处理", "bad", bad)}${grp(act.length || bad.length ? "已完成" : "全部任务", "ok", rest)}${pager(FL.runsPage, total, RUN_SIZE)}`
+      : `<div class="empty"><b>${FL.runsBy ? "这个人还没有任务" : "还没有任务"}</b>${FL.runsBy ? "换个发起人看看" : `选赛道或上传产品,填好篇数就能开始<br><button class="btn" data-go="new">新建任务</button>`}</div>`);
     FL.sig = JSON.stringify(rs); FL.runsPages = pages;
   };
   const load = async () => {
-    const { total } = await api("/api/runs/count");
+    const { total, who } = await api(`/api/runs/count?by=${encodeURIComponent(FL.runsBy || "")}`);
+    if (FL.runsBy && !(FL.runsBy in (who || {}))) { FL.runsBy = ""; return load(); }   // 这个人已经没有任务了,回到「全部」
     FL.runsPage = Math.min(Math.max(1, FL.runsPage || 1), Math.max(1, Math.ceil(total / RUN_SIZE)));   // 任务被删后页数变少,落到最后一页
-    return [await api(`/api/runs?limit=${RUN_SIZE}&offset=${(FL.runsPage - 1) * RUN_SIZE}`), total];
+    return [await api(`/api/runs?limit=${RUN_SIZE}&offset=${(FL.runsPage - 1) * RUN_SIZE}&by=${encodeURIComponent(FL.runsBy || "")}`), total, who];
   };
-  let [rs, total] = await load(); draw(rs, total);
+  let [rs, total, who0] = await load(); draw(rs, total, who0);
   $("#main").onclick = e => {
+    const rb = e.target.closest("[data-rby]"); if (rb) { FL.runsBy = rb.dataset.rby; FL.runsPage = 1; return fRuns(); }
     const g = e.target.closest("[data-pg]"); if (g) { if (g.disabled) return; FL.runsPage = +g.dataset.pg; return fRuns().then(() => window.scrollTo({ top: 0, behavior: "smooth" })); }
     const rd = e.target.closest("[data-rdel]");   // 删除任务:点两次(不用浏览器自带的确认框),5 秒内不再点就还原
     if (rd) {
@@ -305,7 +310,7 @@ async function fRuns() {
     }
     const rr = e.target.closest("[data-rerun]"); if (rr) return rerunRun(rr); const r = e.target.closest("[data-run]"); if (r) openRun(+r.dataset.run);
   };
-  if (rs.some(r => r.active)) loop(async () => { const [n, t] = await load(); if (JSON.stringify(n) !== FL.sig) draw(n, t); return n.some(r => r.active); }, 4000);
+  if (rs.some(r => r.active)) loop(async () => { const [n, t, w_] = await load(); if (JSON.stringify(n) !== FL.sig) draw(n, t, w_); return n.some(r => r.active); }, 4000);
 }
 function stepNote(r, s) {
   return { "识别产品": r.category ? `识别为「${esc(r.category)}」` : "", "采集": `${r.library ? `笔记库复用 ${r.library} 篇` + (r.tasks[1] ? " · " : " · 跳过采集") : ""}${r.tasks[1] ? `${r.tasks[0]}/${r.tasks[1]} 个关键词` : ""} · 共 ${r.notes} 篇<br><span class="sub">${esc(r.keywords.join("、"))}</span>`,
@@ -317,12 +322,14 @@ async function fRun() {
   let r;
   try { r = await api(`/api/runs/${state.runId}`); } catch { return go("runs"); }
   const ds = r.drafts.total ? await api(`/api/library?pid=${r.id}&brief=1`) : [];
+  if (FL.multiBy === undefined) FL.multiBy = Object.keys((await api("/api/runs/count").catch(() => ({}))).who || {}).length > 1;   // 直接打开详情页时,先看看有没有多个发起人
+  const multiBy = FL.multiBy;
   $("#pt").textContent = r.name;
   if (FL.runPageId !== r.id) { FL.runPageId = r.id; FL.runPage = 1; }   // 换了任务从第 1 页看起
   const runPage = Math.min(Math.max(1, FL.runPage || 1), Math.max(1, Math.ceil(ds.length / LIB_SIZE)));
   $("#main").innerHTML = `<button class="btn ghost sm fl-back" data-go="runs">‹ 全部任务</button>
   <section class="card fl-detail">
-    <div class="fl-rh"><div class="fl-rt"><b>${esc(r.name)}</b><span class="sub">${r.kind === "product" ? "产品" : "赛道"} · ${esc(r.track)} · ${r.target} 篇 · ${when(r.created)}</span></div>${runPill(r)}</div>
+    <div class="fl-rh"><div class="fl-rt"><b>${esc(r.name)}</b><span class="sub">${r.kind === "product" ? "产品" : "赛道"} · ${esc(r.track)} · ${r.target} 篇 · ${when(r.created)}${multiBy && r.by ? ` · 发起:${esc(r.by)}` : ""}</span></div>${runPill(r)}</div>
     ${r.status === "error" ? `<div class="banner err">${esc(r.msg)}</div>` : r.active ? `<p class="sub fl-msg">${esc(r.msg)}</p>` : ""}
     <ol class="fl-tl">${r.steps.map((s, i) => `<li class="${segCls(r, i) || "todo"}"><span class="dot"></span><b>${s}</b><span class="fl-sn">${i <= r.step ? stepNote(r, s) : ""}</span></li>`).join("")}</ol>
     <div class="fl-acts">${r.active ? `<span class="sub">可以离开这个页面,做完会出现在「成品库」</span><button class="btn ghost sm danger" id="fcancel">取消任务</button>` : ""}

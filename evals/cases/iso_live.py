@@ -252,7 +252,7 @@ def run(rep, env):
             g2 = user.post("/api/live/jobs/generate", json={"images": [url(png)], "count": 10}).json()["ids"]
             gj2 = [db.q_one("SELECT gen FROM live_jobs WHERE id=?", i)["gen"] for i in g2]
             pairs = [(x["scene"], x["look"]) for x in gj + gj2]
-            rep.check("再生成 10 张:12 张(场景, 拍法)没有重复;同一批 10 张场景至少换了 7 种(场景池只有 7~8 种)", len(set(pairs)) == 12 and len({x["scene"] for x in gj2}) >= 7, str((len(set(pairs)), len({x["scene"] for x in gj2}), sorted(x["scene"][:6] for x in gj2))))
+            rep.check("再生成 10 张:12 张(场景, 拍法)没有重复;两批合起来把场景池里的场景都用到(下一批会先挑用得少的场景,所以单看新一批会少一两种)", len(set(pairs)) == 12 and len({x["scene"] for x in gj + gj2}) == 8, str((len(set(pairs)), len({x["scene"] for x in gj2}), sorted(x["scene"][:6] for x in gj2))))
             fx = user.post("/api/live/jobs/generate", json={"images": [url(png)], "scene": "厨房台面,旁边有调料瓶和砧板,食材随手放着,明亮的自然光", "count": 6}).json()["ids"]
             gfx = [db.q_one("SELECT gen FROM live_jobs WHERE id=?", i)["gen"] for i in fx]
             rep.check("指定了场景也不重样:6 张同一场景,拍法互不相同", len({x["look"] for x in gfx}) == 6 and all(not x["auto"] for x in gfx) and len({x["scene"] for x in gfx}) == 1)
