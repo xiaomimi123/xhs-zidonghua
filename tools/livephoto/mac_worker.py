@@ -113,14 +113,24 @@ def import_to_photos(pvt: Path, album: str = "", day: str = ""):
     这是照片 App 的固有行为),所以导入前记下当时的前台 App,导入后立刻把焦点还回去,把干扰压到最低。
     album 有值时,把刚导入的项归入「相册」(按任务发起人分类,没有就放「未署名」);
     day 有值时(YYYY-MM-DD),相册名变成「发起人 · 日期」,每天一批一目了然。"""
-    name = f"{album or '未署名'} · {day or time.strftime('%Y-%m-%d')}" if day or album else ""
+    name = album or ("未署名 · " + time.strftime("%Y-%m-%d"))   # 相册名:调用方给什么就用什么;只给"人"时补当天日期
     try:
         front = subprocess.run(["osascript", "-e",
                                 'tell application "System Events" to get name of first application process whose frontmost is true'],
                                capture_output=True, text=True, timeout=30).stdout.strip()
-        subprocess.run(["osascript", "-e",
-                        f'tell application "Photos" to import POSIX file "{pvt.resolve()}"'],
-                       check=True, capture_output=True, timeout=120)
+        # 照片 App 处理一个包可能超过 2 分钟(队列密集 + iCloud 同步抢资源时更慢),限时要放宽;超时就重试一次
+        for attempt in (1, 2):
+            try:
+                subprocess.run(["osascript", "-e",
+                                f'tell application "Photos" to import POSIX file "{pvt.resolve()}"'],
+                               check=True, capture_output=True, timeout=600)
+                break
+            except subprocess.TimeoutExpired:
+                if attempt == 1:
+                    print("   导入超时,重试一次…")
+                    time.sleep(10)
+                else:
+                    raise
         time.sleep(2)
         if front and front != "Photos":   # 把焦点还给导入前的 App
             subprocess.run(["osascript", "-e",
