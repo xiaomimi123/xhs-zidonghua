@@ -8,7 +8,7 @@ import time
 from itertools import combinations
 from concurrent.futures import ThreadPoolExecutor
 from . import thumbs
-from . import ptype, llm, imagegen, compliance, stats, review, mirror, lengthcap, products, cards, covers
+from . import ptype, llm, imagegen, compliance, stats, review, mirror, lengthcap, products, cards, covers, titlelab
 from .db import conn, row_to_dict, get_settings
 
 _lock = threading.Lock()
@@ -145,6 +145,8 @@ def _run_text(did):
         if prod and prod.get("forbid"):
             banned += f"\n- 作者禁用:{prod['forbid']}"
         rule = ("\n\n" + ptype.RULES[pb["kind"]]) if pb.get("kind") in ptype.RULES else ""   # 按帖子类型写
+        trule = titlelab.rule_for(did, get_settings().get("title_hint") == "1", int(float(get_settings().get("loop_min_days") or 3)))   # 标题写法提示(对照组 / 关闭 / 没有明显规律时为空)
+        rule += trule
         out = llm.write_note(project, pb["data"], refs, d["angle"], d["extra"] + pblock + rule, kb, banned)
         out = _match_ptype(project, pb, refs, d, out, pblock + rule, kb, banned)
         rt = _ref_texts(refs)
@@ -152,7 +154,7 @@ def _run_text(did):
         if bad:  # 把不相关的词写进了同一篇:带着反馈重写一次
             hint = (f"上一版把「{bad[0][0]}」和「{bad[0][1]}」写在了同一篇里,参考笔记里没有这种搭配,现实中也不合常理。"
                     "这篇只写角度里点明的那一个主题,另一个不要出现,重新写。")
-            out = llm.write_note(project, pb["data"], refs, d["angle"], f"{d['extra']} {hint}{pblock}".strip(), kb, banned)
+            out = llm.write_note(project, pb["data"], refs, d["angle"], f"{d['extra']} {hint}{pblock}{trule}".strip(), kb, banned)
         combo = forced_pairs(project["keywords"], f"{out.get('title', '')}{out.get('content', '')}", rt)
     except Exception as e:
         _exec("UPDATE drafts SET status='error', error=? WHERE id=?", f"写文案失败:{e}", did)
@@ -164,6 +166,7 @@ def _run_text(did):
     out, variant = _maybe_compress(out, pb["stats"], d["angle"], get_settings().get("auto_compress") == "1")
     out, checks = _check_and_fix(out, auto=get_settings().get("auto_fix") == "1")
     checks["combo"] = [list(p) for p in combo]  # 重写后仍然强行组合的,留给页面提示作者
+    checks["title_hint"] = 1 if trule else 0    # 这篇写作时有没有带标题写法提示(0 = 对照组 / 关闭 / 没有明显规律),复盘里对比有没有用
     auto_review = get_settings().get("auto_review") == "1"
     _exec("UPDATE drafts SET title=?,alt_titles=?,content=?,tags=?,image_prompts=?,cover_card=?,checks=?,variant=?,status=?,error='',review='{}' WHERE id=?",
           out["title"], json.dumps(out["alt_titles"], ensure_ascii=False), out["content"],
@@ -183,7 +186,7 @@ def _match_ptype(project, pb, refs, d, out, tail, kb, banned) -> dict:
     got = ""
     try:
         got = ptype.check(out.get("title", ""), out.get("content", ""))
-        if got and got != kind:
+        if got and got != kind and not (kind == "产品软文" and got == "商业硬文"):   # 商家口吻的软文(不装买家)会被判成商业硬文,这是对的,不再逼它改回买家口吻
             hint = f"上一版被判成了「{got}」,但这篇要写成「{kind}」。严格按上面的帖子类型要求重写,类型特征要写足。"
             out = llm.write_note(project, pb["data"], refs, d["angle"], f"{d['extra']} {hint}{tail}".strip(), kb, banned)
             got = ptype.check(out.get("title", ""), out.get("content", "")) or got

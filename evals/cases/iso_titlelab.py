@@ -58,3 +58,67 @@ def run(rep, env):
     ev_fake = {"cfg": {"min_days": 3}, "title_cal": cal, "rows": [{"id": i, "tier": "good", "lift": 1 + i * 0.1, "days": 5, "title": "标题甲｜直接吃" if i % 2 else "标题甲怎么吃?", "feat": {"score": 80, "dims": {}}} for i in range(10)]}
     tc = loop.learning(ev_fake)["title_check"]
     rep.check("标题写法分的验证:有 8 篇以上有结论的稿子才给相关系数;不够只给篇数", tc["n"] == 10 and tc["corr"] is not None and loop.learning({**ev_fake, "rows": ev_fake["rows"][:5]})["title_check"]["corr"] is None, str(tc))
+
+    # ---- 标题写法提示:只用「明显」且样本够的写法;对照组;写稿时真的带上、并记下 ----
+    import json
+    import time
+    from app import db, llm, worker
+    big = {"n_used": 500, "rows": [
+        {"key": "emoji", "name": "e", "verdict": "sig_pos", "n_with": 100, "n_without": 400, "auc": 0.6, "z": 3.0},
+        {"key": "question", "name": "q", "verdict": "sig_neg", "n_with": 80, "n_without": 420, "auc": 0.4, "z": -3.0},
+        {"key": "sep", "name": "s", "verdict": "lean_pos", "n_with": 90, "n_without": 410, "auc": 0.56, "z": 2.2},        # 只是倾向:不进提示
+        {"key": "digit", "name": "d", "verdict": "sig_pos", "n_with": 10, "n_without": 490, "auc": 0.7, "z": 3.1},         # 一边只有 10 篇:不进提示
+        {"key": "me", "name": "m", "verdict": "none", "n_with": 90, "n_without": 410, "auc": 0.5, "z": 0.1}]}
+    h = tl.prompt_hint(big)
+    rep.check("提示词:只用「明显」且两边样本都 ≥ 30 的写法(倾向的、样本少的、没差别的都不进);有利的说「可以」,不利的说「不要」;提醒句式要有变化",
+              "emoji" in h and tl.ADVICE["emoji"][0] in h and tl.ADVICE["question"][1] in h and tl.ADVICE["sep"][0] not in h and tl.ADVICE["digit"][0] not in h
+              and "句式要有变化" in h and "500 篇" in h and tl.prompt_hint(None) == "" and tl.prompt_hint({"n_used": 5, "rows": []}) == "", h)
+    rep.check("对照组:稿子编号能被 5 整除的不给提示(每 5 篇 1 篇),其余给", [tl.is_control(i) for i in (1, 2, 3, 4, 5, 10)] == [False, False, False, False, True, True])
+    old_cache = dict(tl._hint_cache)
+    tl._hint_cache.update(at=time.time(), txt="HINT")
+    try:
+        rep.check("按稿子给提示:缓存里有就带上;对照组、总开关关了都是空;没有明显规律(空提示)也是空",
+                  tl.rule_for(1, True) == "\n\nHINT" and tl.rule_for(5, True) == "" and tl.rule_for(1, False) == "" and (tl._hint_cache.update(txt="") or tl.rule_for(1, True) == ""))
+    finally:
+        tl._hint_cache.update(old_cache)
+
+    # 写稿时真的带上提示:非对照组带、对照组不带,并记在 checks.title_hint 里
+    pj = db.q_exec("INSERT INTO projects(track,keywords,direction) VALUES('美食','[\"腐乳做法\"]','')").lastrowid
+    pb = db.q_exec("INSERT INTO playbooks(project_id,name,note_ids,data,status) VALUES(?,?,?,?,'done')", pj, "t", "[]", "{}").lastrowid
+    ids = []
+    while len({i % 5 == 0 for i in ids}) < 2:
+        ids.append(db.q_exec("INSERT INTO drafts(project_id,playbook_id,angle,extra,status,with_images) VALUES(?,?,?,?,'queued',0)", pj, pb, "角度", "").lastrowid)
+    treated = next(i for i in ids if i % 5 != 0)
+    control = next(i for i in ids if i % 5 == 0)
+    got = {}
+    o_wn, o_sub = llm.write_note, worker.submit_text
+    llm.write_note = lambda project, playbook, refs, angle, extra="", kb="", banned="": got.__setitem__(len(got), extra) or {"title": "t", "content": "正文", "alt_titles": [], "tags": ["a"], "image_prompts": []}
+    worker.submit_text = lambda did: None
+    db.save_settings({"auto_review": "0", "auto_fix": "0", "auto_compress": "0", "title_hint": "1"})
+    tl._hint_cache.update(at=time.time(), txt="HINT-TEXT")
+    try:
+        worker._run_text(treated)
+        worker._run_text(control)
+        db.save_settings({"title_hint": "0"})
+        later = max(ids) + 1 if (max(ids) + 1) % 5 != 0 else max(ids) + 2
+        off = db.q_exec("INSERT INTO drafts(id,project_id,playbook_id,angle,extra,status,with_images) VALUES(?,?,?,?,?,'queued',0)", later, pj, pb, "角度", "").lastrowid
+        worker._run_text(off)
+    finally:
+        llm.write_note, worker.submit_text = o_wn, o_sub
+        tl._hint_cache.update(old_cache)
+        db.save_settings({"title_hint": "1"})
+    ck = {i: db.q_one("SELECT checks FROM drafts WHERE id=?", i)["checks"] for i in (treated, control, off)}
+    rep.check("写稿:非对照组的提示词里带标题写法参考,对照组和总开关关闭时不带;checks.title_hint 记 1 / 0 / 0",
+              "HINT-TEXT" in got[0] and "HINT-TEXT" not in got[1] and "HINT-TEXT" not in got[2]
+              and ck[treated]["title_hint"] == 1 and ck[control]["title_hint"] == 0 and ck[off]["title_hint"] == 0, str((got, ck)))
+    rep.check("快照:记下写这篇时有没有带提示;没记录的老稿是 None", loop.snapshot({"title": "x", "checks": {"title_hint": 1}})["title_hint"] == 1 and loop.snapshot({"title": "x", "checks": {}})["title_hint"] is None
+              and loop.snapshot({"title": "x"})["title_hint"] is None)
+
+    # 对比:带提示 vs 对照;标题被改过的不算;老稿(None)不算;只有一组时不给
+    def fx(i, lift, hint, ts=1.0):
+        return {"id": i, "tier": "good", "lift": lift, "days": 5, "title": "t", "edit": {"level": "原样", "title_sim": ts, "cover": False, "body": False},
+                "feat": {"score": 80, "dims": {}, "title_hint": hint}}
+    ev_h = {"cfg": {"min_days": 3}, "rows": [fx(1, 2.0, 1), fx(2, 1.0, 1), fx(3, 0.5, 0), fx(4, 9.0, 1, ts=0.4), fx(5, 3.0, None)]}
+    he = {x["label"]: x for x in loop.learning(ev_h)["hint_effect"]}
+    rep.check("提示有没有用:带提示 2 篇(标题被改过的不算)vs 对照 1 篇;老稿不算;只有一组时不给",
+              he["带提示"]["n"] == 2 and he["带提示"]["lift"] == 1.5 and he["没带提示(对照)"]["n"] == 1 and loop.learning({**ev_h, "rows": ev_h["rows"][:2]})["hint_effect"] == [])

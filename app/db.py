@@ -60,6 +60,7 @@ DEFAULT_SETTINGS = {
     "auto_compress": "1",        # 正文明显超过爆款组字数时,自动压缩一次(原稿保留,可切换)
     "auto_review": "1",          # 复刻后自动审稿打分并给出修改版
     "review_comments": "0",      # 审稿时附带模拟评论区(多一些 token)
+    "title_hint": "1",           # 写标题时参考千帆真实笔记里「明显」有效的标题写法(每 5 篇留 1 篇不参考做对照)
     "loop_win_lift": "2",        # 爆款判定:互动(赞+藏+评)≥ 本账号平均的几倍
     "loop_min_eng": "20",        # 爆款判定:互动至少多少(防止账号数据太小,几个赞就算爆款)
     "loop_min_days": "3",        # 发布满几天,数据才算够久、可以下结论(之前显示「观察中」)
@@ -366,6 +367,24 @@ def _m012_kind(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
 
 
+def _m020_buyer_voice(c):
+    """商家账号不能装成买家(平台判违规):给已有稿子的质检结果补上「买家口吻」这一项;原来标「质检合格」的、含买家口吻的改成需检查。
+    只改 checks / auto_ok / auto_note,不动稿子内容;可重复执行。"""
+    import json as _json
+    from . import compliance
+    for r in c.execute("SELECT id, title, content, checks, auto_ok FROM drafts WHERE title!='' AND content!=''").fetchall():
+        try:
+            old = _json.loads(r["checks"] or "{}")
+        except Exception:
+            old = {}
+        new = compliance.with_buyer(old, r["title"], r["content"])
+        if new == old:
+            continue
+        c.execute("UPDATE drafts SET checks=? WHERE id=?", (_json.dumps(new, ensure_ascii=False), r["id"]))
+        if r["auto_ok"] == 1 and any(h.get("category") == compliance.CATEGORIES["buyer"][0] for h in new["hits"]):
+            c.execute("UPDATE drafts SET auto_ok=0, auto_note='含买家口吻(平台判违规),需改成商家口吻' WHERE id=?", (r["id"],))
+
+
 def _m019_pub_edit(c):
     """发布时对稿子的改动:标题相似度(系统算)、改了封面 / 改了正文(登记时勾选)。归因用:改动大的不算我们的评分和写法的功劳。"""
     add_column(c, "drafts", "pub_edit", "TEXT DEFAULT ''")
@@ -444,6 +463,7 @@ MIGRATIONS = [
     (17, "live_batch", _m017_live_batch),
     (18, "draft_feat", _m018_draft_feat),
     (19, "pub_edit", _m019_pub_edit),
+    (20, "buyer_voice", _m020_buyer_voice),
     # (2, "说明", _m002_xxx),
 ]
 

@@ -122,6 +122,68 @@ def title_score(title: str, cal: dict | None) -> dict:
     return {"score": round(max(5.0, min(95.0, score))), "hits": hits}
 
 
+# 每种写法对应的提示语:(这种写法更好时怎么说, 这种写法更差时怎么说)
+ADVICE = {
+    "digit": ("标题里带具体数字", "标题里不要硬塞数字"),
+    "mark": ("标题可以带问号 / 感叹号", "标题少用问号和感叹号,用陈述句把答案或亮点直接写出来"),
+    "question": ("标题可以用提问的写法", "标题不要用「怎么 / 为什么 / 吗」这类提问,直接说结论"),
+    "emoji": ("标题里加一个贴切的 emoji", "标题不要加 emoji"),
+    "long": ("标题写满 19~20 字,把对象和亮点说清楚", "标题别写太长"),
+    "short": ("标题写得短一些(12 字以内)", "标题别写得太短(12 字以内偏弱),把对象和亮点说清楚"),
+    "sep": ("标题可以用「｜」把关键词和亮点分成两段", "标题不要用「｜」「【】」"),
+    "me": ("标题可以用第一人称「我」", "标题少用「我」"),
+    "you": ("标题可以直接称呼读者(你 / 姐妹)", "标题少用「你 / 姐妹」这类称呼"),
+    "hook": ("标题可以用「谁懂 / 绝了」这类钩子词", "标题不要用「求 / 谁懂 / 救命 / 绝了」这类夸张钩子词"),
+    "review": ("标题可以用测评 / 避雷的角度", "标题少用测评 / 避雷这类写法"),
+    "price": ("标题可以带价格", "标题不要带价格"),
+}
+HINT_MIN_SIDE = 30        # 写进提示词的规律,有 / 没有两边都要至少这么多篇笔记(比「展示」的门槛 15 更严)
+HINT_CONTROL_EVERY = 5    # 每 5 篇留 1 篇不带这段提示(对照组),之后才知道「接了提示」到底有没有用
+
+
+def prompt_hint(cal: dict | None) -> str:
+    """只用「明显」(sig_*)且样本够多的写法;有倾向的、样本少的不进提示词。没有符合的返回空字符串。"""
+    if not cal:
+        return ""
+    do, avoid = [], []
+    for r in cal["rows"]:
+        if r["verdict"] not in ("sig_pos", "sig_neg") or min(r["n_with"], r["n_without"]) < HINT_MIN_SIDE or r["key"] not in ADVICE:
+            continue
+        (do if r["verdict"] == "sig_pos" else avoid).append(ADVICE[r["key"]][0 if r["verdict"] == "sig_pos" else 1])
+    if not do and not avoid:
+        return ""
+    lines = [f"【标题写法参考】来自千帆 {cal['n_used']} 篇真实笔记的统计(表现 = 相对本账号平均),只是倾向,真实、合规和其他要求优先,不要为了凑写法写得生硬:"]
+    if do:
+        lines.append("- 数据里表现更好的写法:" + ";".join(do))
+    if avoid:
+        lines.append("- 数据里表现偏差的写法:" + ";".join(avoid))
+    lines.append("- 主标题和备选标题都照这个来,但几篇之间句式要有变化,别写成一个模子。")
+    return "\n".join(lines)
+
+
+def is_control(draft_id: int) -> bool:
+    """对照组:每 HINT_CONTROL_EVERY 篇有 1 篇不给提示(按稿子编号定,稳定可复现)。"""
+    return int(draft_id) % HINT_CONTROL_EVERY == 0
+
+
+_hint_cache: dict = {"at": 0.0, "txt": ""}
+
+
+def rule_for(draft_id: int, enabled: bool = True, min_days: int = 3, ttl: float = 600.0) -> str:
+    """给这篇稿子的标题写法提示(空字符串 = 不加:总开关关了、对照组、没有明显规律)。结果缓存 10 分钟,不用每篇都重算。"""
+    import time
+    if not enabled or is_control(draft_id):
+        return ""
+    if time.time() - _hint_cache["at"] > ttl:
+        from . import qianfan
+        try:
+            items, at = qianfan.notes_all()
+            _hint_cache.update(at=time.time(), txt=prompt_hint(cached(items, at, min_days)))
+        except Exception:   # 取不到千帆数据就不加提示,不能影响出稿
+            _hint_cache.update(at=time.time(), txt="")
+    return ("\n\n" + _hint_cache["txt"]) if _hint_cache["txt"] else ""
+
+
 _cache: dict = {}
 
 

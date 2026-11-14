@@ -115,7 +115,8 @@ def snapshot(d: dict, cal: dict | None = None) -> dict:
             "title_len": f["title_len"], "t_digit": f["t_digit"], "t_mark": f["t_mark"], "t_emoji": f["t_emoji"], "body_len": f["body_len"], "paras": f["paras"],
             "emoji_100": round(f["emoji_100"], 2), "list_ratio": round(f["list_ratio"], 2), "cta": f["cta"], "images": f["images"],
             "cover_kind": _cover_kind(d), "cover_layout": cc.get("layout", ""), "topic": _topic(d.get("angle")), "ptype": d.get("ptype") or "", "at": time.strftime("%Y-%m-%d %H:%M"),
-            "title_score": titlelab.title_score(d.get("title") or "", cal)["score"]}   # 标题写法分(按千帆真实笔记校准的统计规律,见 titlelab.py)
+            "title_score": titlelab.title_score(d.get("title") or "", cal)["score"],
+            "title_hint": (d.get("checks") or {}).get("title_hint") if isinstance(d.get("checks"), dict) else None}   # 写这篇时有没有带标题写法提示(1 / 0;老稿没有 = None)   # 标题写法分(按千帆真实笔记校准的统计规律,见 titlelab.py)
 
 
 def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
@@ -136,7 +137,7 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
     need = [d["id"] for d in drafts if (d["published"] or perf.get(d["id"])) and not d["feat"]]   # 已发布但还没存快照的:补存(只取这几篇的正文,不拖慢整个列表)
     if need and register:
         from . import autorun
-        for r in autorun._in_chunks("SELECT id, title, content, tags, images, review, angle, ptype, cover_card FROM drafts WHERE id IN ({})", need):
+        for r in autorun._in_chunks("SELECT id, title, content, tags, images, review, angle, ptype, cover_card, checks FROM drafts WHERE id IN ({})", need):
             q_exec("UPDATE drafts SET feat=? WHERE id=?", json.dumps(snapshot(r, cal), ensure_ascii=False), r["id"])
         fresh = {r["id"]: r["feat"] for r in q_all("SELECT id, feat FROM drafts WHERE id IN (%s)" % ",".join(str(i) for i in need))}
         for d in drafts:
@@ -288,7 +289,14 @@ def learning(ev: dict) -> dict:
     tr = [(titlelab.title_score(r["title"], cal)["score"], r["lift"]) for r in mature if cal and _unedited(r, "title") and r.get("title")]
     tr = [(a, b) for a, b in tr if a is not None]
     title_check = {"n": len(tr), "corr": round(_spearman([x[0] for x in tr], [x[1] for x in tr]) or 0, 2) if len(tr) >= 8 and _spearman([x[0] for x in tr], [x[1] for x in tr]) is not None else None}
-    return {"title_check": title_check, "n_edited": len(done_all) - len(done), "edits": edits, "n_done": len(done), "n_obs": len(obs), "need": MIN_LEARN, "ready": len(done) >= MIN_LEARN, "soon_days": min(soon) if soon else None,
+    # 标题写法提示有没有用:接了提示的稿子 vs 对照组(每 5 篇留 1 篇不带),标题发布时没被改过的才算
+    hg = defaultdict(list)
+    for r in done_all:
+        h = (r.get("feat") or {}).get("title_hint")
+        if h in (0, 1) and _unedited(r, "title"):
+            hg["带提示" if h else "没带提示(对照)"].append(r)
+    hint_effect = [{"label": k, **agg(hg[k])} for k in ("带提示", "没带提示(对照)") if hg.get(k)] if len(hg) > 1 else []
+    return {"hint_effect": hint_effect, "title_check": title_check, "n_edited": len(done_all) - len(done), "edits": edits, "n_done": len(done), "n_obs": len(obs), "need": MIN_LEARN, "ready": len(done) >= MIN_LEARN, "soon_days": min(soon) if soon else None,
             "lift_avg": round(_mean([r["lift"] for r in done]), 2) if done else None, "bands": bands, "score_corr": None if corr_all is None else round(corr_all, 2),
             "dims": dims if scored else [], "factors": factors, "min_days": min_days}
 

@@ -87,7 +87,7 @@ def run(rep, env):
     sc = ptype.split_count(10, {"产品软文": 6, "教程": 3, "测评": 2})
     rep.check("按比例分篇数:总数不变、每类至少 1 篇", sum(sc.values()) == 10 and min(sc.values()) >= 1 and sc["产品软文"] > sc["教程"] >= sc["测评"], str(sc))
     rep.check("篇数少于类型数时按权重取最大的几类", sum(ptype.split_count(2, {"产品软文": 6, "教程": 3, "测评": 2}).values()) == 2 and ptype.split_count(0, {"教程": 1}) == {})
-    rep.check("每个类型都有写作要求,且互相区分", set(ptype.RULES) == {"产品软文", "教程", "测评", "商业硬文"} and "步骤" in ptype.RULES["教程"] and "评价维度" in ptype.RULES["测评"] and "第一人称" in ptype.RULES["产品软文"] and "禁止出现" in ptype.RULES["产品软文"] and "具体用量" in ptype.RULES["产品软文"])
+    rep.check("每个类型都有写作要求,且互相区分", set(ptype.RULES) == {"产品软文", "教程", "测评", "商业硬文"} and "步骤" in ptype.RULES["教程"] and "评价维度" in ptype.RULES["测评"] and "商家" in ptype.RULES["产品软文"] and "不能装成买家" in ptype.RULES["产品软文"] and "第一人称" not in ptype.RULES["产品软文"] and "禁止出现" in ptype.RULES["产品软文"] and "具体用量" in ptype.RULES["产品软文"])
     base = {"kind_status": "done", "kind": "教程", "kind_rel": 1, "kind_conf": 0.8, "content": "正文" * 30}
     rep.check("能当参考的条件:已分类、类型明确、和产品相关、正文够长、把握不低", ptype.usable(base)
               and not ptype.usable({**base, "kind_status": "pending"}) and not ptype.usable({**base, "kind": "其他"}) and not ptype.usable({**base, "kind_rel": 0})
