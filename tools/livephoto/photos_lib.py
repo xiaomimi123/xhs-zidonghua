@@ -96,93 +96,27 @@ def album_count(person: str, day: str) -> int:
     return int(out) if ok and out.isdigit() else -1
 
 
-# ---------------- 自动加入共享相簿 ----------------
-# 「照片」的脚本接口不能操作共享相簿,所以绕一步:导入成功后,把这张图再放进「待分享」文件夹里这个人的暂存相册,
-# 然后运行这个人对应的快捷指令「加入共享-张怡」(动作:查找照片 [相册 = 待分享/张怡,按添加日期倒序,数量 1] → 添加到共享相簿 [张怡])。
-# 暂存相册里只有我们放进去的图,iPhone 同步来的照片不会混进来,所以「最新一张」一定是刚导入的这张。
-STAGE_FOLDER = "待分享"
-SHORTCUT_PREFIX = "加入共享-"
-_sc_cache: dict = {"at": 0.0, "names": set()}
-
-
-def shortcut_name(person: str) -> str:
-    return SHORTCUT_PREFIX + clean_person(person)
-
-
-def list_shortcuts(max_age: float = 60.0) -> set[str]:
-    """本机「快捷指令」里有哪些快捷指令(缓存 1 分钟:新建了快捷指令不用重启 worker)。"""
-    if time.time() - _sc_cache["at"] > max_age:
-        r = subprocess.run(["shortcuts", "list"], capture_output=True, text=True, timeout=60)
-        _sc_cache["names"] = {x.strip() for x in r.stdout.splitlines() if x.strip()} if r.returncode == 0 else set()
-        _sc_cache["at"] = time.time()
-    return _sc_cache["names"]
-
-
-def has_share_shortcut(person: str) -> bool:
-    return shortcut_name(person) in list_shortcuts()
-
-
-def ensure_stage(person: str, flat: bool = False) -> tuple[bool, str]:
-    """保证这个人的暂存相册存在:「待分享」文件夹里一个叫她名字的相册(flat=True 时是顶层相册「待分享-张怡」,快捷指令里选不到文件夹里的相册时用)。"""
-    p = _q(clean_person(person))
-    if flat:
-        return osa(f'''
-        tell application "Photos"
-            if not (exists album "{STAGE_FOLDER}-{p}") then make new album named "{STAGE_FOLDER}-{p}"
-            return "ok"
-        end tell''')
-    return osa(f'''
+# ---------------- 每日分发清单 ----------------
+def list_person_albums() -> list[dict]:
+    """所有「人名文件夹 → 日期相册」:[{who, day, count}]。"""
+    ok, out = osa('''
     tell application "Photos"
-        if not (exists folder "{STAGE_FOLDER}") then make new folder named "{STAGE_FOLDER}"
-        set f to folder "{STAGE_FOLDER}"
-        if not (exists album "{p}" of f) then make new album named "{p}" at f
-        return "ok"
-    end tell''')
-
-
-def stage_latest(pvt: Path, person: str, flat: bool = False) -> tuple[bool, str]:
-    """把刚导入的这张(按文件名找最新一张)放进这个人的暂存相册。"""
-    ok, msg = ensure_stage(person, flat)
+        set res to ""
+        repeat with f in folders
+            repeat with a in albums of f
+                set res to res & (name of f) & tab & (name of a) & tab & (count of media items of a) & linefeed
+            end repeat
+        end repeat
+        return res
+    end tell''', timeout=300)
     if not ok:
-        return False, f"建暂存相册失败:{msg[:120]}"
-    p, stem = _q(clean_person(person)), _q(pvt.name.replace(".pvt", ""))
-    target = f'album "{STAGE_FOLDER}-{p}"' if flat else f'album "{p}" of folder "{STAGE_FOLDER}"'
-    ok, msg = osa(f'''
-    tell application "Photos"
-        set matches to every media item whose filename starts with "{stem}"
-        if (count of matches) is 0 then return "no-match"
-        add {{last item of matches}} to {target}
-        return "ok"
-    end tell''')
-    return (True, "ok") if ok and msg == "ok" else (False, f"没能放进暂存相册:{(msg or '未知原因')[:120]}")
-
-
-def run_shortcut(name: str, timeout: int = 180) -> tuple[bool, str]:
-    r = subprocess.run(["shortcuts", "run", name], capture_output=True, text=True, timeout=timeout)
-    return r.returncode == 0, (r.stderr or r.stdout).strip()[:150]
-
-
-def share_after_import(pvt: Path, person: str, flat: bool = False) -> tuple[bool, str]:
-    """导入成功后:放进暂存相册 → 运行这个人的「加入共享-xxx」快捷指令(失败重试一次)。
-    返回 (成功, 说明)。没给发起人(未署名)、没建对应快捷指令的不共享,说明里写清原因。"""
-    who = clean_person(person)
-    if who == NO_OWNER:
-        return False, "没有发起人(未署名),不共享"
-    if not has_share_shortcut(who):
-        return False, f"没有快捷指令「{shortcut_name(who)}」,没共享(图在「{who}」文件夹里)"
-    ok, msg = stage_latest(pvt, who, flat)
-    if not ok:
-        return False, msg
-    for attempt in (1, 2):
-        try:
-            ok, msg = run_shortcut(shortcut_name(who))
-        except subprocess.TimeoutExpired:
-            ok, msg = False, "快捷指令运行超时"
-        if ok:
-            return True, f"已加入「{who}」的共享相簿"
-        if attempt == 1:
-            time.sleep(5)
-    return False, f"快捷指令运行失败:{msg}(图已在暂存相册里,可以手动加进共享相簿)"
+        raise RuntimeError(out[:200])
+    rows = []
+    for line in out.splitlines():
+        parts = line.split("	")
+        if len(parts) == 3 and DAY_RE.match(parts[1]):
+            rows.append({"who": parts[0], "day": parts[1], "count": int(parts[2]) if parts[2].strip().isdigit() else 0})
+    return rows
 
 
 # ---------------- 整理已有的相册 ----------------

@@ -96,70 +96,24 @@ class T(unittest.TestCase):
         self.assertEqual(pl.list_top_albums(), [{"name": "张怡 · 2026-11-14", "count": 12}, {"name": "管理员 · 2026-11-14", "count": 0}, {"name": "我的收藏", "count": 3}])
 
 
-class ShareTests(unittest.TestCase):
-    def setUp(self):
-        self._o = (pl.osa, pl.list_shortcuts, pl.run_shortcut, pl.time.sleep)
-        pl.time.sleep = lambda s: None
+class ReportTests(unittest.TestCase):
+    def test_list_person_albums_parse(self):
+        o = pl.osa
+        pl.osa = Fake((True, "张怡\t2026-11-14\t12\n张怡\t2026-11-13\t3\n润娜\t2026-11-14\t0\n杂项\t我的相册\t5\n"))
+        try:
+            rows = pl.list_person_albums()
+        finally:
+            pl.osa = o
+        self.assertEqual(rows, [{"who": "张怡", "day": "2026-11-14", "count": 12}, {"who": "张怡", "day": "2026-11-13", "count": 3},
+                                {"who": "润娜", "day": "2026-11-14", "count": 0}])   # 名字不是日期的相册不算
 
-    def tearDown(self):
-        pl.osa, pl.list_shortcuts, pl.run_shortcut, pl.time.sleep = self._o
-
-    def test_shortcut_name(self):
-        self.assertEqual(pl.shortcut_name("张怡"), "加入共享-张怡")
-        self.assertEqual(pl.shortcut_name(""), "加入共享-未署名")
-
-    def test_skips_without_owner_or_shortcut(self):
-        pl.list_shortcuts = lambda max_age=60: {"加入共享-张怡"}
-        ok, msg = pl.share_after_import(Path("/tmp/a.pvt"), "", False)
-        self.assertFalse(ok)
-        self.assertIn("未署名", msg)
-        ok, msg = pl.share_after_import(Path("/tmp/a.pvt"), "润娜", False)
-        self.assertFalse(ok)
-        self.assertIn("加入共享-润娜", msg)
-
-    def test_success_flow(self):
-        pl.list_shortcuts = lambda max_age=60: {"加入共享-张怡"}
-        pl.osa = Fake((True, "ok"), (True, "ok"))
-        ran = []
-        pl.run_shortcut = lambda name, timeout=180: (ran.append(name) or (True, ""))
-        ok, msg = pl.share_after_import(Path("/tmp/IMG_L9_LIVE.pvt"), "张怡", False)
-        self.assertTrue(ok)
-        self.assertEqual(ran, ["加入共享-张怡"])
-        self.assertIn('folder "待分享"', pl.osa.calls[0])                       # 先建暂存相册
-        self.assertIn('filename starts with "IMG_L9_LIVE"', pl.osa.calls[1])    # 再把刚导入的放进去
-        self.assertIn('album "张怡" of folder "待分享"', pl.osa.calls[1])
-
-    def test_flat_stage_names(self):
-        pl.list_shortcuts = lambda max_age=60: {"加入共享-张怡"}
-        pl.osa = Fake((True, "ok"), (True, "ok"))
-        pl.run_shortcut = lambda name, timeout=180: (True, "")
-        pl.share_after_import(Path("/tmp/IMG_L9_LIVE.pvt"), "张怡", True)
-        self.assertIn('album "待分享-张怡"', pl.osa.calls[1])
-
-    def test_stage_failure_does_not_run_shortcut(self):
-        pl.list_shortcuts = lambda max_age=60: {"加入共享-张怡"}
-        pl.osa = Fake((True, "ok"), (True, "no-match"))
-        ran = []
-        pl.run_shortcut = lambda name, timeout=180: (ran.append(name) or (True, ""))
-        ok, msg = pl.share_after_import(Path("/tmp/a.pvt"), "张怡", False)
-        self.assertFalse(ok)
-        self.assertEqual(ran, [])
-        self.assertIn("暂存相册", msg)
-
-    def test_shortcut_retry_then_fail(self):
-        pl.list_shortcuts = lambda max_age=60: {"加入共享-张怡"}
-        pl.osa = Fake((True, "ok"), (True, "ok"))
-        n = []
-        pl.run_shortcut = lambda name, timeout=180: (n.append(1) or (False, "出错了"))
-        ok, msg = pl.share_after_import(Path("/tmp/a.pvt"), "张怡", False)
-        self.assertFalse(ok)
-        self.assertEqual(len(n), 2)                                  # 失败重试一次
-        self.assertIn("暂存相册里", msg)                              # 提示图没丢,可以手动加
-        n.clear()
-        pl.osa = Fake((True, "ok"), (True, "ok"))
-        calls = iter([(False, "第一次失败"), (True, "")])
-        pl.run_shortcut = lambda name, timeout=180: next(calls)
-        self.assertTrue(pl.share_after_import(Path("/tmp/a.pvt"), "张怡", False)[0])   # 重试成功算成功
+    def test_build_status(self):
+        import daily_report as dr
+        rows = [{"who": "张怡", "day": "2026-11-14", "count": 12}, {"who": "润娜", "day": "2026-11-14", "count": 5}, {"who": "张怡", "day": "2026-11-13", "count": 3}]
+        t = {x["who"]: x for x in dr.build(rows, "2026-11-14", {"张怡|2026-11-14": 10, "润娜|2026-11-14": 5})}
+        self.assertEqual((t["张怡"]["todo"], t["张怡"]["done"]), (2, 10))     # 共享过 10 张,之后新增 2 张
+        self.assertEqual(t["润娜"]["todo"], 0)                                 # 全部共享过
+        self.assertEqual(len(dr.build(rows, "2026-11-13", {})), 1)             # 只列当天
 
 
 if __name__ == "__main__":
