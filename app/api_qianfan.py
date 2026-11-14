@@ -19,6 +19,8 @@ def overview(account: str = "", shop: str = ""):
     shop_list = qianfan.shops()
     sid = shop if shop in {x["shop_id"] for x in shop_list} else ""
     accs = qianfan.accounts(sid or None)
+    for a in accs:   # 账号对比表里的粉丝趋势小图
+        a["spark"] = [x["fans"] for x in qianfan.series(12, a["account_id"]) if x.get("fans") is not None]
     ids = {a["account_id"] for a in accs}
     sel = account if account in ids else ""
     acc = qianfan.series(90, sel) if sel else qianfan.series(90, accs[0]["account_id"]) if len(accs) == 1 else []

@@ -31,11 +31,12 @@ async function vQianfan() {
   const stale = o.shops.filter(x => !x.online && (x.pending > 0 || !x.last_sync || (Date.now() - new Date(x.last_sync.replace(" ", "T") + "Z")) > 24 * 3600e3)), live = o.shops.filter(x => x.online);
   const shopBanner = !QFSTAFF() && o.shops.length > 1 && stale.length ? `<div class="banner warn">${stale.map(x => `「${esc(x.name || x.shop_id)}」${x.last_sync ? `最近同步 ${lt(x.last_sync)}` : "还没有同步过"}${x.pending ? `,有 ${x.pending} 个同步任务在等` : ""}`).join(";")}。${live.length ? `采集端现在登录的是「${esc(live.map(x => x.name).join("、"))}」。` : "采集端现在没有登录任何店铺。"}同一个千帆账号同一时间只能登录一个店铺:在 ego lite 里登录该店铺后,采集端会自动补采。</div>` : "";
   $("#main").innerHTML = `${shopBanner}${o.sample && !QFSTAFF() ? `<div class="banner">当前显示的是<b>示例数据</b>(用来预览页面),采集端接上以后点这里 <button class="btn gray sm" id="qclr">清除示例数据</button></div>` : ""}
-  <div class="row" style="justify-content:space-between;margin-bottom:12px;gap:8px;flex-wrap:wrap"><div class="seg" id="qtabs">${qfTabs().map(([k, n]) => `<button class="${k === QF.tab ? "on" : ""}" data-t="${k}">${n}</button>`).join("")}</div>
-    <span class="sub">${lastAt ? `最近同步 ${lt(lastAt)}` : "还没有同步过数据"} · 自动同步${stat.enabled ? "已开启" : "未开启"}</span></div>${["account", "notes", "topics", "hot_notes", "hot_keywords"].includes(QF.tab) ? qfShopChips(o) : ""}${["account", "notes", "topics"].includes(QF.tab) ? qfAccChips(o) : ""}<div id="qbody"></div>`;
+  <div class="qf-top"><div class="seg" id="qtabs">${qfTabs().map(([k, n]) => `<button class="${k === QF.tab ? "on" : ""}" data-t="${k}">${n}</button>`).join("")}</div>
+    ${qfSyncChip(o, lastAt)}</div>${["account", "notes", "topics", "hot_notes", "hot_keywords"].includes(QF.tab) ? qfFilters(o) : ""}<div id="qbody"></div>`;
   $("#qbody").innerHTML = await body();
   $$("[data-qnp]").forEach(b => b.onclick = () => { if (b.disabled) return; QF.np = +b.dataset.qnp; vQianfan().then(() => $("#qbody")?.scrollIntoView({ block: "start" })); });
-  $$(".qacc button").forEach(b => b.onclick = () => { QF.account = b.dataset.a; vQianfan(); });
+  $$(".qacc-sel").forEach(b => b.onchange = () => { QF.account = b.value; QF.np = 1; vQianfan(); });
+  $$("[data-sort]").forEach(h => h.onclick = e => { e.stopPropagation(); const k = h.dataset.sort; QF_SORT.dir = QF_SORT.k === k ? -QF_SORT.dir : -1; QF_SORT.k = k; vQianfan(); });
   $$(".qshop button").forEach(b => b.onclick = () => { QF.shop = b.dataset.s; QF.account = ""; vQianfan(); });
   $$("[data-pick]").forEach(r => r.onclick = () => { QF.account = r.dataset.pick; vQianfan(); });
   $$("#qtabs button").forEach(b => b.onclick = () => { QF.tab = b.dataset.t; QF.np = 1; if (b.dataset.t.startsWith("hot_")) { QF.kind = b.dataset.t; QF.scope = ""; QF.period = ""; } vQianfan(); });
@@ -50,28 +51,51 @@ function qfEmpty(msg) {
   return `<section class="card"><div class="empty" style="padding:36px 20px;text-align:center"><p>${msg}</p><p class="sub">采集端按《千帆数据同步说明》回传数据后这里会自动出现。也可以先预览页面效果:</p><button class="btn gray" id="qsample">载入示例数据</button></div></section>`;
 }
 
-function qfShopChips(o) {
-  if (o.shops.length < 2) return "";
-  const hot = QF.tab.startsWith("hot_");
-  return `<div class="seg qshop" style="margin-bottom:12px">${hot ? "" : `<button class="${QF.shop === "" ? "on" : ""}" data-s="">全部店铺</button>`}${o.shops.map(x => `<button class="${QF.shop === x.shop_id ? "on" : ""}" data-s="${esc(x.shop_id)}" title="${x.online ? "采集端当前登录的是这个店铺" : "采集端没有登录这个店铺"}"><span style="color:${x.online ? "var(--ok)" : "var(--sub)"}">●</span> ${esc(x.name || x.shop_id)}</button>`).join("")}</div>`;
+// 同步状态:一个小标签,说清楚几个店铺在线、最近一次同步是什么时候
+function qfSyncChip(o, lastAt) {
+  const on = o.shops.filter(x => x.online).length, all = o.shops.length, stat = o.status;
+  const cls = !all ? "" : on === all ? "ok" : on ? "warn" : "off";
+  return `<span class="qf-sync ${cls}" title="自动同步${stat.enabled ? "已开启" : "未开启"};账号和笔记数据默认每 24 小时刷新一次"><i></i>${all ? `${on}/${all} 个店铺在线 · ` : ""}${lastAt ? `最近同步 ${lt(lastAt)}` : "还没有同步过数据"}</span>`;
 }
 
-function qfAccChips(o) {
-  if (o.accounts.length < 2) return "";
-  const cnt = a => o.note_counts?.[a] ?? 0, all = Object.values(o.note_counts || {}).reduce((x, y) => x + y, 0);
-  const tag = QF.tab === "notes";
-  const items = [["", `全部账号${tag ? ` · ${all}` : ""}`], ...o.accounts.map(a => [a.account_id, `${a.name || "未命名"}${tag ? ` · ${cnt(a.account_id)}` : ""}`])];
-  return o.accounts.length > 4   // 账号多:用可换行的标签;少:分段按钮
-    ? `<div class="fl-chips qacc" style="margin-bottom:14px">${items.map(([id, t]) => `<button class="chip ${QF.account === id ? "on" : ""}" data-a="${esc(id)}">${esc(t)}</button>`).join("")}</div>`
-    : `<div class="seg qacc" style="margin-bottom:12px">${items.map(([id, t]) => `<button class="${QF.account === id ? "on" : ""}" data-a="${esc(id)}">${esc(t)}</button>`).join("")}</div>`;
+// 筛选条:店铺(几个就几个按钮,带在线状态)+ 账号(下拉,账号再多也只占一行)
+function qfFilters(o) {
+  const hot = QF.tab.startsWith("hot_"), withAcc = ["account", "notes", "topics"].includes(QF.tab) && o.accounts.length > 1;
+  const shopBtns = o.shops.length > 1 ? `<div class="qf-f"><span class="qf-l">店铺</span><div class="qf-chips qshop">${hot ? "" : `<button class="${QF.shop === "" ? "on" : ""}" data-s="">全部</button>`}${o.shops.map(x => `<button class="${QF.shop === x.shop_id ? "on" : ""}" data-s="${esc(x.shop_id)}" title="${x.online ? "采集端在线" : x.last_sync ? `采集端离线,最近同步 ${lt(x.last_sync)}` : "还没有同步过"}"><i class="qf-dot ${x.online ? "ok" : "off"}"></i>${esc((x.name || x.shop_id).replace(/的店$/, ""))}</button>`).join("")}</div></div>` : "";
+  const tag = QF.tab === "notes", cnt = a => o.note_counts?.[a] ?? 0, all = Object.values(o.note_counts || {}).reduce((x, y) => x + y, 0);
+  const accSel = withAcc ? `<div class="qf-f"><span class="qf-l">账号</span><select class="qacc-sel" aria-label="按账号筛选"><option value="">全部账号${tag ? ` · ${all}` : ""}(${o.accounts.length})</option>${o.accounts.map(a => `<option value="${esc(a.account_id)}" ${QF.account === a.account_id ? "selected" : ""}>${esc(a.name || "未命名")}${tag ? ` · ${cnt(a.account_id)}` : ""}</option>`).join("")}</select></div>` : "";
+  return shopBtns || accSel ? `<div class="qf-bar">${shopBtns}${accSel}</div>` : "";
 }
+
+// 数字 + 涨跌:两行,数字在上、涨跌在下,不挤在一起
+const qfNum = (cur, prev, k, big) => cur[k] == null ? `<span class="na">-</span>` : `<b class="${big ? "qf-big" : ""}">${fmt(cur[k])}</b>${dlt(cur, prev, k)}`;
+// 粉丝趋势小图(最近 12 次同步)
+function qfMini(v) {
+  if (!v || v.length < 2) return `<span class="sub">-</span>`;
+  const W = 84, H = 26, lo = Math.min(...v), hi = Math.max(...v), span = hi - lo || 1;
+  const pts = v.map((x, i) => `${(i / (v.length - 1) * (W - 4) + 2).toFixed(1)},${(H - 3 - (x - lo) / span * (H - 6)).toFixed(1)}`).join(" ");
+  const up = v[v.length - 1] >= v[0];
+  return `<svg class="qf-mini ${hi === lo ? "flat" : up ? "up" : "down"}" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-label="粉丝趋势"><polyline fill="none" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" points="${pts}"/></svg>`;
+}
+const qfAgo = at => { const t = new Date(String(at || "").replace(" ", "T") + "Z"); if (!at || isNaN(t)) return ""; const h = (Date.now() - t) / 3600e3; return h < 1 ? "刚刚" : h < 24 ? `${Math.floor(h)} 小时前` : `${Math.floor(h / 24)} 天前`; };
+const QF_SORT = { k: "fans", dir: -1 };
 
 function qfAccount(o) {
   if (!o.accounts.length) return qfEmpty("还没有账号数据");
   if (o.accounts.length > 1 && !o.selected) {
-    const cols = [["fans", "粉丝"], ["views", "阅读"], ["likes", "点赞"], ["collects", "收藏"], ["comments", "评论"], ["shares", "分享"]];
-    return `<section class="card flush"><div class="card-h"><b>各账号对比</b><span class="sub">点一行看这个账号的趋势和笔记 · 互动数为近 7 日普通笔记</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>账号</th>${o.shops.length > 1 ? "<th>店铺</th>" : ""}${cols.map(([, n]) => `<th class="num">${n}</th>`).join("")}<th>数据时间</th></tr></thead><tbody>
-    ${o.accounts.map(a => `<tr data-pick="${esc(a.account_id)}" style="cursor:pointer"><td>${esc(a.name || "未命名")}${a.red_id ? ` <span class="sub">${esc(a.red_id)}</span>` : ""}</td>${o.shops.length > 1 ? `<td class="sub">${esc(a.shop_name || "")}</td>` : ""}${cols.map(([k]) => `<td class="num">${a[k] != null ? fmt(a[k]) : ""}${dlt(a, a.prev, k)}</td>`).join("")}<td>${lt(a.at)}</td></tr>`).join("")}</tbody></table></div></section>`;
+    const cols = [["views", "阅读"], ["likes", "点赞"], ["collects", "收藏"], ["comments", "评论"], ["shares", "分享"]];
+    const accs = [...o.accounts].sort((x, y) => ((y[QF_SORT.k] ?? -1) - (x[QF_SORT.k] ?? -1)) * -QF_SORT.dir);
+    const sum = (k, f = a => a) => o.accounts.reduce((t, a) => t + (a[k] ?? 0), 0), sumPrev = k => o.accounts.reduce((t, a) => t + (a.prev?.[k] ?? a[k] ?? 0), 0);
+    const eng = a => (a.likes ?? 0) + (a.collects ?? 0) + (a.comments ?? 0), engPrev = a => a.prev ? (a.prev.likes ?? 0) + (a.prev.collects ?? 0) + (a.prev.comments ?? 0) : eng(a);
+    const d = (cur, prev) => { const x = cur - prev; return x ? `<em class="qf-d ${x > 0 ? "up" : "down"}">${x > 0 ? "▲" : "▼"} ${fmt(Math.abs(x))}</em>` : `<em class="qf-d">较上次持平</em>`; };
+    const kpi = [["总粉丝", fmt(sum("fans")), d(sum("fans"), sumPrev("fans"))], ["账号数", o.accounts.length, `<em class="qf-d">${o.shops.length > 1 && !o.shop ? `${o.shops.length} 个店铺` : ""}</em>`],
+      ["近 7 日阅读", fmt(sum("views")), d(sum("views"), sumPrev("views"))], ["近 7 日互动(赞+藏+评)", fmt(o.accounts.reduce((t, a) => t + eng(a), 0)), d(o.accounts.reduce((t, a) => t + eng(a), 0), o.accounts.reduce((t, a) => t + engPrev(a), 0))]];
+    const th = (k, n, cls = "") => `<th class="${cls} qf-th" data-sort="${k}" title="点一下按${n}排序">${n}${QF_SORT.k === k ? (QF_SORT.dir < 0 ? " ↓" : " ↑") : ""}</th>`;
+    const multiShop = o.shops.length > 1 && !o.shop;
+    return `<div class="stats qf-kpi">${kpi.map(([n, v, x]) => `<div class="card stat"><span class="sub">${n}</span><b>${v}</b><div class="mini">${x || "&nbsp;"}</div></div>`).join("")}</div>
+    <section class="card flush"><div class="card-h"><b>各账号对比</b><span class="sub">点一行看这个账号的趋势和笔记 · 阅读、互动为近 7 日 · 涨跌对比上一次同步</span></div><div class="tbl-wrap"><table class="tbl qf-tbl"><thead><tr><th>账号</th>${th("fans", "粉丝", "num")}<th class="qf-tr">粉丝趋势</th>${cols.map(([k, n]) => th(k, n, "num")).join("")}<th class="num">数据更新</th></tr></thead><tbody>
+    ${accs.map(a => `<tr data-pick="${esc(a.account_id)}"><td><div class="qf-acc"><span class="qf-av">${esc((a.name || "?").slice(0, 1))}</span><span class="qf-an"><b>${esc(a.name || "未命名")}</b><span class="sub">${multiShop && a.shop_name ? `${esc(a.shop_name.replace(/的店$/, ""))}` : ""}${multiShop && a.shop_name && a.red_id ? " · " : ""}${a.red_id ? `小红书号 ${esc(a.red_id)}` : ""}</span></span></div></td>
+      <td class="num qf-c">${qfNum(a, a.prev, "fans", true)}</td><td class="qf-tr">${qfMini(a.spark)}</td>${cols.map(([k]) => `<td class="num qf-c">${qfNum(a, a.prev, k)}</td>`).join("")}<td class="num sub" title="${lt(a.at)}">${qfAgo(a.at)}</td></tr>`).join("")}</tbody></table></div></section>`;
   }
   const a = o.account; if (!a) return qfEmpty("还没有账号数据");
   const prev = o.series.length > 1 ? o.series[o.series.length - 2] : null;
