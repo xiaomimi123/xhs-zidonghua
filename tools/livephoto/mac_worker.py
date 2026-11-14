@@ -108,21 +108,20 @@ class Api:
             print(f"   (没能把失败原因告诉工作台:{e})")
 
 
-def import_to_photos(pvt: Path, album: str = ""):
-    """把 .pvt 包导入本机「照片」App。照片 App 的 import 命令会强制把自己弹到前台(实测隐藏没用,
-    这是照片 App 的固有行为),所以导入前记下当时的前台 App,导入后立刻把焦点还回去,把干扰压到最低。
-    album 有值时,把刚导入的项归入这个相册(调用方算好名字,如「丽敏 · 2026-11-14」),没有就放「未署名」。"""
-    name = album or "未署名"
+def import_to_photos(pvt: Path, person: str = "", day: str = ""):
+    """把 .pvt 包导入本机「照片」App,放进「发起人」文件夹里「任务日期」的相册(没有发起人放「未署名」)。
+    照片 App 的 import 命令会强制把自己弹到前台(实测隐藏没用,这是照片 App 的固有行为),
+    所以导入前记下当时的前台 App,导入后立刻把焦点还回去,把干扰压到最低。
+    相册结构和导入细节见 photos_lib.py。成功返回 True。"""
+    import photos_lib
     try:
         front = subprocess.run(["osascript", "-e",
                                 'tell application "System Events" to get name of first application process whose frontmost is true'],
                                capture_output=True, text=True, timeout=30).stdout.strip()
-        # 照片 App 处理一个包可能超过 2 分钟(队列密集 + iCloud 同步抢资源时更慢),限时要放宽;超时就重试一次
-        for attempt in (1, 2):
+        ok = msg = None
+        for attempt in (1, 2):   # 照片 App 处理一个包可能超过 2 分钟(队列密集 + iCloud 同步抢资源时更慢),超时重试一次
             try:
-                subprocess.run(["osascript", "-e",
-                                f'tell application "Photos" to import POSIX file "{pvt.resolve()}"'],
-                               check=True, capture_output=True, timeout=600)
+                ok, msg = photos_lib.import_pvt(pvt, person, day)
                 break
             except subprocess.TimeoutExpired:
                 if attempt == 1:
@@ -130,43 +129,17 @@ def import_to_photos(pvt: Path, album: str = ""):
                     time.sleep(10)
                 else:
                     raise
-        time.sleep(2)
         if front and front != "Photos":   # 把焦点还给导入前的 App
             subprocess.run(["osascript", "-e",
                             f'tell application "System Events" to set frontmost of application process "{front}" to true'],
                            capture_output=True, timeout=30)
-        print(f"   已导入照片 App:{pvt.name}" + (f" → 相册「{name}」" if name else ""))
-        time.sleep(5)   # 给照片 App 一点导入时间
-        if name:
-            _assign_album(pvt.name.replace(".pvt", ""), name)
+        where = f"{photos_lib.clean_person(person)} / {photos_lib.clean_day(day)}"
+        print(f"   {'已导入照片 App' if ok else '导入有问题'}:{pvt.name} → {where}" + ("" if ok else f"  ({msg})"))
+        time.sleep(3)   # 给照片 App 一点处理时间
+        return bool(ok)
     except Exception as e:
         print(f"   导入照片 App 失败(不影响回传):{e}")
-
-
-def _assign_album(stem: str, album: str):
-    """把照片 App 里文件名匹配的最新导入项归入指定相册。相册不存在就建。"""
-    safe_stem = stem.replace('"', '')
-    safe_album = album.replace('"', '') or "未署名"
-    script = f'''
-    tell application "Photos"
-        set matches to every media item whose filename starts with "{safe_stem}"
-        if (count of matches) is 0 then return "no-match"
-        set mi to last item of matches
-        if (count of (every album whose name is "{safe_album}")) is 0 then
-            make new album named "{safe_album}"
-        end if
-        set al to first item of (every album whose name is "{safe_album}")
-        add {{mi}} to al
-        return "ok"
-    end tell'''
-    try:
-        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=60)
-        out = (r.stdout or "").strip()
-        if r.returncode == 0 and out == "ok":
-            return
-        print(f"   相册归类失败(图还在「最近项目」里,不影响回传):{(r.stderr or out or '未知原因').strip()[:120]}")
-    except Exception as e:
-        print(f"   相册归类失败(图还在「最近项目」里,不影响回传):{e}")
+        return False
 
 
 def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool = False, first_frame_still: bool = False, sharpen: float = 0.6, to_photos: bool = False):
@@ -185,9 +158,7 @@ def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool
         owner_out = out / (job.get("by") or "未署名") / day
         pvt = make_pvt(None if (first_frame_still and video) else src, owner_out, f"L{job['id']}", job["opts"], use_makelive, video, keep_audio, sharpen)
     if to_photos:
-        # 相册名 = 「发起人 · 任务日期」;没有发起人就「未署名 · 日期」
-        by = job.get("by") or "未署名"
-        import_to_photos(pvt, f"{by} · {job.get('created') or time.strftime('%Y-%m-%d')}")
+        import_to_photos(pvt, job.get("by") or "", job.get("created") or "")   # 发起人文件夹 → 任务日期相册
     api.upload(job["id"], zip_dir(pvt))
     print(f"   完成 {time.time() - t0:.0f} 秒 → {pvt}")
 

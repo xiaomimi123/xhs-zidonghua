@@ -1,4 +1,4 @@
-"""把漏导入照片 App 的 .pvt 补导一遍,并归入「发起人 · 日期」相册。
+"""把漏导入照片 App 的 .pvt 补导一遍,并放进「发起人」文件夹里的「日期」相册。
 
 用法:
     python3 reimport_missing.py --ids /tmp/failed_import.txt            # 按任务号清单补导
@@ -70,18 +70,13 @@ def main():
     ok = fail = 0
     t0 = time.time()
     for i, (jid, p) in enumerate(todo, 1):
-        # 相册名从路径拿:~/LivePhotos/发起人/日期/IMG_L.._LIVE.pvt(日期取路径里的任务日期,不是今天)
-        try:
-            who, day = p.parts[-3], p.parts[-2]
-            album = f"{who} · {day}" if day.count("-") == 2 else who
-        except Exception:
-            album = ""
-        try:
-            mac_worker.import_to_photos(p, album, day="")   # day 传空字符串:相册名就用传入的 album,不再追加"今天"
+        # 发起人和日期从路径拿:~/LivePhotos/发起人/日期/IMG_L.._LIVE.pvt(日期取路径里的任务日期,不是今天)
+        who, day = (p.parts[-3], p.parts[-2]) if len(p.parts) >= 3 else ("", "")
+        if mac_worker.import_to_photos(p, who, day):
             ok += 1
-        except Exception as e:
+        else:
             fail += 1
-            print(f"   L{jid} 失败:{e}")
+            print(f"   L{jid} 失败")
         if i % 10 == 0:
             print(f"…进度 {i}/{len(todo)},已用时 {(time.time() - t0) / 60:.0f} 分钟")
     print(f"补导完成:成功 {ok},失败 {fail},总用时 {(time.time() - t0) / 60:.0f} 分钟")

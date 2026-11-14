@@ -29,14 +29,40 @@ python3 mac_worker.py --server http://工作台IP:18765 --token 采集端Token
 - 导入 iPhone:双击 `.pvt` 导入 Mac「照片」,再 AirDrop;或直接把 `.pvt` 文件夹 AirDrop 过去。
 - 发布仍只能用 iPhone 上的小红书 App:选图时选这张 Live 图,点「实况」。
 
-### 做完自动导入 Mac 相册(按发起人分相册)
-加 `--import-photos`,每做完一个 `.pvt` 就自动导入本机「照片」App,Mac 相册里立刻出现实况图
-(已验证:macOS 照片会按真品 Live Photo 配对存储,iCloud 照片开着的话还会同步到 iPhone),成品照常回传工作台。
-从 2026-11-12 起,导入后会**自动归入以任务发起人命名的相册**(工作台 claim 接口下发 `by` 字段,
-发起人空缺时归入「未署名」相册),照片 App 侧边栏一人一个相册,发给别人时按相册整批取即可:
+### 做完自动导入 Mac 相册(按人建文件夹,里面按天分相册)
+加 `--import-photos`,每做完一个 `.pvt` 就自动导入本机「照片」App,成品照常回传工作台。
+(已验证:macOS 照片会按真品 Live Photo 配对存储,iCloud 照片开着的话还会同步到 iPhone。)
+
+照片 App 侧边栏的结构(工作台 claim 接口下发 `by` 发起人和 `created` 任务日期):
+```
+张怡            ← 文件夹,一个人一个
+ ├ 2026-11-14   ← 相册,一天一个
+ └ 2026-11-13
+润娜
+未署名          ← 工作台没给发起人的任务
+```
+侧边栏平时只有几个人名,点开才是日期。导入时直接 `import … into album`,不再按文件名去猜刚导入的是哪一张,
+所以不会再出现空相册或放错相册。导入没成功会在终端里写明原因(不影响回传)。
 ```bash
 python3 mac_worker.py --server http://工作台IP:18765 --token 采集端Token --import-photos
 ```
+
+**第一次用(或更新代码后)先做两步:**
+```bash
+cd tools/livephoto
+python3 organize_photos.py --selftest   # 建个临时文件夹和相册再删掉,确认「照片」的脚本命令能用
+python3 organize_photos.py              # 只看计划:旧的「张怡 · 2026-11-14」平铺相册会搬到哪里、哪些是空的
+python3 organize_photos.py --apply      # 真正整理:照片加进新相册,旧相册删掉(只删相册,照片本身不动)
+```
+
+**分发给同事**:侧边栏点开某个人的文件夹 → 点日期相册 → ⌘A 全选 → 右键 / 分享 → AirDrop 到她的 iPhone;
+或者她的 iPhone 和这台 Mac 用同一个 iCloud,照片会自己同步过去。
+(照片 App 里文件夹内的相册顺序是手动的,新相册加在最后,所以日期从旧到新排。)
+
+**补导漏导入的包**:`python3 reimport_missing.py --scan ~/LivePhotos --dry-run` 先看清单,去掉 `--dry-run` 再执行;
+会按路径 `~/LivePhotos/发起人/日期/` 放进对应的文件夹和相册。
+
+**改代码后跑单元测试**(不需要照片 App):`python3 -m unittest test_photos_lib -v`
 
 ## 不连工作台,只处理一个文件夹
 ```bash
