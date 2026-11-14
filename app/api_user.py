@@ -803,6 +803,22 @@ def redo_images(did: int, redo_all: int = Query(0, alias="all")):
 
 
 # ---------- 发布登记 ----------
+class AccountBatch(BaseModel):
+    ids: list[int]
+    account_id: str = ""   # 空 = 清除
+
+
+@router.post("/api/drafts/set_account")
+def set_account_batch(p: AccountBatch):
+    """批量指定(或清除)稿子的发布账号。别人的稿子自动略过。"""
+    if not p.ids:
+        raise HTTPException(400, "先选要指定账号的稿子")
+    aid, name = _pick_account(p.account_id)
+    with conn() as c:
+        n = sum(c.execute("UPDATE drafts SET account_id=?, account_name=? WHERE id=?", (aid, name, i)).rowcount for i in visible("draft", p.ids[:300]))
+    return {"ok": True, "n": n, "account_id": aid, "account_name": name}
+
+
 class PublishBatch(BaseModel):
     ids: list[int]
     on: bool = True
@@ -904,12 +920,15 @@ def loop_drafts(tier: str = "", account_id: str = ""):
 
 
 @router.get("/api/loop/page")
-def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1, size: int = 20, wins: int = 12):
+def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1, size: int = 20, wins: int = 12, noacc: int = 0):
     """复盘页一次取齐:只算一次对号,各个列表按页切(原来要请求 5 次,每次都重算,稿子多了很慢)。"""
     size = min(max(size, 1), 100)
     ev = _my_eval()
     rows = _loop_rows(ev, tier)
     regs = _loop_rows(ev, "unpublished" if reg == "todo" else "nodata")
+    n_noacc = sum(1 for r in regs if not r["account_id"])   # 没指定发布账号的有几篇(「只看没指定账号」按钮上显示)
+    if noacc:
+        regs = [r for r in regs if not r["account_id"]]
     page = min(max(page, 1), max(1, -(-len(rows) // size)))
     regpage = min(max(regpage, 1), max(1, -(-len(regs) // size)))
     reg_items = regs[(regpage - 1) * size:regpage * size]
@@ -918,7 +937,7 @@ def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1
         reg_items = [{**x, "cover": covers.get(x["id"], "")} for x in reg_items]
     return {"overview": loop.overview(ev), "winners": _loop_rows(ev, "winner")[:max(wins, 0)],
             "rows": {"items": rows[(page - 1) * size:page * size], "total": len(rows), "page": page},
-            "reg": {"items": reg_items, "total": len(regs), "page": regpage},
+            "reg": {"items": reg_items, "total": len(regs), "page": regpage, "noacc": n_noacc},
             "size": size, "cfg": ev["cfg"], "data_at": ev["data_at"]}
 
 

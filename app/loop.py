@@ -113,6 +113,10 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
         if it and register and not d["published"]:
             q_exec("UPDATE drafts SET published=1, published_at=? WHERE id=?", it.get("published_at") or time.strftime("%Y-%m-%d"), d["id"])
             d["published"], d["published_at"] = 1, it.get("published_at") or ""
+        if it and register and not d["account_id"] and it.get("account_id"):   # 稿子没指定账号、但对上的千帆笔记带账号:账号以笔记的为准(它就是真实发布的账号),补到稿子上
+            nm = it.get("account_name") or qianfan.account_name(it["account_id"]) or ""
+            q_exec("UPDATE drafts SET account_id=?, account_name=? WHERE id=?", it["account_id"], nm, d["id"])
+            d["account_id"], d["account_name"] = it["account_id"], nm
         acc = it.get("account_id") if it else (d["account_id"] or "")
         tier, lift = classify(it, d, base.get(acc or "") or base.get(""), c)
         rows.append({"id": d["id"], "title": d["title"], "topic": _topic(d["angle"]), "angle": d["angle"], "track": d["track"] or "", "project_id": d["project_id"],

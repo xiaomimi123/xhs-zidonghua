@@ -32,6 +32,24 @@ def run(rep, env):
     lib_ac = {d["id"]: d for d in au_ac.library(pj_ac)}
     rep.check("发布账号:成品库带账号,对上号的带发布后表现", lib_ac[ids_ac[0]]["account_name"] == "老账号" and lib_ac[ids_ac[0]]["perf"]["views"] == 100 and lib_ac[ids_ac[1]]["perf"] is None, str({k: v for k, v in lib_ac[ids_ac[0]].items() if k in ("account_name", "perf")}))
     rep.check("发布账号:员工端账号列表", [a["account_id"] for a in aqf.user_accounts()] == ["u2", "u1"])
+    # 批量指定账号 / 没指定账号的稿子按对上的笔记补账号
+    r_b = au_ac.set_account_batch(au_ac.AccountBatch(ids=[ids_ac[0], ids_ac[1], 99999999], account_id="u2"))
+    rep.check("发布账号:批量指定,返回成功个数(不存在的 id 略过)", r_b["n"] == 2 and r_b["account_name"] == "新账号"
+              and all(r["account_id"] == "u2" for r in q("SELECT account_id FROM drafts WHERE id IN (?,?)", ids_ac[0], ids_ac[1])))
+    rep.check("发布账号:批量指定的账号必须是千帆里有的;没选稿子 400",
+              _raises2(lambda: au_ac.set_account_batch(au_ac.AccountBatch(ids=[ids_ac[0]], account_id="nope"))) and _raises2(lambda: au_ac.set_account_batch(au_ac.AccountBatch(ids=[], account_id="u1"))))
+    au_ac.set_account_batch(au_ac.AccountBatch(ids=[ids_ac[0]], account_id=""))
+    rep.check("发布账号:批量清除回到未指定", q("SELECT account_id FROM drafts WHERE id=?", ids_ac[0])[0]["account_id"] == "")
+    from app import loop as loop_ac
+    loop_ac.evaluate(register=False)
+    rep.check("发布账号:只看不登记时不改稿子的账号", q("SELECT account_id FROM drafts WHERE id=?", ids_ac[0])[0]["account_id"] == "")
+    loop_ac.evaluate()
+    row_fill = q("SELECT account_id, account_name FROM drafts WHERE id=?", ids_ac[0])[0]
+    rep.check("发布账号:没指定账号的稿子,对上的千帆笔记带账号就补上(用笔记的账号);已指定的不动",
+              row_fill["account_id"] == "u1" and row_fill["account_name"] == "老账号" and q("SELECT account_id FROM drafts WHERE id=?", ids_ac[1])[0]["account_id"] == "u2", str(row_fill))
+    pg_ac = au_ac.loop_page(reg="todo", noacc=0)
+    rep.check("复盘页:发布登记带「没指定账号」的篇数,noacc=1 只留没指定的", pg_ac["reg"]["noacc"] == sum(1 for r in au_ac.loop_page(reg="todo", size=100)["reg"]["items"] if not r["account_id"])
+              and all(not r["account_id"] for r in au_ac.loop_page(reg="todo", noacc=1, size=100)["reg"]["items"]))
     # 选题分析:笔记按标题归类后,按账号汇总哪类选题表现好
     from app import llm as llm_tp
     db.q_exec("DELETE FROM qf_snapshots WHERE kind='notes'")
