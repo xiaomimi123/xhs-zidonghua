@@ -421,7 +421,11 @@ async function fLib() {
 const pvFull = async d => { if (d.content !== undefined) return d; try { Object.assign(d, await api(`/api/library/${d.id}`)); } catch { d.content = d.content ?? ""; d.tags = d.tags || []; } return d; };
 async function fOpen(id, list) {
   await fetchAccts();
-  FL.pv = { list, i: list.findIndex(d => d.id === id), img: 0, dirty: false, more: false, opener: document.activeElement };
+  let i = list.findIndex(d => d.id === id);
+  if (i < 0) {   // 列表里没有这篇(成品库列表只带最新的 500 篇,复盘里能点到更早的稿子):单独取这一篇打开
+    try { list = [await api(`/api/library/${id}`)]; i = 0; } catch (err) { return toast(err.message || "这篇稿子打不开", 1); }
+  }
+  FL.pv = { list, i, img: 0, dirty: false, more: false, opener: document.activeElement };
   document.body.classList.add("fl-lock"); await pvFull(list[FL.pv.i]); if (FL.pv) drawPv();
 }
 function closePv() { const dirty = FL.pv?.dirty, op = FL.pv?.opener; FL.pv = null; $(".fl-pv")?.remove(); document.body.classList.remove("fl-lock"); if (dirty) render(); else if (op && op.isConnected) op.focus({ preventScroll: true }); }
@@ -667,6 +671,13 @@ function nbOpen(i) {
 const LP = { tier: "", reg: "todo", sel: new Set(), page: 1, regPage: 1, winAll: false, noacc: false };
 const LP_WIN = 6;   // 爆款榜默认先列几篇
 const LP_SIZE = 20;   // 复盘页每个列表每页条数
+// 稿子卡片(小红书笔记的样子):封面在上、标题两行、账号 + 点赞在下;左上角判定,右上角相对平均的倍数
+const lpCard = r => `<article class="lp-nc" data-open="${r.id}" tabindex="0" role="button" aria-label="${esc(r.title)}">
+  <div class="lp-ncv">${r.cover ? `<img src="${esc(thumb("/images/" + r.cover, 360))}" alt="" loading="lazy" decoding="async">` : `<i>${esc((r.title || "").slice(0, 6))}</i>`}
+    <span class="fl-pill lp-nct ${TIER_CLS[r.tier]}">${r.tier_name}</span>${r.lift != null ? `<span class="lp-ncl ${r.lift >= 2 ? "hot" : ""}">×${r.lift}</span>` : ""}</div>
+  <div class="lp-ncb"><b class="lp-nctt">${esc(r.title)}</b>
+    <div class="lp-ncm"><span class="lp-nca"><i>${esc((r.account_name || "?").slice(0, 1))}</i><span>${esc(r.account_name || "未指定账号")}</span></span><span class="lp-ncs" title="点赞">♡ ${r.likes == null ? "-" : fmtN(r.likes)}</span></div>
+    <div class="lp-ncd">${r.published_at ? esc(String(r.published_at).slice(5)) : "未发布"}${r.views != null ? ` · 阅读 ${fmtN(r.views)}` : ""}${r.collects ? ` · 藏 ${r.collects}` : ""}${r.generation ? ` · 第${r.generation}代` : ""}</div></div></article>`;
 const TIER_CLS = { winner: "bad", good: "ok", normal: "", weak: "", observing: "warn", nodata: "", unpublished: "" };
 const lpPct = r => r == null ? "-" : Math.round(r * 100) + "%";
 const lpCv = r => `<span class="lp-cv">${r.cover ? `<img src="${esc(thumb("/images/" + r.cover, 240))}" alt="" loading="lazy" decoding="async">` : `<i>${esc((r.title || "").slice(0, 4))}</i>`}</span>`;
@@ -813,7 +824,7 @@ async function fLoop() {
   <section class="card" style="margin-top:12px"><div class="card-h"><b>评分准不准 · 哪些做法有效</b><span class="sub">拿稿子发布时的评分和写法,对比后来的真实表现;用「相对本账号平均」比,弱账号的低数据不拖累结论</span></div>${lpLearn(ov.learn, ov.adherence)}</section>
   <h3 class="lp-h">全部稿子的表现</h3>
   <div class="fl-chips" style="margin-bottom:10px">${Object.entries(names).map(([k, n]) => `<button class="chip ${LP.tier === k ? "on" : ""}" data-lt="${k}">${n}${k ? ` ${ov.tiers[k] ?? 0}` : ""}</button>`).join("")}</div>
-  <section class="card flush">${rows.length ? `<table class="tbl lp-tbl"><thead><tr><th>稿子</th><th>账号</th><th>发布</th><th class="num">阅读</th><th class="num">赞藏评</th><th class="num">相对平均</th><th>判定</th></tr></thead><tbody>${rows.map(r => `<tr data-open="${r.id}"><td class="lp-tt">${esc(r.title)}${r.generation ? ` <span class="sub">· 第${r.generation}代</span>` : ""}</td><td class="sub">${esc(r.account_name || "-")}</td><td class="sub">${esc(r.published_at || "-")}</td><td class="num">${r.views == null ? "-" : fmtN(r.views)}</td><td class="num">${r.eng == null ? "-" : r.eng}</td><td class="num">${r.lift == null ? "-" : "×" + r.lift}</td><td><span class="fl-pill ${TIER_CLS[r.tier]}">${r.tier_name}</span></td></tr>`).join("")}</tbody></table>` : `<div class="empty" style="border:0">这个筛选下没有稿子</div>`}</section>
+  ${rows.length ? `<div class="lp-nc-grid">${rows.map(lpCard).join("")}</div>` : `<section class="card"><div class="empty" style="border:0">这个筛选下没有稿子</div></section>`}
   ${pager(LP.page, pg.rows.total, LP_SIZE, "lpg")}
   <p class="sub" style="margin:14px 2px 0">「相对平均」= 这篇的互动(赞+藏+评)÷ 该账号所有笔记的平均(去掉最高 5%);账号互动很少时改比阅读量。刚发布的稿子数据还没沉淀,标为「观察中」,不下结论。阈值由管理端调整。数据更新于 ${esc(String(dr.data_at || "-").slice(0, 16))}。</p>`;
   // 勾选 / 全选只改界面,不用重新请求整页
