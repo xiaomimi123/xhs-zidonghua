@@ -108,11 +108,12 @@ class Api:
             print(f"   (没能把失败原因告诉工作台:{e})")
 
 
-def import_to_photos(pvt: Path, person: str = "", day: str = ""):
+def import_to_photos(pvt: Path, person: str = "", day: str = "", share: bool = False, share_flat: bool = False):
     """把 .pvt 包导入本机「照片」App,放进「发起人」文件夹里「任务日期」的相册(没有发起人放「未署名」)。
     照片 App 的 import 命令会强制把自己弹到前台(实测隐藏没用,这是照片 App 的固有行为),
     所以导入前记下当时的前台 App,导入后立刻把焦点还回去,把干扰压到最低。
-    相册结构和导入细节见 photos_lib.py。成功返回 True。"""
+    share=True 时,导入成功后再把这张加进这个人的 iCloud 共享相簿(经「待分享」暂存相册 + 快捷指令「加入共享-发起人」,见 photos_lib.py);
+    共享失败不影响导入和回传,只在终端里写原因。相册结构和导入细节见 photos_lib.py。成功返回 True。"""
     import photos_lib
     try:
         front = subprocess.run(["osascript", "-e",
@@ -136,13 +137,19 @@ def import_to_photos(pvt: Path, person: str = "", day: str = ""):
         where = f"{photos_lib.clean_person(person)} / {photos_lib.clean_day(day)}"
         print(f"   {'已导入照片 App' if ok else '导入有问题'}:{pvt.name} → {where}" + ("" if ok else f"  ({msg})"))
         time.sleep(3)   # 给照片 App 一点处理时间
+        if ok and share:
+            try:
+                s_ok, s_msg = photos_lib.share_after_import(pvt, person, share_flat)
+            except Exception as e:   # 共享出任何问题都不能拖垮导入 / 回传
+                s_ok, s_msg = False, f"共享出错:{e}"
+            print(f"   {'✓ ' if s_ok else '○ '}{s_msg}")
         return bool(ok)
     except Exception as e:
         print(f"   导入照片 App 失败(不影响回传):{e}")
         return False
 
 
-def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool = False, first_frame_still: bool = False, sharpen: float = 0.6, to_photos: bool = False):
+def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool = False, first_frame_still: bool = False, sharpen: float = 0.6, to_photos: bool = False, share: bool = False, share_flat: bool = False):
     t0 = time.time()
     print(f"[任务 {job['id']}] {job.get('name', '')}  {'真实动作(以视频为源)' if job.get('video') else '慢推镜头'}  参数 {job['opts']}")
     with tempfile.TemporaryDirectory() as td:
@@ -158,7 +165,7 @@ def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool
         owner_out = out / (job.get("by") or "未署名") / day
         pvt = make_pvt(None if (first_frame_still and video) else src, owner_out, f"L{job['id']}", job["opts"], use_makelive, video, keep_audio, sharpen)
     if to_photos:
-        import_to_photos(pvt, job.get("by") or "", job.get("created") or "")   # 发起人文件夹 → 任务日期相册
+        import_to_photos(pvt, job.get("by") or "", job.get("created") or "", share, share_flat)   # 发起人文件夹 → 任务日期相册;share 时再加进这个人的共享相簿
     api.upload(job["id"], zip_dir(pvt))
     print(f"   完成 {time.time() - t0:.0f} 秒 → {pvt}")
 
@@ -189,7 +196,7 @@ def serve(a):
             continue
         idle_logged = False
         try:
-            run_job(api, job, a.out, not a.no_pvt, a.keep_audio, a.first_frame_still, a.sharpen, a.import_photos)
+            run_job(api, job, a.out, not a.no_pvt, a.keep_audio, a.first_frame_still, a.sharpen, a.import_photos, a.share, a.share_flat)
         except Exception as e:
             print(f"   失败:{e}")
             api.fail(job["id"], f"{type(e).__name__}: {e}")
@@ -228,6 +235,8 @@ def main():
     ap.add_argument("--once", action="store_true", help="只做一个任务就退出")
     ap.add_argument("--no-pvt", action="store_true", help="不调用 makelive(非 macOS 测试用)")
     ap.add_argument("--import-photos", action="store_true", help="每做完一个包就自动导入本机「照片」App(成品同时回传工作台)")
+    ap.add_argument("--share", action="store_true", help="导入后自动加进这个人的 iCloud 共享相簿(自动带上 --import-photos);要先按 share_setup.py 的说明建好暂存相册和快捷指令")
+    ap.add_argument("--share-flat", action="store_true", help="暂存相册用顶层相册「待分享-张怡」(快捷指令里选不到「待分享」文件夹里的相册时用)")
     ap.add_argument("--keep-audio", action="store_true", help="真实动作模式:保留视频里模型生成的声音(默认去掉)")
     ap.add_argument("--sharpen", type=float, default=0.6, help="真实动作模式:视频轻锐化强度(AI 视频偏软),0 = 关闭,超过 1 容易出白边")
     ap.add_argument("--first-frame-still", action="store_true", help="真实动作模式:关键照片取视频第一帧,而不是原图")
@@ -236,6 +245,8 @@ def main():
     ap.add_argument("--focus-y", type=float, default=0.35)
     ap.add_argument("--fit", choices=("crop", "blur"), default="crop")
     a = ap.parse_args()
+    if a.share:
+        a.import_photos = True
     if platform.system() != "Darwin" and not a.no_pvt:
         raise SystemExit("makelive 只能在 macOS 上用。想在别的系统上测试流程,加 --no-pvt(做出的包 iPhone 认不了)。")
     if a.local:
