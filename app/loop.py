@@ -93,6 +93,30 @@ def classify(it: dict | None, d: dict, base: tuple[str, float] | None, c: dict) 
     return "normal", lift
 
 
+def edit_info(pe: dict | None, title_sim: float | None) -> dict:
+    """发布时对稿子的改动。标题相似度系统自己算;封面 / 正文有没有改,靠登记时勾选(没勾选的按没改算)。
+    大改 = 封面和正文都改了,或标题已经面目全非(相似度 < 0.5);小改 = 改了封面或正文之一,或标题有改动(< 0.8)。"""
+    pe = pe if isinstance(pe, dict) else {}
+    cover, body = bool(pe.get("cover")), bool(pe.get("body"))
+    ts = title_sim if title_sim is not None else pe.get("title_sim")
+    major = (cover and body) or (ts is not None and ts < 0.5)
+    minor = cover or body or (ts is not None and ts < 0.8)
+    return {"level": "大改" if major else "小改" if minor else "原样", "title_sim": ts, "cover": cover, "body": body, "src": pe.get("src") or ""}
+
+
+def snapshot(d: dict) -> dict:
+    """稿子发布时的打分快照:评分(总分 / 等级 / 各维度 / 量化贴合度)、封面类型和版式、标题和正文的写法特征、角度、帖子类型。
+    只由稿子自己的字段算出来,和千帆数据无关,所以任何时候都能补算(老稿的快照取的是现在的内容,标 backfill)。"""
+    from . import stats
+    f = stats.features({"title": d.get("title"), "content": d.get("content"), "tags": d.get("tags"), "images": d.get("images")})
+    rv = d.get("review") if isinstance(d.get("review"), dict) else {}
+    cc = d.get("cover_card") or {}
+    return {"score": rv.get("overall"), "grade": rv.get("grade") or "", "dims": rv.get("dims") or {}, "quant": (rv.get("quant") or {}).get("score"),
+            "title_len": f["title_len"], "t_digit": f["t_digit"], "t_mark": f["t_mark"], "t_emoji": f["t_emoji"], "body_len": f["body_len"], "paras": f["paras"],
+            "emoji_100": round(f["emoji_100"], 2), "list_ratio": round(f["list_ratio"], 2), "cta": f["cta"], "images": f["images"],
+            "cover_kind": _cover_kind(d), "cover_layout": cc.get("layout", ""), "topic": _topic(d.get("angle")), "ptype": d.get("ptype") or "", "at": time.strftime("%Y-%m-%d %H:%M")}
+
+
 def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
     """返回 {"rows": [每篇稿子的判定], "cfg": 当前阈值}。register=True 时把对上号的稿子登记成已发布。
     pre = (笔记列表, 数据时间, 对号结果):调用方已经算过就传进来,不再重算(成品库每次打开都要用)。"""
@@ -105,14 +129,28 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
     base = _baselines(items)
     spawned = {r["spawn_from"]: r["n"] for r in q_all("SELECT spawn_from, COUNT(*) AS n FROM projects WHERE spawn_from IS NOT NULL GROUP BY spawn_from")}
     drafts = q_all("""SELECT d.id, d.title, d.angle, d.account_id, d.account_name, d.project_id, d.published, d.published_at, d.qf_note_id, d.status, d.auto_ok, d.created, d.images, d.cover_card, d.ptype,
-        p.track, p.created_by, p.owner_id, p.spawn_from, COALESCE(p.generation, 0) AS generation
+        p.track, p.created_by, p.owner_id, p.spawn_from, COALESCE(p.generation, 0) AS generation, d.feat, d.pub_edit
         FROM drafts d LEFT JOIN projects p ON p.id=d.project_id WHERE d.title!='' ORDER BY d.id DESC""")
+    need = [d["id"] for d in drafts if (d["published"] or perf.get(d["id"])) and not d["feat"]]   # 已发布但还没存快照的:补存(只取这几篇的正文,不拖慢整个列表)
+    if need and register:
+        from . import autorun
+        for r in autorun._in_chunks("SELECT id, title, content, tags, images, review, angle, ptype, cover_card FROM drafts WHERE id IN ({})", need):
+            q_exec("UPDATE drafts SET feat=? WHERE id=?", json.dumps(snapshot(r), ensure_ascii=False), r["id"])
+        fresh = {r["id"]: r["feat"] for r in q_all("SELECT id, feat FROM drafts WHERE id IN (%s)" % ",".join(str(i) for i in need))}
+        for d in drafts:
+            if d["id"] in fresh:
+                d["feat"] = fresh[d["id"]]
     rows = []
     for d in drafts:
         it = perf.get(d["id"])
         if it and register and not d["published"]:
             q_exec("UPDATE drafts SET published=1, published_at=? WHERE id=?", it.get("published_at") or time.strftime("%Y-%m-%d"), d["id"])
             d["published"], d["published_at"] = 1, it.get("published_at") or ""
+        pe = d["pub_edit"] if isinstance(d["pub_edit"], dict) else {}
+        ts = qianfan.title_sim(d["title"], it.get("title") or "") if it else None
+        if it and register and pe.get("title_sim") != ts:   # 对上笔记后记下标题改了多少(手动对上时勾选的封面 / 正文改动已经在 pe 里,保留)
+            pe = {**pe, "title_sim": ts, "src": pe.get("src") or "auto"}
+            q_exec("UPDATE drafts SET pub_edit=? WHERE id=?", json.dumps(pe, ensure_ascii=False), d["id"])
         if it and register and not d["account_id"] and it.get("account_id"):   # 稿子没指定账号、但对上的千帆笔记带账号:账号以笔记的为准(它就是真实发布的账号),补到稿子上
             nm = it.get("account_name") or qianfan.account_name(it["account_id"]) or ""
             q_exec("UPDATE drafts SET account_id=?, account_name=? WHERE id=?", it["account_id"], nm, d["id"])
@@ -126,6 +164,7 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
                      "published_at": (it or {}).get("published_at") or d["published_at"] or "", "days": _days_since((it or {}).get("published_at") or d["published_at"] or ""),
                      "views": (it or {}).get("views"), "likes": (it or {}).get("likes"), "collects": (it or {}).get("collects"),
                      "comments": (it or {}).get("comments"), "eng": _eng(it) if it else None,
+                     "feat": d["feat"] if isinstance(d["feat"], dict) else None, "edit": edit_info(pe, ts) if it else None,
                      "cover_kind": _cover_kind(d), "cover_name": COVER_KINDS.get(_cover_kind(d), "(旧稿没记录)"), "cover_layout": (d["cover_card"] or {}).get("layout", ""), "ptype": d["ptype"] or "(未标注)"})
     return {"rows": rows, "cfg": c, "data_at": at}
 
@@ -136,6 +175,116 @@ def _rate(rs: list[dict]) -> dict:
     lifts = [r["lift"] for r in mature if r["lift"] is not None]
     return {"n": len(rs), "mature": len(mature), "winners": len(w), "rate": round(len(w) / len(mature), 3) if mature else None,
             "lift_avg": round(sum(lifts) / len(lifts), 2) if lifts else None}
+
+
+MIN_LEARN = 30   # 有结论的稿子攒到这么多篇,才对「评分准不准 / 什么做法有效」下结论;之前只展示
+
+
+def _mean(xs):
+    return sum(xs) / len(xs) if xs else None
+
+
+def _pearson(xs, ys):
+    n = len(xs)
+    if n < 3:
+        return None
+    mx, my = _mean(xs), _mean(ys)
+    sx, sy = sum((x - mx) ** 2 for x in xs), sum((y - my) ** 2 for y in ys)
+    return None if not sx or not sy else sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / (sx * sy) ** 0.5
+
+
+def _band(v, cuts, labels):
+    for c, lab in zip(cuts, labels):
+        if v >= c:
+            return lab
+    return labels[-1]
+
+
+# 要对比的「做法」:(名称, 把快照变成分组标签的函数)。只放能在出稿前决定的东西
+# 第三项:这个做法要「发布时没被改」才能算:cover = 封面没换;title = 标题基本没改(相似度 ≥ 0.8);body = 正文没改;None = 只要不是大改
+FACTORS = [
+    ("封面类型", lambda f: COVER_KINDS.get(f.get("cover_kind"), "") or "(没记录)", "cover"),
+    ("封面版式", lambda f: f.get("cover_layout") or "(没记录)", "cover"),
+    ("标题带数字", lambda f: "带数字" if f.get("t_digit") else "不带数字", "title"),
+    ("标题带问号 / 感叹号", lambda f: "带" if f.get("t_mark") else "不带", "title"),
+    ("标题带 emoji", lambda f: "带" if f.get("t_emoji") else "不带", "title"),
+    ("标题字数", lambda f: _band(f.get("title_len") or 0, (19, 13, 0), ("19 字以上", "13–18 字", "12 字以内")), "title"),
+    ("正文字数", lambda f: _band(f.get("body_len") or 0, (600, 300, 0), ("600 字以上", "300–599 字", "300 字以内")), "body"),
+    ("结尾有互动引导", lambda f: "有" if f.get("cta") else "没有", "body"),
+    ("帖子类型", lambda f: f.get("ptype") or "(未标注)", None),
+]
+
+
+def _unedited(r: dict, part) -> bool:
+    e = r.get("edit") or {}
+    if part == "cover":
+        return not e.get("cover")
+    if part == "body":
+        return not e.get("body")
+    if part == "title":
+        return e.get("title_sim") is None or e["title_sim"] >= 0.8
+    return e.get("level") != "大改"
+
+
+def learning(ev: dict) -> dict:
+    """评分准不准、什么做法有效:拿稿子发布时的打分快照,和后来的真实表现(相对本账号平均的倍数)对比。
+    只用发布满 N 天、对上千帆数据的稿子;用「相对本账号平均」比,弱账号的低数据不会拖累结论。有结论的稿子不到 MIN_LEARN 篇时只展示、不下结论。"""
+    rows = ev["rows"]
+    mature = [r for r in rows if r["tier"] in ("winner", "good", "normal", "weak") and r.get("lift") is not None]
+    done_all = [r for r in mature if r.get("feat")]
+    done = [r for r in done_all if _unedited(r, None)]   # 评分 / 维度对比:发布时改得面目全非的(大改)不算,表现好坏已经不是我们的评分能解释的
+    obs = [r for r in rows if r["tier"] == "observing"]
+    min_days = ev["cfg"]["min_days"]
+    soon = [max(0, min_days - r["days"]) for r in obs if r.get("days") is not None]
+
+    def agg(rs):
+        lifts = [r["lift"] for r in rs]
+        return {"n": len(rs), "winners": sum(1 for r in rs if r["tier"] == "winner"), "lift": round(_mean(lifts), 2) if lifts else None}
+    bands = []
+    scored = [r for r in done if r["feat"].get("score") is not None]
+    for lo, hi, lab in ((90, 101, "90 分以上"), (80, 90, "80–89 分"), (70, 80, "70–79 分"), (0, 70, "70 分以下")):
+        rs = [r for r in scored if lo <= r["feat"]["score"] < hi]
+        if rs:
+            bands.append({"label": lab, **agg(rs)})
+    dims = []
+    from .llm import REVIEW_DIMS
+    for dname in REVIEW_DIMS:
+        pairs = [(r["feat"]["dims"][dname], r["lift"]) for r in done if isinstance(r["feat"].get("dims"), dict) and r["feat"]["dims"].get(dname) is not None]
+        r_ = _pearson([p[0] for p in pairs], [p[1] for p in pairs]) if len(pairs) >= 5 else None
+        dims.append({"name": dname, "n": len(pairs), "r": None if r_ is None else round(r_, 2)})
+    corr_all = _pearson([r["feat"]["score"] for r in scored], [r["lift"] for r in scored]) if len(scored) >= 5 else None
+    factors = []
+    for name, fn, part in FACTORS:
+        g = defaultdict(list)
+        for r in done_all:
+            if _unedited(r, part):
+                g[fn(r["feat"])].append(r)
+        items = sorted(({"label": k, **agg(v)} for k, v in g.items()), key=lambda x: -(x["lift"] or 0))
+        if len(items) > 1:   # 只有一种做法没得比,不列
+            factors.append({"name": name, "items": items})
+    egroups = defaultdict(list)
+    for r in mature:
+        egroups[(r.get("edit") or {}).get("level") or "原样"].append(r)
+    edits = [{"label": k, **agg(egroups[k])} for k in ("原样", "小改", "大改") if egroups.get(k)] if len(egroups) > 1 else []
+    return {"n_edited": len(done_all) - len(done), "edits": edits, "n_done": len(done), "n_obs": len(obs), "need": MIN_LEARN, "ready": len(done) >= MIN_LEARN, "soon_days": min(soon) if soon else None,
+            "lift_avg": round(_mean([r["lift"] for r in done]), 2) if done else None, "bands": bands, "score_corr": None if corr_all is None else round(corr_all, 2),
+            "dims": dims if scored else [], "factors": factors, "min_days": min_days}
+
+
+def adherence(ev: dict) -> list[dict]:
+    """每个人发出去的稿子有多少能对上笔记、对上的里面有多少是原样发的(发布一致率):对不上的追踪不到,改得多的归因不了。"""
+    by = defaultdict(lambda: {"published": 0, "linked": 0, "original": 0, "edited": 0})
+    for r in ev["rows"]:
+        if not (r["published"] or r.get("edit")):
+            continue
+        b = by[r.get("created_by") or "(未记录)"]
+        b["published"] += 1
+        if r.get("edit"):
+            b["linked"] += 1
+            b["original" if r["edit"]["level"] == "原样" else "edited"] += 1
+    out = [{"name": k, **v, "link_rate": round(v["linked"] / v["published"], 2) if v["published"] else None,
+            "original_rate": round(v["original"] / v["linked"], 2) if v["linked"] else None} for k, v in by.items()]
+    return sorted(out, key=lambda x: -x["published"])
 
 
 def overview(ev: dict | None = None) -> dict:
@@ -163,7 +312,7 @@ def overview(ev: dict | None = None) -> dict:
                          key=lambda x: x["created"], reverse=True)[:12]
     gens = {"original": _rate([r for r in got if not r["generation"]]), "spawned": _rate([r for r in got if r["generation"]])}
     return {"funnel": [{"key": k, "name": n, "n": v} for k, n, v in funnel], "tiers": {t: sum(1 for r in rows if r["tier"] == t) for t in TIERS},
-            "by_topic": group("topic"), "by_cover": group("cover_name", 1), "by_ptype": group("ptype", 1), "by_account": group("account_name", 1), "by_project": by_project, "spawn_effect": gens, "cfg": ev["cfg"], "data_at": ev["data_at"],
+            "by_topic": group("topic"), "by_cover": group("cover_name", 1), "by_ptype": group("ptype", 1), "by_account": group("account_name", 1), "learn": learning(ev), "adherence": adherence(ev), "by_project": by_project, "spawn_effect": gens, "cfg": ev["cfg"], "data_at": ev["data_at"],
             "no_data": not got and not q_one("SELECT 1 AS x FROM qf_snapshots WHERE kind='notes' LIMIT 1")}
 
 

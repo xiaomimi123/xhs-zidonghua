@@ -494,7 +494,7 @@ function bindPv(m) {
       return;
     }
     if (e.target.closest("[data-ppubd]")) {
-      try { await api("/api/drafts/publish", "POST", { ids: [d.id], on: true, published_at: $("#pvday").value }); toast("已登记发布"); await pvRefresh(d); } catch (err) { toast(err.message, 1); }
+      try { await api("/api/drafts/publish", "POST", { ids: [d.id], on: true, published_at: $("#pvday").value }); toast("已登记发布"); await pvRefresh(d); bindDialog([d.id], () => pvRefresh(d)); } catch (err) { toast(err.message, 1); }
       return;
     }
     if (e.target.closest("[data-plink]")) return linkDialog(d.id, d, () => pvRefresh(d));
@@ -669,6 +669,66 @@ const LP_WIN = 6;   // 爆款榜默认先列几篇
 const LP_SIZE = 20;   // 复盘页每个列表每页条数
 const TIER_CLS = { winner: "bad", good: "ok", normal: "", weak: "", observing: "warn", nodata: "", unpublished: "" };
 const lpPct = r => r == null ? "-" : Math.round(r * 100) + "%";
+const lpCv = r => `<span class="lp-cv">${r.cover ? `<img src="${esc(thumb("/images/" + r.cover, 240))}" alt="" loading="lazy" decoding="async">` : `<i>${esc((r.title || "").slice(0, 4))}</i>`}</span>`;
+// 标记已发布后弹出:顺手把发出去的笔记绑上(候选点一下 / 粘贴链接),数据才追踪得到;不想现在绑可以关掉,之后在「标了发布但没对上」里补
+async function bindDialog(ids, onDone) {
+  if (!ids.length) return;
+  const m = document.createElement("div"); m.className = "mask"; m.style.zIndex = 60;
+  m.innerHTML = `<div class="card lp-dlg lp-bdlg"><div class="card-h"><b>已标记发布,顺手绑定笔记</b><button class="btn ghost sm" data-x>稍后再绑</button></div>
+    <p class="sub" style="margin:0 0 10px" id="bdsub">正在找笔记…</p><div class="lp-bl" id="bdl"></div></div>`;
+  document.body.appendChild(m);
+  const close = () => { m.remove(); onDone ? onDone() : fLoop(); };
+  let rows = [];
+  const draw = () => {
+    const left = rows.filter(r => !r.done && !r.matched).length;
+    $("#bdsub").innerHTML = left ? `点一下候选笔记就绑定,或粘贴笔记链接;发布时改了封面 / 正文的勾上。还有 <b>${left}</b> 篇没绑,绑定后这篇稿子的数据才能追踪到。` : "都处理好了,可以关掉了。";
+    $("#bdl").innerHTML = rows.map(r => r.done || r.matched ? `<div class="lp-rc nd lp-ok">${lpCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">✓ ${r.matched ? `已自动对上千帆笔记(${esc(String(r.matched.title).slice(0, 18))})` : r.pending ? "已记下链接,等千帆数据同步后自动对上" : "已绑定"}</span></span></div>`
+      : `<div class="lp-rc nd" data-id="${r.id}">${lpCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${esc(r.account_name || "未指定账号")}</span>${lpBind(r)}</span></div>`).join("");
+  };
+  try { rows = (await api(`/api/loop/bind_cands?ids=${ids.join(",")}`)).items; } catch (err) { toast(err.message, 1); return m.remove(); }
+  if (!rows.length) return m.remove();
+  draw();
+  m.onclick = async e => {
+    if (e.target === m || e.target.closest("[data-x]")) return close();
+    const card = e.target.closest(".lp-rc[data-id]"); if (!card) return;
+    const id = +card.dataset.id, flags = { cover: !!card.querySelector("[data-ed=cover]")?.checked, body: !!card.querySelector("[data-ed=body]")?.checked };
+    const qk = e.target.closest("[data-quick]"), bd = e.target.closest("[data-bind]");
+    if (!qk && !bd) return;
+    let body;
+    if (qk) body = { note_id: qk.dataset.quick.split(":")[1] };
+    else { const url = card.querySelector("[data-url]").value.trim(); if (!url) return toast("先粘贴笔记链接", 1); body = { url }; }
+    try {
+      const r = await api(`/api/drafts/${id}/link`, "POST", { ...body, ...flags });
+      const row = rows.find(x => x.id === id); row.done = true; row.pending = r.pending;
+      if (qk) rows.forEach(x => { if (x.cands) x.cands = x.cands.filter(c => c.note_id !== body.note_id); });   // 这篇笔记被绑走了,别的稿子的候选里去掉
+      draw();
+    } catch (err) { toast(err.message, 1); }
+  };
+}
+// 标了发布但没对上数据:发布时改了标题 / 封面,系统读不到正文和封面,只能给几篇最可能的笔记让人点选,或粘贴笔记链接绑定;改了封面 / 正文的勾上,评分对比时会排除
+const lpBind = r => {
+  const cs = r.cands || [];
+  const hint = r.linked ? `<span class="sub lp-h2">已记下笔记链接,等千帆数据同步后自动对上</span>`
+    : cs.length ? `<span class="sub lp-h2">可能是这几篇,点一下就绑定:</span><span class="lp-pills">${cs.map(c => `<button class="lp-pill" data-quick="${r.id}:${esc(c.note_id)}" title="${esc(c.title)} · 相似 ${Math.round(c.sim * 100)}%${c.same_account ? " · 同账号" : ""}"><b>${esc(c.title.slice(0, 20))}</b><small>${esc(String(c.published_at).slice(5))}${c.views != null ? ` · 阅读 ${c.views}` : ""}${c.same_account ? "" : ` · ${esc(c.account_name || "别的账号")}`}</small></button>`).join("")}</span>`
+      : `<span class="sub lp-h2">千帆里还没有相近的笔记${r.days != null ? `(标记发布 ${r.days} 天)` : ""}:可能还没发,或数据还没同步。已经发了的,粘贴笔记链接也能绑定</span>`;
+  return `${hint}<span class="lp-paste"><input data-url placeholder="粘贴小红书笔记链接" aria-label="笔记链接"><button class="btn sm" data-bind="${r.id}">绑定</button></span>
+    <span class="lp-ed"><label><input type="checkbox" data-ed="cover"> 改了封面</label><label><input type="checkbox" data-ed="body"> 改了正文</label></span>`;
+};
+const lpR = x => x == null ? "—" : (x > 0 ? "+" : "") + x.toFixed(2);
+// 评分准不准 / 什么做法有效:发布时的打分快照 vs 后来的真实表现(相对本账号平均的倍数)
+function lpLearn(L, adh) {
+  const pct = Math.min(100, Math.round(L.n_done * 100 / L.need));
+  const head = `<div class="lp-lp"><div class="lp-lbar"><i style="width:${pct}%"></i></div><span class="sub">有结论的稿子 <b>${L.n_done}</b> / ${L.need} 篇${L.ready ? ",已够下结论" : `,攒够 ${L.need} 篇才下结论,现在只展示`}${L.n_edited ? `。另有 ${L.n_edited} 篇发布时改动很大(大改),不参与评分对比` : ""}。另有 ${L.n_obs} 篇在观察期${L.soon_days != null && L.n_obs ? `,最早 ${L.soon_days ? L.soon_days + " 天后" : "今天"}满 ${L.min_days} 天` : ""}。</span></div>`;
+  if (!L.n_done) return head + `<p class="sub" style="margin:10px 0 0">发布满 ${L.min_days} 天、对上千帆数据的稿子才算「有结论」;系统已经把每篇稿子发布时的评分、封面类型、标题写法记下来,有结论的稿子一出现,这里就开始对比。</p>`;
+  const lift = x => x.lift == null ? "—" : `×${x.lift}`, few = n => n < 5 ? ` <span class="sub">(样本少)</span>` : "";
+  const trend = L.score_corr == null ? "" : `<p class="sub" style="margin:8px 0 0">总分和表现的相关系数 <b>${lpR(L.score_corr)}</b>(−1 到 1;越接近 1,分数越能预测表现;接近 0 说明现在的评分看不出高低)${L.ready ? "" : "。样本还少,仅供参考"}</p>`;
+  const bands = L.bands.length ? `<table class="tbl"><thead><tr><th>评分</th><th class="num">篇数</th><th class="num">爆款</th><th class="num">平均表现(相对本账号平均)</th></tr></thead><tbody>${L.bands.map(b => `<tr><td>${b.label}${few(b.n)}</td><td class="num">${b.n}</td><td class="num">${b.winners}</td><td class="num">${lift(b)}</td></tr>`).join("")}</tbody></table>${trend}` : "";
+  const dims = L.dims.some(d => d.r != null) ? `<h4 class="lp-h4">哪个评分维度最能预测表现</h4><div class="lp-dims">${L.dims.map(d => `<span class="lp-dim ${d.r == null ? "" : d.r >= 0.3 ? "good" : d.r <= -0.1 ? "bad" : ""}"><b>${esc(d.name)}</b>${lpR(d.r)}<small>${d.n} 篇</small></span>`).join("")}</div>` : "";
+  const fac = L.factors.length ? `<h4 class="lp-h4">哪些做法表现更好</h4><div class="lp-fcs">${L.factors.map(f => `<table class="tbl"><thead><tr><th>${esc(f.name)}</th><th class="num">篇数</th><th class="num">平均表现</th></tr></thead><tbody>${f.items.map(x => `<tr><td>${esc(x.label)}${few(x.n)}</td><td class="num">${x.n}</td><td class="num">${lift(x)}</td></tr>`).join("")}</tbody></table>`).join("")}</div>` : "";
+  const edits = L.edits.length ? `<h4 class="lp-h4">改过的 vs 原样发布的</h4><table class="tbl"><thead><tr><th>发布时</th><th class="num">篇数</th><th class="num">爆款</th><th class="num">平均表现</th></tr></thead><tbody>${L.edits.map(x => `<tr><td>${x.label}${few(x.n)}</td><td class="num">${x.n}</td><td class="num">${x.winners}</td><td class="num">${lift(x)}</td></tr>`).join("")}</tbody></table><p class="sub" style="margin:6px 0 0">原样 = 标题基本没改、封面和正文也没改;小改 = 改了封面或正文之一,或标题有改动;大改 = 封面和正文都改了,或标题面目全非。</p>` : "";
+  const ad = adh && adh.length > 1 ? `<h4 class="lp-h4">各人发布一致率</h4><table class="tbl"><thead><tr><th>发布人</th><th class="num">已发布</th><th class="num">对上笔记</th><th class="num">对上率</th><th class="num">原样发布率</th></tr></thead><tbody>${adh.map(a => `<tr><td>${esc(a.name)}</td><td class="num">${a.published}</td><td class="num">${a.linked}</td><td class="num">${a.link_rate == null ? "—" : Math.round(a.link_rate * 100) + "%"}</td><td class="num">${a.original_rate == null ? "—" : Math.round(a.original_rate * 100) + "%"}</td></tr>`).join("")}</tbody></table><p class="sub" style="margin:6px 0 0">对不上笔记的追踪不到数据;改得多的归因不了。这两个比例越高,系统越能从你们的发布里学到东西。</p>` : "";
+  return head + bands + dims + fac + edits + ad;
+}
 const lpEff = (name, e) => `<div class="lp-eff"><span class="sub">${name}</span><b>${lpPct(e.rate)}</b><span class="sub">${e.winners} 爆 / ${e.mature} 篇有结论${e.lift_avg ? ` · 平均 ×${e.lift_avg}` : ""}</span></div>`;
 function lpWinner(r) {
   return `<article class="lp-w" data-open="${r.id}" tabindex="0">
@@ -683,7 +743,9 @@ function lpWinner(r) {
 function linkDialog(did, draft, onDone) {
   const m = document.createElement("div"); m.className = "mask"; m.style.zIndex = 60;   // 要盖在成品预览(z-index 40)上面
   m.innerHTML = `<div class="card lp-dlg"><div class="card-h"><b>对上千帆笔记</b><button class="btn ghost sm" data-x>关闭</button></div>
-    <p class="sub" style="margin:0 0 8px">稿子:${esc(draft ? draft.title : "")}</p><input id="lq" placeholder="搜索千帆里的笔记标题" style="width:100%;margin-bottom:8px"><div class="lp-cl" id="lcl"><div class="sub" style="padding:12px">加载中…</div></div></div>`;
+    <p class="sub" style="margin:0 0 8px">稿子:${esc(draft ? draft.title : "")}</p>
+    <div class="lp-paste" style="margin-bottom:6px"><input id="lurl" placeholder="粘贴小红书笔记链接,直接绑定"><button class="btn sm" id="lurlgo">用链接绑定</button></div>
+    <div class="lp-ed" style="margin-bottom:10px"><label><input type="checkbox" id="led-c"> 发布时改了封面</label><label><input type="checkbox" id="led-b"> 改了正文</label></div><input id="lq" placeholder="搜索千帆里的笔记标题" style="width:100%;margin-bottom:8px"><div class="lp-cl" id="lcl"><div class="sub" style="padding:12px">加载中…</div></div></div>`;
   document.body.appendChild(m);
   const close = () => m.remove();
   const load = async () => {
@@ -694,8 +756,11 @@ function linkDialog(did, draft, onDone) {
   let t; $("#lq").oninput = () => { clearTimeout(t); t = setTimeout(load, 300); };
   m.onclick = async e => {
     if (e.target === m || e.target.closest("[data-x]")) return close();
+    const fl = { cover: $("#led-c").checked, body: $("#led-b").checked };
+    const go_ = async body => { try { const r = await api(`/api/drafts/${did}/link`, "POST", { ...body, ...fl }); toast(r.pending ? "已记下,千帆数据同步后会自动对上" : "已对上,数据会出现在复盘里"); close(); onDone ? onDone() : fLoop(); } catch (err) { toast(err.message, 1); } };
+    if (e.target.closest("#lurlgo")) { const u = $("#lurl").value.trim(); return u ? go_({ url: u }) : toast("先粘贴笔记链接", 1); }
     const c = e.target.closest("[data-nid]"); if (!c) return;
-    try { await api(`/api/drafts/${did}/link`, "POST", { note_id: c.dataset.nid }); toast("已对上,数据会出现在复盘里"); close(); onDone ? onDone() : fLoop(); } catch (err) { toast(err.message, 1); }
+    go_({ note_id: c.dataset.nid });
   };
   load();
 }
@@ -715,12 +780,12 @@ async function fLoop() {
   const regCv = r => `<span class="lp-cv">${r.cover ? `<img src="${esc(thumb("/images/" + r.cover, 240))}" alt="" loading="lazy" decoding="async">` : `<i>${esc((r.title || "").slice(0, 4))}</i>`}</span>`;
   const regRow = r => LP.reg === "todo"
     ? `<label class="lp-rc ${LP.sel.has(r.id) ? "on" : ""}" data-id="${r.id}"><input type="checkbox" data-rsel="${r.id}" ${LP.sel.has(r.id) ? "checked" : ""} aria-label="选择这篇">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${esc(r.account_name || "未指定账号")}</span></span></label>`
-    : `<div class="lp-rc nd">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${esc(r.account_name || "未指定账号")} · 标了已发布${r.published_at ? `(${esc(String(r.published_at).slice(0, 10))})` : ""}</span><span class="lp-ca"><button class="btn gray sm" data-link="${r.id}">对上千帆笔记</button><button class="btn ghost sm" data-unpub="${r.id}" title="其实还没发,取消已发布标记">取消标记</button></span></span></div>`;
+    : `<div class="lp-rc nd" data-id="${r.id}">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${esc(r.account_name || "未指定账号")} · 标了已发布${r.published_at ? `(${esc(String(r.published_at).slice(0, 10))})` : ""}</span>${lpBind(r)}<span class="lp-ca"><button class="btn gray sm" data-link="${r.id}">搜索更多笔记</button><button class="btn ghost sm" data-unpub="${r.id}" title="其实还没发,取消已发布标记">取消标记</button></span></span></div>`;
   const regBlock = `<section class="card" style="margin-top:12px"><div class="card-h"><b>发布登记</b><span class="sub">发布后系统会按标题自动对上千帆数据;这里处理还没登记的和对不上的</span></div>
     <div class="fl-chips" style="margin-bottom:10px"><button class="chip ${LP.reg === "todo" ? "on" : ""}" data-rtab="todo">待登记发布 ${nTodo}</button><button class="chip ${LP.reg === "nodata" ? "on" : ""}" data-rtab="nodata">标了发布但没对上数据 ${nNodata}</button>${pg.reg.noacc || LP.noacc ? `<button class="chip ${LP.noacc ? "on" : ""}" data-rnoacc title="没指定发布账号的稿子,对号时没有账号保护,也归不进任何账号的统计">只看没指定账号 ${pg.reg.noacc}</button>` : ""}</div>
     ${regList.length ? `${LP.reg === "todo" ? `<div class="lp-rbar"><button class="btn gray sm" data-rall>${regList.length && regList.every(r => LP.sel.has(r.id)) ? "取消全选" : `全选本页 ${regList.length} 篇`}</button><span class="sub">已选 <b>${LP.sel.size}</b> 篇</span><label class="sub" style="margin-left:auto">发布日期 <input type="date" id="rday" value="${today}" max="${today}" style="width:auto"></label><button class="btn sm" data-rpub ${LP.sel.size ? "" : "disabled"}>标记已发布</button></div>
       ${accts.length ? `<div class="lp-rbar" style="margin-top:-2px"><span class="sub">给选中的稿子指定发布账号</span><select id="racc" aria-label="发布账号">${accts.map(a => `<option value="${esc(a.account_id)}">${esc(a.name)}</option>`).join("")}</select><button class="btn gray sm" data-racc ${LP.sel.size ? "" : "disabled"}>指定账号</button></div>` : ""}` : `<p class="sub" style="margin:0 0 8px">一般是发布时改过标题,或千帆数据还没同步。点「对上千帆笔记」从千帆里挑一篇手动对上;确实还没发的可以取消标记。</p>`}
-    <div class="lp-rcs">${regList.map(regRow).join("")}</div>${pager(LP.regPage, pg.reg.total, LP_SIZE, "rpg")}`
+    <div class="lp-rcs ${LP.reg === "nodata" ? "nd" : ""}">${regList.map(regRow).join("")}</div>${pager(LP.regPage, pg.reg.total, LP_SIZE, "rpg")}`
       : `<div class="empty" style="border:0;padding:18px">${LP.reg === "todo" ? "所有稿子都登记过了" : "没有对不上的稿子"}</div>`}</section>`;
   const fun = ov.funnel, mx = Math.max(1, ...fun.map(f => f.n));
   const se = ov.spawn_effect;
@@ -745,6 +810,7 @@ async function fLoop() {
   <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按任务批次</b></div>${ov.by_project.length ? tbl("任务", projRows) : none}</section>
   <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按封面类型</b></div>${(ov.by_cover || []).length ? tbl("封面", coverRows) : none}</section>
   <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按帖子类型</b></div>${(ov.by_ptype || []).length ? tbl("类型", ptypeRows) : none}</section></div>
+  <section class="card" style="margin-top:12px"><div class="card-h"><b>评分准不准 · 哪些做法有效</b><span class="sub">拿稿子发布时的评分和写法,对比后来的真实表现;用「相对本账号平均」比,弱账号的低数据不拖累结论</span></div>${lpLearn(ov.learn, ov.adherence)}</section>
   <h3 class="lp-h">全部稿子的表现</h3>
   <div class="fl-chips" style="margin-bottom:10px">${Object.entries(names).map(([k, n]) => `<button class="chip ${LP.tier === k ? "on" : ""}" data-lt="${k}">${n}${k ? ` ${ov.tiers[k] ?? 0}` : ""}</button>`).join("")}</div>
   <section class="card flush">${rows.length ? `<table class="tbl lp-tbl"><thead><tr><th>稿子</th><th>账号</th><th>发布</th><th class="num">阅读</th><th class="num">赞藏评</th><th class="num">相对平均</th><th>判定</th></tr></thead><tbody>${rows.map(r => `<tr data-open="${r.id}"><td class="lp-tt">${esc(r.title)}${r.generation ? ` <span class="sub">· 第${r.generation}代</span>` : ""}</td><td class="sub">${esc(r.account_name || "-")}</td><td class="sub">${esc(r.published_at || "-")}</td><td class="num">${r.views == null ? "-" : fmtN(r.views)}</td><td class="num">${r.eng == null ? "-" : r.eng}</td><td class="num">${r.lift == null ? "-" : "×" + r.lift}</td><td><span class="fl-pill ${TIER_CLS[r.tier]}">${r.tier_name}</span></td></tr>`).join("")}</tbody></table>` : `<div class="empty" style="border:0">这个筛选下没有稿子</div>`}</section>
@@ -768,13 +834,19 @@ async function fLoop() {
     const rt = e.target.closest("[data-rtab]"); if (rt) { LP.reg = rt.dataset.rtab; LP.regPage = 1; LP.sel.clear(); return fLoop(); }
     const rs = e.target.closest("[data-rsel]"); if (rs) { const id = +rs.dataset.rsel; LP.sel.has(id) ? LP.sel.delete(id) : LP.sel.add(id); return syncSel(); }
     if (e.target.closest("[data-rall]")) { LP.sel = regList.length && regList.every(r => LP.sel.has(r.id)) ? new Set() : new Set([...LP.sel, ...regList.map(r => r.id)]); return syncSel(); }
+    const flags = el => { const c = el.closest(".lp-rc"); return { cover: !!c.querySelector("[data-ed=cover]")?.checked, body: !!c.querySelector("[data-ed=body]")?.checked }; };
+    const bindDone = r => { toast(r.pending ? "已记下,千帆数据同步后会自动对上" : "已对上,数据会出现在复盘里"); return fLoop(); };
+    const qk = e.target.closest("[data-quick]");
+    if (qk) { const [did, nid] = qk.dataset.quick.split(":"); try { return bindDone(await api(`/api/drafts/${did}/link`, "POST", { note_id: nid, ...flags(qk) })); } catch (err) { return toast(err.message, 1); } }
+    const bd = e.target.closest("[data-bind]");
+    if (bd) { const url = bd.closest(".lp-rc").querySelector("[data-url]").value.trim(); if (!url) return toast("先粘贴笔记链接", 1); try { return bindDone(await api(`/api/drafts/${bd.dataset.bind}/link`, "POST", { url, ...flags(bd) })); } catch (err) { return toast(err.message, 1); } }
     if (e.target.closest("[data-rnoacc]")) { LP.noacc = !LP.noacc; LP.regPage = 1; LP.sel.clear(); return fLoop(); }
     if (e.target.closest("[data-racc]")) {
       const aid = $("#racc").value, nm = (accts.find(a => a.account_id === aid) || {}).name || "";
       try { const r = await api("/api/drafts/set_account", "POST", { ids: [...LP.sel], account_id: aid }); toast(`已把 ${r.n} 篇指定发布到「${nm}」`); LP.sel.clear(); return fLoop(); } catch (err) { return toast(err.message, 1); }
     }
     if (e.target.closest("[data-rpub]")) {
-      try { const r = await api("/api/drafts/publish", "POST", { ids: [...LP.sel], on: true, published_at: $("#rday").value }); toast(`已登记 ${r.n} 篇为已发布`); LP.sel.clear(); return fLoop(); } catch (err) { return toast(err.message, 1); }
+      try { const r = await api("/api/drafts/publish", "POST", { ids: [...LP.sel], on: true, published_at: $("#rday").value }); toast(`已登记 ${r.n} 篇为已发布`); const ids = [...LP.sel]; LP.sel.clear(); await fLoop(); return bindDialog(ids); } catch (err) { return toast(err.message, 1); }
     }
     const up = e.target.closest("[data-unpub]");
     if (up) { try { await api("/api/drafts/publish", "POST", { ids: [+up.dataset.unpub], on: false }); toast("已取消发布标记"); return fLoop(); } catch (err) { return toast(err.message, 1); } }

@@ -312,7 +312,50 @@ def accounts(shop: str | None = None) -> list[dict]:
 
 def _norm_title(t: str) -> str:
     import re
-    return re.sub(r"[\W_]+", "", (t or "").lower())
+    return re.sub(r"[\W_]+", "", (t or "").lower().replace("豆腐乳", "腐乳"))   # 发布时常把「腐乳」改成「豆腐乳」(搜索词),算同一个词
+
+
+def title_sim(a: str, b: str) -> float:
+    """两个标题的相似度(3 字片段的重合度,「豆腐乳 / 腐乳」算同一个词)。"""
+    ga, gb = _grams(_norm_title(a)), _grams(_norm_title(b))
+    return round(len(ga & gb) / len(ga | gb), 2) if ga and gb else 0.0
+
+
+def _day_gap(a: str, b: str):
+    import datetime
+    try:
+        return abs((datetime.date.fromisoformat(str(a)[:10]) - datetime.date.fromisoformat(str(b)[:10])).days)
+    except ValueError:
+        return None
+
+
+def closest_notes(title: str, account_id: str, items: list[dict], taken: set, day: str = "", n: int = 3) -> list[dict]:
+    """标了发布但没对上的稿子,给最可能的几篇笔记:同账号的、发布日期和登记日期接近的、标题像的排前面。
+    发布时改了标题 / 换了封面,系统读不到正文和封面,只能靠这些线索给人挑,或让人直接粘贴笔记链接。"""
+    gd = _grams(_norm_title(title))
+    out = []
+    for it in items:
+        nid = str(it.get("note_id") or "")
+        if not nid or nid in taken or not it.get("title"):
+            continue
+        g = _grams(_norm_title(it["title"]))
+        sim = len(gd & g) / len(gd | g) if gd and g else 0
+        same = bool(account_id and it.get("account_id") == account_id)
+        gap = _day_gap(day, it.get("published_at") or "") if day else None
+        near = gap is not None and gap <= 1
+        if not (sim >= 0.3 or (same and near)):
+            continue
+        score = 2 * sim + (1.0 if same else 0) + (0.5 if near else 0.2 if gap is not None and gap <= 3 else 0)
+        out.append((score, {"note_id": nid, "title": it["title"], "sim": round(sim, 2), "same_account": same, "published_at": it.get("published_at") or "",
+                            "account_name": it.get("account_name") or "", "views": it.get("views"), "day_gap": gap}))
+    out.sort(key=lambda x: -x[0])
+    return [o[1] for o in out[:n]]
+
+
+def closest_note(title: str, account_id: str, items: list[dict], taken: set) -> dict | None:
+    """最接近的一篇(没有给日期线索时,只看账号和标题)。"""
+    r = closest_notes(title, account_id, items, taken, "", 1)
+    return r[0] if r else None
 
 
 def account_name(account_id: str) -> str | None:

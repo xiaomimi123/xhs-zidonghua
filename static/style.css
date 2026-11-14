@@ -1263,3 +1263,38 @@ body.busy #main{opacity:.55;transition:opacity .15s}
   .lv-bh .lv-ja{justify-content:flex-start;flex-wrap:wrap}
   .lv-views{margin-right:0;padding-right:0;border-right:0;width:100%}
 }
+
+/* 复盘:没对上的提示 / 评分准不准 */
+.lp-h2{display:block;margin-top:3px;font-size:12px;line-height:1.4}
+.lp-lp{display:flex;flex-direction:column;gap:6px}
+.lp-lbar{height:6px;border-radius:4px;background:var(--line);overflow:hidden;max-width:420px}
+.lp-lbar i{display:block;height:100%;background:var(--accent)}
+.lp-h4{margin:16px 0 8px;font-size:13px}
+.lp-dims{display:flex;flex-wrap:wrap;gap:8px}
+.lp-dim{display:inline-flex;align-items:baseline;gap:6px;padding:5px 10px;border-radius:8px;background:var(--soft);font-size:13px}
+.lp-dim small{color:var(--faint);font-size:11px}
+.lp-dim.good{background:var(--ok-bg,#e6f4ea);color:var(--ok)}
+.lp-dim.bad{background:var(--err-bg,#fdecea);color:var(--err)}
+.lp-fcs{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+
+/* 复盘:没对上的稿子 —— 候选、粘贴链接、改动勾选 */
+.lp-rcs.nd{grid-template-columns:repeat(auto-fill,minmax(420px,1fr))}
+@media (max-width:760px){.lp-rcs.nd{grid-template-columns:1fr}}
+.lp-rc.nd input{position:static;width:auto;height:auto;margin:0;accent-color:var(--accent)}
+.lp-rc.nd input[type=checkbox]{width:15px;height:15px}
+.lp-rc.nd .lp-ci .sub{white-space:normal}
+.lp-pills{display:flex;flex-direction:column;gap:5px}
+.lp-pill{display:flex;justify-content:space-between;align-items:baseline;gap:8px;text-align:left;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--soft);cursor:pointer;font:inherit;color:var(--ink)}
+.lp-pill:hover{border-color:var(--accent);background:var(--accent-wash)}
+.lp-pill b{font-weight:500;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lp-pill small{color:var(--faint);font-size:11px;white-space:nowrap}
+.lp-paste{display:flex;gap:6px;margin-top:4px}
+.lp-paste input{flex:1;min-width:0;padding:6px 8px;font-size:12px}
+.lp-ed{display:flex;gap:14px;font-size:12px;color:var(--sub)}
+.lp-ed label{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+
+/* 标记发布后的绑定窗口 */
+.lp-bdlg{max-width:640px;width:calc(100vw - 32px);max-height:86vh;display:flex;flex-direction:column}
+.lp-bl{overflow:auto;display:flex;flex-direction:column;gap:10px;padding-right:2px}
+.lp-bl .lp-rc.nd{cursor:default}
+.lp-rc.lp-ok{opacity:.7;background:var(--soft)}

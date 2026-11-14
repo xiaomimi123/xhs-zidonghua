@@ -98,7 +98,7 @@ DEFAULT_TRACKS = [
 ]
 
 JSON_COLS = ("keywords", "images", "tags", "note_ids", "data", "ai_tags", "checks", "stats", "review", "variant", "state", "profile", "cover_card", "images_local",
-             "alt_titles", "image_prompts", "template_ids", "opts", "gen", "categories", "history_cats", "coop_tags", "willing")
+             "alt_titles", "image_prompts", "template_ids", "opts", "gen", "categories", "history_cats", "coop_tags", "willing", "feat", "pub_edit")
 
 
 # 全局笔记库:同一篇帖子只存一份(按 uid 去重),通过 project_notes 关联到多个项目
@@ -366,6 +366,16 @@ def _m012_kind(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
 
 
+def _m019_pub_edit(c):
+    """发布时对稿子的改动:标题相似度(系统算)、改了封面 / 改了正文(登记时勾选)。归因用:改动大的不算我们的评分和写法的功劳。"""
+    add_column(c, "drafts", "pub_edit", "TEXT DEFAULT ''")
+
+
+def _m018_draft_feat(c):
+    """稿子发布时的「打分快照」:评分、各维度分、封面类型、标题 / 正文特征,固定存下来,之后拿它和真实表现对比(见 loop.learning)。"""
+    add_column(c, "drafts", "feat", "TEXT DEFAULT ''")
+
+
 def _m017_live_batch(c):
     """Live 任务的批次:一次下单(一次点「生成」)里的任务同属一个批次,任务页按批次看进度、整批下载。
     已有的任务按「同一个人、同一类、间隔不超过 10 分钟」补批次号。"""
@@ -432,6 +442,8 @@ MIGRATIONS = [
     (15, "task_by", _m015_task_by),
     (16, "product_size", _m016_product_size),
     (17, "live_batch", _m017_live_batch),
+    (18, "draft_feat", _m018_draft_feat),
+    (19, "pub_edit", _m019_pub_edit),
     # (2, "说明", _m002_xxx),
 ]
 

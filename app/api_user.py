@@ -868,24 +868,73 @@ def loop_notes(draft_id: int = 0, q: str = ""):
     return {"items": out[:40]}
 
 
+@router.get("/api/loop/bind_cands")
+def bind_cands(ids: str = ""):
+    """刚标记已发布的这几篇:每篇给最可能的笔记候选,让人顺手绑定(标记发布时弹出的窗口用)。已经自动对上的标出来,不用再绑。"""
+    want = visible("draft", [int(x) for x in ids.split(",") if x.strip().isdigit()][:60])
+    if not want:
+        return {"items": []}
+    items, _ = qianfan.notes_all()
+    perf = qianfan.match_drafts(items)
+    taken = {str(v.get("note_id")) for v in perf.values()}
+    rows = {r["id"]: r for r in autorun._in_chunks("SELECT id, title, account_id, account_name, published_at, images, qf_note_id FROM drafts WHERE id IN ({})", want)}
+    out = []
+    for i in want:
+        r = rows.get(i)
+        if not r:
+            continue
+        hit = perf.get(i)
+        out.append({"id": i, "title": r["title"], "account_name": r["account_name"] or "", "published_at": r["published_at"] or "",
+                    "cover": next((x for x in (r["images"] or []) if x), ""), "linked": bool(r["qf_note_id"]) and not hit,
+                    "matched": ({"title": hit.get("title") or "", "views": hit.get("views")} if hit else None),
+                    "cands": [] if hit else qianfan.closest_notes(r["title"], r["account_id"], items, taken, r["published_at"] or "")})
+    return {"items": out}
+
+
 class LinkIn(BaseModel):
     note_id: str = ""
+    url: str = ""                    # 小红书笔记链接(里面有 24 位笔记 ID),和 note_id 二选一
+    cover: bool | None = None        # 发布时改了封面?(不传 = 不改这一项记录)
+    body: bool | None = None         # 发布时改了正文?
 
 
 @router.post("/api/drafts/{did}/link")
 def link_note(did: int, p: LinkIn):
     """手动把稿子对上千帆里的一篇笔记(同时标成已发布,发布日期取笔记的发布日期);note_id 为空 = 取消对应。"""
-    _one("SELECT id FROM drafts WHERE id=?", did)
+    d = _one("SELECT id, pub_edit FROM drafts WHERE id=?", did)
     nid = p.note_id.strip()
+    if not nid and p.url.strip():
+        m = re.search(r"(?<![0-9a-f])[0-9a-f]{24}(?![0-9a-f])", p.url.lower())
+        if not m:
+            raise HTTPException(400, "链接里没找到笔记 ID。请用笔记页的完整链接(xhslink 开头的短链接,先在浏览器里打开再复制地址栏里的链接)")
+        nid = m.group(0)
     if not nid:
         q_exec("UPDATE drafts SET qf_note_id='' WHERE id=?", did)
         return {"ok": True}
     it = next((x for x in qianfan.notes_all()[0] if str(x.get("note_id") or "") == nid), None)
-    if not it:
+    if not it and not re.fullmatch(r"[0-9a-f]{24}", nid):
         raise HTTPException(400, "千帆数据里没有这篇笔记,可能数据还没同步")
+    pe = d["pub_edit"] if isinstance(d["pub_edit"], dict) else {}
+    pe = {**pe, "src": "manual", **({"cover": p.cover} if p.cover is not None else {}), **({"body": p.body} if p.body is not None else {})}
     q_exec("UPDATE drafts SET qf_note_id='' WHERE qf_note_id=? AND id!=?", nid, did)   # 一篇笔记只对一篇稿子
-    q_exec("UPDATE drafts SET qf_note_id=?, published=1, published_at=COALESCE(NULLIF(?, ''), published_at) WHERE id=?",
-           nid, it.get("published_at") or "", did)
+    q_exec("UPDATE drafts SET qf_note_id=?, published=1, published_at=COALESCE(NULLIF(?, ''), published_at), pub_edit=? WHERE id=?",
+           nid, (it or {}).get("published_at") or "", json.dumps(pe, ensure_ascii=False), did)
+    # 笔记不在千帆数据里(刚发、还没同步):先记下 ID,数据同步过来后自动对上
+    return {"ok": True, "pending": it is None}
+
+
+class EditsIn(BaseModel):
+    cover: bool | None = None
+    body: bool | None = None
+
+
+@router.post("/api/drafts/{did}/edits")
+def set_edits(did: int, p: EditsIn):
+    """补记 / 修改「发布时改了封面 / 正文」。"""
+    d = _one("SELECT pub_edit FROM drafts WHERE id=?", did)
+    pe = d["pub_edit"] if isinstance(d["pub_edit"], dict) else {}
+    pe = {**pe, **({"cover": p.cover} if p.cover is not None else {}), **({"body": p.body} if p.body is not None else {})}
+    q_exec("UPDATE drafts SET pub_edit=? WHERE id=?", json.dumps(pe, ensure_ascii=False), did)
     return {"ok": True}
 
 
@@ -932,6 +981,10 @@ def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1
     page = min(max(page, 1), max(1, -(-len(rows) // size)))
     regpage = min(max(regpage, 1), max(1, -(-len(regs) // size)))
     reg_items = regs[(regpage - 1) * size:regpage * size]
+    if reg != "todo" and reg_items:   # 标了发布但没对上:给每篇找一篇最接近的笔记(同账号优先),能一键对上;找不到就说明可能还没发 / 数据没同步
+        items_, _ = qianfan.notes_all()
+        taken = {str(v.get("note_id")) for v in qianfan.match_drafts(items_).values()}
+        reg_items = [{**x, "cands": (cs := qianfan.closest_notes(x["title"], x["account_id"], items_, taken, x.get("published_at") or "")), "closest": cs[0] if cs else None} for x in reg_items]
     if reg_items:   # 发布登记用卡片显示:只给这一页的稿子取封面
         covers = {r["id"]: next((i for i in (r["images"] or []) if i), "") for r in autorun._in_chunks("SELECT id, images FROM drafts WHERE id IN ({})", [x["id"] for x in reg_items])}
         reg_items = [{**x, "cover": covers.get(x["id"], "")} for x in reg_items]

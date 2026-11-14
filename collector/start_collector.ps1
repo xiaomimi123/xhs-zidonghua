@@ -12,7 +12,7 @@ function L($m) { "$(Get-Date -Format 'MM-dd HH:mm:ss') $m" | Add-Content -Encodi
 $exe = (Get-Command ego-browser.exe -ErrorAction SilentlyContinue).Source
 if (-not $exe) { $exe = Join-Path $env:USERPROFILE '.local\share\ego\active_version_dir\ego-browser.exe' }
 $app = 'C:\Program Files\Citro Labs\ego lite\Application\ego.exe'
-$script = if ($Instance) { Join-Path $ego "run-$Instance.mjs" } else { Join-Path $ego 'collector.mjs' }
+$script = if ($Instance) { Join-Path $ego "run-$Instance.mjs" } else { Join-Path $ego 'run.mjs' }
 $cliArgs = if ($Instance) { @("--ego-server-name=$Instance", 'nodejs') } else { @('nodejs') }
 
 function EgoRunning {   # 这个实例的 ego lite 主进程在不在(不算它的子进程)
