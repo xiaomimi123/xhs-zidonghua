@@ -108,12 +108,11 @@ class Api:
             print(f"   (没能把失败原因告诉工作台:{e})")
 
 
-def import_to_photos(pvt: Path, album: str = "", day: str = ""):
+def import_to_photos(pvt: Path, album: str = ""):
     """把 .pvt 包导入本机「照片」App。照片 App 的 import 命令会强制把自己弹到前台(实测隐藏没用,
     这是照片 App 的固有行为),所以导入前记下当时的前台 App,导入后立刻把焦点还回去,把干扰压到最低。
-    album 有值时,把刚导入的项归入「相册」(按任务发起人分类,没有就放「未署名」);
-    day 有值时(YYYY-MM-DD),相册名变成「发起人 · 日期」,每天一批一目了然。"""
-    name = album or ("未署名 · " + time.strftime("%Y-%m-%d"))   # 相册名:调用方给什么就用什么;只给"人"时补当天日期
+    album 有值时,把刚导入的项归入这个相册(调用方算好名字,如「丽敏 · 2026-11-14」),没有就放「未署名」。"""
+    name = album or "未署名"
     try:
         front = subprocess.run(["osascript", "-e",
                                 'tell application "System Events" to get name of first application process whose frontmost is true'],
@@ -186,7 +185,9 @@ def run_job(api: Api, job: dict, out: Path, use_makelive: bool, keep_audio: bool
         owner_out = out / (job.get("by") or "未署名") / day
         pvt = make_pvt(None if (first_frame_still and video) else src, owner_out, f"L{job['id']}", job["opts"], use_makelive, video, keep_audio, sharpen)
     if to_photos:
-        import_to_photos(pvt, job.get("by") or "", job.get("created") or "")   # 按发起人+日期分相册
+        # 相册名 = 「发起人 · 任务日期」;没有发起人就「未署名 · 日期」
+        by = job.get("by") or "未署名"
+        import_to_photos(pvt, f"{by} · {job.get('created') or time.strftime('%Y-%m-%d')}")
     api.upload(job["id"], zip_dir(pvt))
     print(f"   完成 {time.time() - t0:.0f} 秒 → {pvt}")
 
