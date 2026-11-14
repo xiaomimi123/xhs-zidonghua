@@ -10,7 +10,7 @@ import json
 import re
 import time
 from collections import defaultdict
-from . import qianfan
+from . import qianfan, titlelab
 from .db import conn, get_settings, q_all, q_exec, q_one
 
 COVER_KINDS = {"html": "程序排版(纯文字)", "photo_text": "实拍图 + 排字", "photo": "纯产品图"}
@@ -104,7 +104,7 @@ def edit_info(pe: dict | None, title_sim: float | None) -> dict:
     return {"level": "大改" if major else "小改" if minor else "原样", "title_sim": ts, "cover": cover, "body": body, "src": pe.get("src") or ""}
 
 
-def snapshot(d: dict) -> dict:
+def snapshot(d: dict, cal: dict | None = None) -> dict:
     """稿子发布时的打分快照:评分(总分 / 等级 / 各维度 / 量化贴合度)、封面类型和版式、标题和正文的写法特征、角度、帖子类型。
     只由稿子自己的字段算出来,和千帆数据无关,所以任何时候都能补算(老稿的快照取的是现在的内容,标 backfill)。"""
     from . import stats
@@ -114,7 +114,8 @@ def snapshot(d: dict) -> dict:
     return {"score": rv.get("overall"), "grade": rv.get("grade") or "", "dims": rv.get("dims") or {}, "quant": (rv.get("quant") or {}).get("score"),
             "title_len": f["title_len"], "t_digit": f["t_digit"], "t_mark": f["t_mark"], "t_emoji": f["t_emoji"], "body_len": f["body_len"], "paras": f["paras"],
             "emoji_100": round(f["emoji_100"], 2), "list_ratio": round(f["list_ratio"], 2), "cta": f["cta"], "images": f["images"],
-            "cover_kind": _cover_kind(d), "cover_layout": cc.get("layout", ""), "topic": _topic(d.get("angle")), "ptype": d.get("ptype") or "", "at": time.strftime("%Y-%m-%d %H:%M")}
+            "cover_kind": _cover_kind(d), "cover_layout": cc.get("layout", ""), "topic": _topic(d.get("angle")), "ptype": d.get("ptype") or "", "at": time.strftime("%Y-%m-%d %H:%M"),
+            "title_score": titlelab.title_score(d.get("title") or "", cal)["score"]}   # 标题写法分(按千帆真实笔记校准的统计规律,见 titlelab.py)
 
 
 def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
@@ -127,6 +128,7 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
         items, at = qianfan.notes_all()
         perf = qianfan.match_drafts(items)
     base = _baselines(items)
+    cal = titlelab.cached(items, at, c["min_days"])
     spawned = {r["spawn_from"]: r["n"] for r in q_all("SELECT spawn_from, COUNT(*) AS n FROM projects WHERE spawn_from IS NOT NULL GROUP BY spawn_from")}
     drafts = q_all("""SELECT d.id, d.title, d.angle, d.account_id, d.account_name, d.project_id, d.published, d.published_at, d.qf_note_id, d.status, d.auto_ok, d.created, d.images, d.cover_card, d.ptype,
         p.track, p.created_by, p.owner_id, p.spawn_from, COALESCE(p.generation, 0) AS generation, d.feat, d.pub_edit
@@ -135,7 +137,7 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
     if need and register:
         from . import autorun
         for r in autorun._in_chunks("SELECT id, title, content, tags, images, review, angle, ptype, cover_card FROM drafts WHERE id IN ({})", need):
-            q_exec("UPDATE drafts SET feat=? WHERE id=?", json.dumps(snapshot(r), ensure_ascii=False), r["id"])
+            q_exec("UPDATE drafts SET feat=? WHERE id=?", json.dumps(snapshot(r, cal), ensure_ascii=False), r["id"])
         fresh = {r["id"]: r["feat"] for r in q_all("SELECT id, feat FROM drafts WHERE id IN (%s)" % ",".join(str(i) for i in need))}
         for d in drafts:
             if d["id"] in fresh:
@@ -166,7 +168,7 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
                      "comments": (it or {}).get("comments"), "eng": _eng(it) if it else None,
                      "feat": d["feat"] if isinstance(d["feat"], dict) else None, "edit": edit_info(pe, ts) if it else None,
                      "cover_kind": _cover_kind(d), "cover_name": COVER_KINDS.get(_cover_kind(d), "(旧稿没记录)"), "cover_layout": (d["cover_card"] or {}).get("layout", ""), "ptype": d["ptype"] or "(未标注)"})
-    return {"rows": rows, "cfg": c, "data_at": at}
+    return {"rows": rows, "cfg": c, "data_at": at, "title_cal": cal}
 
 
 def _rate(rs: list[dict]) -> dict:
@@ -191,6 +193,21 @@ def _pearson(xs, ys):
     mx, my = _mean(xs), _mean(ys)
     sx, sy = sum((x - mx) ** 2 for x in xs), sum((y - my) ** 2 for y in ys)
     return None if not sx or not sy else sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / (sx * sy) ** 0.5
+
+
+def _spearman(xs, ys):
+    """秩相关(不受个别爆款的极端值影响)。"""
+    def ranks(v):
+        order = sorted(range(len(v)), key=lambda i: v[i]); r = [0.0] * len(v); i = 0
+        while i < len(order):
+            j = i
+            while j + 1 < len(order) and v[order[j + 1]] == v[order[i]]:
+                j += 1
+            for k in range(i, j + 1):
+                r[order[k]] = (i + j) / 2
+            i = j + 1
+        return r
+    return _pearson(ranks(xs), ranks(ys)) if len(xs) >= 3 else None
 
 
 def _band(v, cuts, labels):
@@ -266,9 +283,27 @@ def learning(ev: dict) -> dict:
     for r in mature:
         egroups[(r.get("edit") or {}).get("level") or "原样"].append(r)
     edits = [{"label": k, **agg(egroups[k])} for k in ("原样", "小改", "大改") if egroups.get(k)] if len(egroups) > 1 else []
-    return {"n_edited": len(done_all) - len(done), "edits": edits, "n_done": len(done), "n_obs": len(obs), "need": MIN_LEARN, "ready": len(done) >= MIN_LEARN, "soon_days": min(soon) if soon else None,
+    # 标题写法分(按千帆真实笔记校准的)和我们自己稿子的真实表现对不对得上:标题基本没改的稿子,写法分和表现的排名相关
+    cal = ev.get("title_cal")
+    tr = [(titlelab.title_score(r["title"], cal)["score"], r["lift"]) for r in mature if cal and _unedited(r, "title") and r.get("title")]
+    tr = [(a, b) for a, b in tr if a is not None]
+    title_check = {"n": len(tr), "corr": round(_spearman([x[0] for x in tr], [x[1] for x in tr]) or 0, 2) if len(tr) >= 8 and _spearman([x[0] for x in tr], [x[1] for x in tr]) is not None else None}
+    return {"title_check": title_check, "n_edited": len(done_all) - len(done), "edits": edits, "n_done": len(done), "n_obs": len(obs), "need": MIN_LEARN, "ready": len(done) >= MIN_LEARN, "soon_days": min(soon) if soon else None,
             "lift_avg": round(_mean([r["lift"] for r in done]), 2) if done else None, "bands": bands, "score_corr": None if corr_all is None else round(corr_all, 2),
             "dims": dims if scored else [], "factors": factors, "min_days": min_days}
+
+
+def _title_lab(ev: dict) -> dict | None:
+    """标题写法校准结果(来自千帆全部真实笔记)+ 我们已生成的稿子里,各种写法占多少(提醒我们常用的写法是有利还是不利)。"""
+    cal = ev.get("title_cal")
+    if not cal:
+        return None
+    titles = [r["title"] for r in ev["rows"] if r.get("title")]
+    share = {}
+    if titles:
+        feats = [titlelab.title_features(t) for t in titles]
+        share = {k: round(sum(1 for f in feats if f[k]) / len(feats), 2) for k, *_ in titlelab.FEATURES}
+    return {**cal, "ours": {"n": len(titles), "share": share}}
 
 
 def adherence(ev: dict) -> list[dict]:
@@ -312,7 +347,7 @@ def overview(ev: dict | None = None) -> dict:
                          key=lambda x: x["created"], reverse=True)[:12]
     gens = {"original": _rate([r for r in got if not r["generation"]]), "spawned": _rate([r for r in got if r["generation"]])}
     return {"funnel": [{"key": k, "name": n, "n": v} for k, n, v in funnel], "tiers": {t: sum(1 for r in rows if r["tier"] == t) for t in TIERS},
-            "by_topic": group("topic"), "by_cover": group("cover_name", 1), "by_ptype": group("ptype", 1), "by_account": group("account_name", 1), "learn": learning(ev), "adherence": adherence(ev), "by_project": by_project, "spawn_effect": gens, "cfg": ev["cfg"], "data_at": ev["data_at"],
+            "by_topic": group("topic"), "by_cover": group("cover_name", 1), "by_ptype": group("ptype", 1), "by_account": group("account_name", 1), "learn": learning(ev), "adherence": adherence(ev), "title_lab": _title_lab(ev), "by_project": by_project, "spawn_effect": gens, "cfg": ev["cfg"], "data_at": ev["data_at"],
             "no_data": not got and not q_one("SELECT 1 AS x FROM qf_snapshots WHERE kind='notes' LIMIT 1")}
 
 

@@ -726,6 +726,24 @@ const lpBind = r => {
     <span class="lp-ed"><label><input type="checkbox" data-ed="cover"> 改了封面</label><label><input type="checkbox" data-ed="body"> 改了正文</label></span>`;
 };
 const lpR = x => x == null ? "—" : (x > 0 ? "+" : "") + x.toFixed(2);
+// 标题写法校准:千帆里所有真实笔记(不只是我们的)的标题和表现 —— 哪些写法更容易有好表现(比排名不比平均数,明显 = 统计上站得住)
+const LP_TV = { sig_pos: ["明显更好", "ok"], lean_pos: ["可能更好", "ok soft"], sig_neg: ["明显更差", "bad"], lean_neg: ["可能更差", "bad soft"], none: ["看不出差别", ""], few: ["样本太少", ""] };
+function lpTitleCard(T, tc) {
+  if (!T || !T.n_used) return "";
+  const good = T.rows.filter(r => r.verdict === "sig_pos").map(r => r.name), bad = T.rows.filter(r => r.verdict === "sig_neg").map(r => r.name);
+  const sh = T.ours && T.ours.n ? T.ours.share : {};
+  const usedBad = T.rows.filter(r => (r.verdict === "sig_neg" || r.verdict === "lean_neg") && (sh[r.key] || 0) >= 0.3).map(r => `${r.name}(我们 ${Math.round(sh[r.key] * 100)}% 的稿子这样写)`);
+  const absent = T.rows.filter(r => !r.n_with || !r.n_without).map(r => r.name);   // 样本里一次都没出现(或全都是)的写法,没法比,合并成一句话
+  const rows = T.rows.filter(r => r.n_with && r.n_without).map(r => { const [lab, cls] = LP_TV[r.verdict]; return `<tr><td>${esc(r.name)}${r.hint ? ` <span class="sub">${esc(r.hint)}</span>` : ""}</td>
+    <td class="num">${r.n_with} 篇 · 中位 ${r.med_with == null ? "-" : "×" + r.med_with}</td><td class="num">${r.n_without} 篇 · 中位 ${r.med_without == null ? "-" : "×" + r.med_without}</td>
+    <td class="num">${r.auc == null ? "-" : r.auc}</td><td><span class="fl-pill ${cls}">${lab}</span></td></tr>`; }).join("");
+  const check = tc && tc.corr != null ? `<p class="sub" style="margin:8px 0 0">用这些规律给我们自己发出去的稿子标题打「写法分」,和它们的真实表现的排名相关系数是 <b>${lpR(tc.corr)}</b>(${tc.n} 篇;越接近 1 说明规律在我们的稿子上也管用)。</p>` : tc && tc.n ? `<p class="sub" style="margin:8px 0 0">我们自己的稿子目前只有 ${tc.n} 篇有结论,不够验证这些规律在我们的稿子上管不管用(够 8 篇后会显示)。</p>` : "";
+  return `<section class="card" style="margin-top:12px"><div class="card-h"><b>标题写法 · 从千帆 ${T.n_used} 篇真实笔记看规律</b><span class="sub">发布满 ${T.min_days} 天的笔记;表现 = 相对本账号平均;比排名而不是平均数(个别爆款会把平均数拉高)</span></div>
+    <p style="margin:0 0 10px;line-height:1.7">${good.length ? `<b>明显更好:</b>${good.map(esc).join("、")}。` : "暂时没有统计上明显更好的写法。"}${bad.length ? ` <b>明显更差:</b>${bad.map(esc).join("、")}。` : ""}
+      ${usedBad.length ? `<span class="fl-err" style="display:block;margin-top:4px">我们常用但偏不利的写法:${usedBad.map(esc).join("、")}</span>` : ""}</p>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>标题写法</th><th class="num">有这种写法</th><th class="num">没有</th><th class="num" title="有这种写法的笔记排在没有的前面的概率,0.5 = 没差别">排名概率</th><th>结论</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${absent.length ? `<p class="sub" style="margin:8px 0 0">这些写法在样本里没有(或全都是),没法比较:${absent.map(esc).join("、")}。</p>` : ""}<p class="sub" style="margin:8px 0 0">「明显」要求差别在统计上站得住(比了十几种写法,偶然碰出差别的概率不低,所以门槛放得高);「可能」只是有倾向,别当结论。这只是相关,不代表改了标题就一定变好,账号、内容、发布时间都有影响。</p>${check}</section>`;
+}
 // 评分准不准 / 什么做法有效:发布时的打分快照 vs 后来的真实表现(相对本账号平均的倍数)
 function lpLearn(L, adh) {
   const pct = Math.min(100, Math.round(L.n_done * 100 / L.need));
@@ -821,6 +839,7 @@ async function fLoop() {
   <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按任务批次</b></div>${ov.by_project.length ? tbl("任务", projRows) : none}</section>
   <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按封面类型</b></div>${(ov.by_cover || []).length ? tbl("封面", coverRows) : none}</section>
   <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按帖子类型</b></div>${(ov.by_ptype || []).length ? tbl("类型", ptypeRows) : none}</section></div>
+  ${lpTitleCard(ov.title_lab, ov.learn.title_check)}
   <section class="card" style="margin-top:12px"><div class="card-h"><b>评分准不准 · 哪些做法有效</b><span class="sub">拿稿子发布时的评分和写法,对比后来的真实表现;用「相对本账号平均」比,弱账号的低数据不拖累结论</span></div>${lpLearn(ov.learn, ov.adherence)}</section>
   <h3 class="lp-h">全部稿子的表现</h3>
   <div class="fl-chips" style="margin-bottom:10px">${Object.entries(names).map(([k, n]) => `<button class="chip ${LP.tier === k ? "on" : ""}" data-lt="${k}">${n}${k ? ` ${ov.tiers[k] ?? 0}` : ""}</button>`).join("")}</div>

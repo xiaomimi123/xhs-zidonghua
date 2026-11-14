@@ -1356,3 +1356,6 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 .lp-ncs{flex:none;font-variant-numeric:tabular-nums}
 .lp-ncd{font-size:11.5px;color:var(--faint)}
 @media (max-width:760px){.lp-nc-grid{grid-template-columns:repeat(2,1fr);gap:10px}.lp-ncb{padding:8px 10px 10px}.lp-nctt{font-size:13px}}
+
+/* 标题写法校准 */
+.fl-pill.soft{opacity:.7}
