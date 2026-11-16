@@ -49,3 +49,10 @@ def run(rep, env):
     finally:
         db.q_exec("DELETE FROM drafts WHERE project_id=?", pid)
         db.q_exec("DELETE FROM projects WHERE id=?", pid)
+
+    # ---- 生图通用风格:物品必须完整入镜(以前写「构图随意」,杯子被画面边缘切掉、杯把出画面) ----
+    from app import covers, worker
+    pr = worker._image_prompt("", "桌上一杯拿铁", True)
+    rep.check("生图风格:要求每件物品完整入镜、不被边缘切掉、杯把杯口完整、物品留间距互不穿插;不再写「构图随意」;Live 拍法里不再要求「遮挡」",
+              "完整入镜" in pr and "杯把和杯口完整可见" in pr and "互不穿插重叠" in pr and "构图随意" not in pr
+              and not any("遮挡" in x for x in covers.LOOK_STATES) and any("不穿插" in x for x in covers.LOOK_STATES))
