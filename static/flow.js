@@ -668,13 +668,14 @@ function nbOpen(i) {
 }
 
 // ---------- 复盘:发布 → 数据回流 → 谁爆了 → 继续复刻 ----------
-const LP = { tier: "", reg: "todo", sel: new Set(), page: 1, regPage: 1, winAll: false, noacc: false };
+const LP = { tier: "withdata", reg: "todo", sel: new Set(), page: 1, regPage: 1, winAll: false, noacc: false, step: "result", cmp: "account" };
+try { LP.step = localStorage.lpStep || "result"; } catch { }
 const LP_WIN = 6;   // 爆款榜默认先列几篇
 const LP_SIZE = 20;   // 复盘页每个列表每页条数
 // 稿子卡片(小红书笔记的样子):封面在上、标题两行、账号 + 点赞在下;左上角判定,右上角相对平均的倍数
 const lpCard = r => `<article class="lp-nc" data-open="${r.id}" tabindex="0" role="button" aria-label="${esc(r.title)}">
   <div class="lp-ncv">${r.cover ? `<img src="${esc(thumb("/images/" + r.cover, 360))}" alt="" loading="lazy" decoding="async">` : `<i>${esc((r.title || "").slice(0, 6))}</i>`}
-    <span class="fl-pill lp-nct ${TIER_CLS[r.tier]}">${r.tier_name}</span>${r.lift != null ? `<span class="lp-ncl ${r.lift >= 2 ? "hot" : ""}">×${r.lift}</span>` : ""}</div>
+    <span class="fl-pill lp-nct ${TIER_CLS[r.tier]}">${r.tier_name}</span>${r.lift != null && (r.tier === "winner" || r.tier === "good") ? `<span class="lp-ncl ${r.lift >= 2 ? "hot" : ""}" title="和同样发布天数的笔记比">比同龄 ×${r.lift}</span>` : ""}</div>
   <div class="lp-ncb"><b class="lp-nctt">${esc(r.title)}</b>
     <div class="lp-ncm"><span class="lp-nca"><i>${esc((r.account_name || "?").slice(0, 1))}</i><span>${esc(r.account_name || "未指定账号")}</span></span><span class="lp-ncs" title="点赞">♡ ${r.likes == null ? "-" : fmtN(r.likes)}</span></div>
     <div class="lp-ncd">${r.published_at ? esc(String(r.published_at).slice(5)) : "未发布"}${r.views != null ? ` · 阅读 ${fmtN(r.views)}` : ""}${r.collects ? ` · 藏 ${r.collects}` : ""}${r.generation ? ` · 第${r.generation}代` : ""}</div></div></article>`;
@@ -785,7 +786,7 @@ function lpLearn(L, adh) {
   const edits = L.edits.length ? `<h4 class="lp-h4">改过的 vs 原样发布的</h4><table class="tbl"><thead><tr><th>发布时</th><th class="num">篇数</th><th class="num">爆款</th><th class="num">平均表现</th></tr></thead><tbody>${L.edits.map(x => `<tr><td>${x.label}${few(x.n)}</td><td class="num">${x.n}</td><td class="num">${x.winners}</td><td class="num">${lift(x)}</td></tr>`).join("")}</tbody></table><p class="sub" style="margin:6px 0 0">原样 = 标题基本没改、封面和正文也没改;小改 = 改了封面或正文之一,或标题有改动;大改 = 封面和正文都改了,或标题面目全非。</p>` : "";
   const he = L.hint_effect.length ? `<h4 class="lp-h4">标题写法提示有没有用</h4><table class="tbl"><thead><tr><th>写稿时</th><th class="num">篇数</th><th class="num">爆款</th><th class="num">平均表现</th></tr></thead><tbody>${L.hint_effect.map(x => `<tr><td>${x.label}${few(x.n)}</td><td class="num">${x.n}</td><td class="num">${x.winners}</td><td class="num">${lift(x)}</td></tr>`).join("")}</tbody></table><p class="sub" style="margin:6px 0 0">每 5 篇稿子留 1 篇不带「标题写法参考」做对照,发布后比较两组;标题发布时被改过的不算。样本少时别下结论。</p>` : "";
   const ad = adh && adh.length > 1 ? `<h4 class="lp-h4">各人发布一致率</h4><table class="tbl"><thead><tr><th>发布人</th><th class="num">已发布</th><th class="num">对上笔记</th><th class="num">对上率</th><th class="num">原样发布率</th></tr></thead><tbody>${adh.map(a => `<tr><td>${esc(a.name)}</td><td class="num">${a.published}</td><td class="num">${a.linked}</td><td class="num">${a.link_rate == null ? "—" : Math.round(a.link_rate * 100) + "%"}</td><td class="num">${a.original_rate == null ? "—" : Math.round(a.original_rate * 100) + "%"}</td></tr>`).join("")}</tbody></table><p class="sub" style="margin:6px 0 0">对不上笔记的追踪不到数据;改得多的归因不了。这两个比例越高,系统越能从你们的发布里学到东西。</p>` : "";
-  return head + bands + dims + fac + edits + he + ad;
+  return head + bands + dims + fac + edits + he;
 }
 const lpEff = (name, e) => `<div class="lp-eff"><span class="sub">${name}</span><b>${lpPct(e.rate)}</b><span class="sub">${e.winners} 爆 / ${e.mature} 篇有结论${e.lift_avg ? ` · 平均 ×${e.lift_avg}` : ""}</span></div>`;
 function lpWinner(r) {
@@ -796,6 +797,54 @@ function lpWinner(r) {
     <div class="lp-m"><span>阅读 <b>${fmtN(r.views)}</b></span><span>赞 <b>${fmtN(r.likes)}</b></span><span>藏 <b>${fmtN(r.collects)}</b></span><span>评 <b>${fmtN(r.comments)}</b></span></div>
     <div class="lp-act"><select data-spn aria-label="复刻篇数">${[3, 5, 10, 20].map(n => `<option value="${n}">${n} 篇</option>`).join("")}</select><button class="btn sm" data-spawn="${r.id}">继续复刻</button></div>
   </article>`;
+}
+// ---------- 复盘页:按业务流程分四步(发出去 → 数据回来 → 谁好谁差 → 下一步)----------
+const LP_STEPS = [["publish", "1 发出去"], ["data", "2 数据回来"], ["result", "3 谁好谁差"], ["next", "4 下一步"]];
+const lpWk = (a, b) => a === b ? "和上周一样" : a > b ? `比上周多 ${a - b}` : `比上周少 ${b - a}`;
+function lpStepBar(S, ov) {
+  const bt = ov.bind_todo || { total: 0 }, sh = S.data.shops || [], on = sh.filter(x => x.online).length, rate = S.data.rate;
+  const cards = {
+    publish: [`${S.pub.total}<small> 篇已发布</small>`, `本周 ${S.pub.week} 篇 · ${lpWk(S.pub.week, S.pub.last_week)}`, bt.total ? [`${bt.total} 篇没绑定笔记`, "warn"] : ["都已绑定笔记", "ok"]],
+    data: [`${rate == null ? "-" : Math.round(rate * 100)}<small>% 已对上</small>`, `${S.data.waiting} 篇刚发,数据还在涨`, sh.length ? [`${on}/${sh.length} 个店铺在同步`, on === sh.length ? "ok" : "warn"] : ["", ""]],
+    result: [`${S.result.good}<small> 篇表现好</small>`, `${S.result.normal} 一般 · ${S.result.low} 偏低`, [`基于 ${S.result.n} 篇有数据的`, ""]],
+    next: [`${S.next.winners}<small> 篇可复刻</small>`, S.next.winners ? "表现好的稿子可以继续复刻" : "还没有表现特别好的稿子", [S.next.need ? `再攒 ${S.next.need} 篇有数据的看对比` : S.next.advice.length ? `有 ${S.next.advice.length} 条建议` : "", ""]],
+  };
+  return `<div class="lp-stepbar" role="tablist" aria-label="复盘步骤">${LP_STEPS.map(([k, n]) => { const [big, l2, [l3, c3]] = cards[k]; return `<button class="lp-sc ${LP.step === k ? "on" : ""}" data-step="${k}" role="tab" aria-selected="${LP.step === k}"><span class="lp-sn">${n}</span><b>${big}</b><span class="lp-s2">${l2}</span>${l3 ? `<span class="lp-s3 ${c3}">${esc(l3)}</span>` : ""}</button>`; }).join("")}</div>`;
+}
+function lpStepPublish(S, ov, regBlock) {
+  const mx = Math.max(1, ...S.pub.days.map(d => d.n));
+  const bars = `<div class="lp-bars" role="img" aria-label="近 7 天每天发布数">${S.pub.days.map(d => `<div class="lp-bar"><b>${d.n}</b><div class="lp-bt"><i style="height:${Math.round(d.n / mx * 100)}%"></i></div><span>${d.day}</span></div>`).join("")}</div>`;
+  const ad = ov.adherence || [], bt = Object.fromEntries(((ov.bind_todo || {}).people || []).map(p => [p.name, p]));
+  const people = ad.length > 1 ? `<section class="card flush" style="margin-top:12px"><div class="card-h" style="padding:12px 14px"><b>各人发布情况</b><span class="sub">没绑定笔记的稿子,数据追踪不到</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>发布人</th><th class="num">已发布</th><th class="num">已绑定</th><th class="num">没绑定</th><th class="num">绑定率</th></tr></thead><tbody>${ad.map(a => `<tr><td>${esc(a.name)}</td><td class="num">${a.published}</td><td class="num">${a.linked}</td><td class="num">${(bt[a.name] || {}).n ?? a.published - a.linked}</td><td class="num">${a.link_rate == null ? "—" : Math.round(a.link_rate * 100) + "%"}</td></tr>`).join("")}</tbody></table></div></section>` : "";
+  return `<section class="card"><div class="card-h"><b>近 7 天发布</b><span class="sub">本周 ${S.pub.week} 篇,${lpWk(S.pub.week, S.pub.last_week)}</span></div>${bars}</section>${people}${regBlock}`;
+}
+function lpStepData(S, ov) {
+  const d = S.data, bt = ov.bind_todo || { total: 0, old: 0 };
+  const shops = d.shops.length ? d.shops.map(x => `<div class="lp-shop"><i class="qf-dot ${x.online ? "ok" : "off"}"></i><b>${esc(String(x.name).replace(/的店$/, ""))}</b><span class="sub">${x.online ? "采集端在线" : "采集端离线"}${x.last_sync ? ` · 最近同步 ${esc(lt(x.last_sync))}` : " · 还没同步过"}</span></div>`).join("") : `<p class="sub" style="margin:0">还没有店铺的数据同步记录。</p>`;
+  return `<section class="card"><div class="card-h"><b>千帆数据同步</b><span class="sub">账号和笔记数据每 ${d.hours} 小时刷新一次${d.data_at ? `,笔记数据更新于 ${esc(lt(d.data_at))}` : ""}</span></div>${shops}</section>
+    <section class="card" style="margin-top:12px"><div class="card-h"><b>发出去的稿子对上了多少</b></div>
+      <p style="margin:0 0 10px;line-height:1.8">已发布 <b>${d.published}</b> 篇,已对上千帆笔记 <b>${d.linked}</b> 篇(${d.rate == null ? "-" : Math.round(d.rate * 100)}%)。${bt.total ? `还有 <b>${bt.total}</b> 篇没对上${bt.old ? `,其中 ${bt.old} 篇已经发出 ${bt.min_days} 天以上,多半是发了没绑定` : ""}。` : "都已对上。"}${d.waiting ? ` 另有 ${d.waiting} 篇刚发布不久,数据还在涨,过几天再看。` : ""}</p>
+      ${bt.total ? `<button class="btn sm" data-gobind>去绑定</button>` : ""}</section>`;
+}
+function lpStepResult(S, rows, pg, names, tierCnt) {
+  const dims = [["account", "按账号"], ["cover", "按封面"], ["ptype", "按类型"], ["topic", "按选题"]], g = S.compare[LP.cmp] || [], mx = Math.max(1, ...g.map(x => x.views_avg || 0));
+  const bars = g.length ? g.map(x => `<div class="lp-cr"><span class="lp-cn" title="${esc(x.name)}">${esc(x.name)}</span><div class="lp-cb"><i class="${x.lift != null && x.n_mature >= 3 && x.lift >= 1.2 ? "good" : x.lift != null && x.n_mature >= 3 && x.lift < 0.8 ? "low" : ""}" style="width:${Math.round((x.views_avg || 0) / mx * 100)}%"></i></div><span class="lp-cv2">平均阅读 ${x.views_avg ?? "-"}</span><span class="lp-cs ${x.n < 5 ? "few" : ""}">${x.n} 篇${x.n < 5 ? ",样本少" : ""}${x.lift != null && x.n_mature >= 3 ? ` · 比同龄 ×${x.lift}` : ""}</span></div>`).join("") : `<p class="sub" style="margin:0">有数据的稿子还不够,暂时没法对比。</p>`;
+  return `<section class="card"><div class="card-h lp-cmp-h"><b>对比一下</b><span class="sub">条越长 = 平均阅读越多;「比同龄 ×N」是和同样发布天数的笔记比,1 倍差不多,绿色偏好、橙色偏低</span>
+      <span class="lp-seg">${dims.map(([k, n]) => `<button class="${LP.cmp === k ? "on" : ""}" data-cmp="${k}">${n}</button>`).join("")}</span></div>${bars}</section>
+    <h3 class="lp-h">稿子表现 <span class="sub">${LP.tier === "withdata" ? "已对上千帆数据的稿子" : ""}</span></h3>
+    <div class="fl-chips" style="margin-bottom:10px">${Object.entries(names).map(([k, n]) => `<button class="chip ${LP.tier === k ? "on" : ""}" data-lt="${k}">${n} ${tierCnt(k)}</button>`).join("")}</div>
+    ${rows.length ? `<div class="lp-nc-grid">${rows.map(lpCard).join("")}</div>` : `<section class="card"><div class="empty" style="border:0">这个筛选下没有稿子</div></section>`}
+    ${pager(LP.page, pg.rows.total, LP_SIZE, "lpg")}
+    <p class="sub" style="margin:14px 2px 0">「比同龄 ×N」:这篇的互动(赞+藏+评),除以该账号所有笔记的平均,再除以同样发布天数的笔记通常的水平;发布越久互动越多,所以新稿不能直接和老笔记比。账号互动很少时改比阅读量。数据更新于 ${esc(String(pg.data_at || "-").slice(0, 16))}。</p>`;
+}
+function lpStepNext(S, wins, nWin, c, se) {
+  const n = S.next;
+  const advice = n.advice.length ? `<ul class="lp-adv">${n.advice.map(a => `<li>${esc(a)}</li>`).join("")}</ul><p class="sub" style="margin:6px 0 0">样本还不多,只作参考。</p>`
+    : `<p class="sub" style="margin:0;line-height:1.8">${n.need ? `发布满 ${c.min_days} 天、有数据的稿子目前只有 ${S.result.n_mature} 篇,再攒 ${n.need} 篇就能看出哪种封面、类型更好。` : "目前没有明显更好或更差的做法,继续观察。"}</p>`;
+  const spawn = se.spawned.mature > 0 ? `<section class="card" style="margin-top:12px"><div class="card-h"><b>继续复刻有没有用</b><span class="sub">对比普通复刻和「以爆款为样本继续复刻」的稿子</span></div><div class="lp-effs">${lpEff("普通复刻稿", se.original)}${lpEff("爆款样本复刻稿", se.spawned)}</div></section>` : "";
+  return `<section class="card"><div class="card-h"><b>给下一批稿子的建议</b></div>${advice}</section>
+    <h3 class="lp-h">爆款榜 <span class="sub">${nWin} 篇 · 发布满 ${c.min_days} 天、互动 ≥ ${c.min_eng},并且是本账号同龄笔记的 ${c.win_lift} 倍以上</span></h3>
+    ${wins.length ? `<div class="lp-ws">${(LP.winAll ? wins : wins.slice(0, LP_WIN)).map(lpWinner).join("")}</div>${wins.length > LP_WIN ? `<p style="text-align:center;margin:12px 0 0"><button class="btn gray sm" data-winall>${LP.winAll ? "收起" : `展开全部 ${wins.length} 篇`}</button></p>` : ""}` : `<div class="empty"><b>还没有爆款</b>稿子发布满 ${c.min_days} 天、互动明显高于同龄笔记,就会出现在这里,可以一键继续复刻</div>`}${spawn}`;
 }
 // 手动把稿子对上千帆里的一篇笔记:列出还没对上任何稿子的千帆笔记,同账号、标题更像的排前面,可搜索
 function linkDialog(did, draft, onDone) {
@@ -845,37 +894,17 @@ async function fLoop() {
       ${accts.length ? `<div class="lp-rbar" style="margin-top:-2px"><span class="sub">给选中的稿子指定发布账号</span><select id="racc" aria-label="发布账号">${accts.map(a => `<option value="${esc(a.account_id)}">${esc(a.name)}</option>`).join("")}</select><button class="btn gray sm" data-racc ${LP.sel.size ? "" : "disabled"}>指定账号</button></div>` : ""}` : `<p class="sub" style="margin:0 0 8px">一般是发布时改过标题,或千帆数据还没同步。点「对上千帆笔记」从千帆里挑一篇手动对上;确实还没发的可以取消标记。</p>`}
     <div class="lp-rcs ${LP.reg === "nodata" ? "nd" : ""}">${regList.map(regRow).join("")}</div>${pager(LP.regPage, pg.reg.total, LP_SIZE, "rpg")}`
       : `<div class="empty" style="border:0;padding:18px">${LP.reg === "todo" ? "所有稿子都登记过了" : "没有对不上的稿子"}</div>`}</section>`;
-  const fun = ov.funnel, mx = Math.max(1, ...fun.map(f => f.n));
-  const se = ov.spawn_effect;
-  const names = { "": "全部", winner: "爆款", good: "不错", normal: "一般", weak: "偏弱", observing: "观察中", nodata: "没对上数据", unpublished: "未发布" };
-  const tbl = (head, body) => `<table class="tbl"><thead><tr><th>${head}</th><th class="num">有结论</th><th class="num">爆款</th><th class="num">爆款率</th></tr></thead><tbody>${body}</tbody></table>`;
-  const topicRows = ov.by_topic.map(x => `<tr><td>${esc(x.name)}</td><td class="num">${x.mature}</td><td class="num">${x.winners}</td><td class="num">${lpPct(x.rate)}</td></tr>`).join("");
-  const projRows = ov.by_project.map(x => `<tr><td>${esc(x.name)}<div class="sub">${esc(x.created)}</div></td><td class="num">${x.mature}</td><td class="num">${x.winners}</td><td class="num">${lpPct(x.rate)}</td></tr>`).join("");
-  const ptypeRows = (ov.by_ptype || []).map(x => `<tr><td>${esc(x.name)}</td><td class="num">${x.mature}</td><td class="num">${x.winners}</td><td class="num">${lpPct(x.rate)}</td></tr>`).join("");
-  const coverRows = (ov.by_cover || []).map(x => `<tr><td>${esc(x.name)}</td><td class="num">${x.mature}</td><td class="num">${x.winners}</td><td class="num">${lpPct(x.rate)}</td></tr>`).join("");
-  const none = `<div class="empty" style="border:0">数据还不够</div>`;
-  $("#main").innerHTML = `${ov.no_data ? `<div class="banner warn">还没有千帆里的「笔记表现」数据。采集端把这份数据同步过来后,系统会自动把发出去的稿子对上号、判断谁爆了。</div>` : ""}
+  const S = ov.steps, se = ov.spawn_effect;
+  const names = { withdata: "全部有数据的", winner: "爆款", good: "表现好", normal: "一般", weak: "偏低", observing: "数据还在涨" };
+  const tierCnt = k => k === "withdata" ? ["winner", "good", "normal", "weak", "observing"].reduce((t, x) => t + (ov.tiers[x] ?? 0), 0) : (ov.tiers[k] ?? 0);
+  const body = { publish: () => lpStepPublish(S, ov, regBlock), data: () => lpStepData(S, ov), result: () => lpStepResult(S, rows, pg, names, tierCnt), next: () => lpStepNext(S, wins, nWin, c, se) }[LP.step] || (() => "");
+  $("#main").innerHTML = `${ov.no_data ? `<div class="banner warn">还没有千帆里的「笔记表现」数据。采集端把这份数据同步过来后,系统会自动把发出去的稿子对上号、判断谁表现好。</div>` : ""}
   ${lpBindBanner(ov.bind_todo)}
-  <section class="card lp-fun"><div class="card-h"><b>从生成到爆款</b><span class="sub">稿子发布后,系统按标题自动和千帆里的笔记对上号,不用手动登记</span></div>
-    <div class="lp-steps">${fun.map((f, i) => `<div class="lp-step ${f.key === "winner" ? "win" : ""}"><b>${f.n}</b><span>${f.name}</span><i style="width:${Math.round(f.n / mx * 100)}%"></i></div>${i < fun.length - 1 ? `<s aria-hidden="true">›</s>` : ""}`).join("")}</div></section>
-  ${regBlock}
-  <section class="card" style="margin-top:12px"><div class="card-h"><b>继续复刻有没有用</b><span class="sub">对比「普通复刻」和「以爆款为样本继续复刻」两类稿子的爆款率</span></div>
-    <div class="lp-effs">${lpEff("普通复刻稿", se.original)}${lpEff("爆款样本复刻稿", se.spawned)}</div>
-    ${se.spawned.mature < 5 ? `<p class="sub" style="margin:8px 0 0">爆款样本复刻稿的有结论数据还很少(${se.spawned.mature} 篇),数据多了再看这个对比更可靠。</p>` : ""}</section>
-  <h3 class="lp-h">爆款榜 <span class="sub">${nWin} 篇${nWin > wins.length ? `(只列前 ${wins.length} 篇)` : ""} · 发布满 ${c.min_days} 天、互动 ≥ ${c.min_eng} 且 ≥ 本账号平均的 ${c.win_lift} 倍</span></h3>
-  ${wins.length ? `<div class="lp-ws">${(LP.winAll ? wins : wins.slice(0, LP_WIN)).map(lpWinner).join("")}</div>${wins.length > LP_WIN ? `<p style="text-align:center;margin:12px 0 0"><button class="btn gray sm" data-winall>${LP.winAll ? "收起" : `展开全部 ${wins.length} 篇`}</button></p>` : ""}` : `<div class="empty"><b>还没有判定为爆款的稿子</b>先多发布一些稿子;发布满 ${c.min_days} 天、数据回流后会出现在这里。门槛可以在管理端「接口配置 → 爆款回流」调整。</div>`}
-  <h3 class="lp-h">哪类更容易爆</h3>
-  <div class="lp-two"><section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按选题主题</b></div>${ov.by_topic.length ? tbl("主题", topicRows) : none}</section>
-  <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按任务批次</b></div>${ov.by_project.length ? tbl("任务", projRows) : none}</section>
-  <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按封面类型</b></div>${(ov.by_cover || []).length ? tbl("封面", coverRows) : none}</section>
-  <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按帖子类型</b></div>${(ov.by_ptype || []).length ? tbl("类型", ptypeRows) : none}</section></div>
-  ${lpStructCard(ov.title_struct)}
-  <section class="card" style="margin-top:12px"><div class="card-h"><b>评分准不准 · 哪些做法有效</b><span class="sub">拿稿子发布时的评分和写法,对比后来的真实表现;用「相对本账号平均」比,弱账号的低数据不拖累结论</span></div>${lpLearn(ov.learn, ov.adherence)}</section>
-  <h3 class="lp-h">全部稿子的表现</h3>
-  <div class="fl-chips" style="margin-bottom:10px">${Object.entries(names).map(([k, n]) => `<button class="chip ${LP.tier === k ? "on" : ""}" data-lt="${k}">${n}${k ? ` ${ov.tiers[k] ?? 0}` : ""}</button>`).join("")}</div>
-  ${rows.length ? `<div class="lp-nc-grid">${rows.map(lpCard).join("")}</div>` : `<section class="card"><div class="empty" style="border:0">这个筛选下没有稿子</div></section>`}
-  ${pager(LP.page, pg.rows.total, LP_SIZE, "lpg")}
-  <p class="sub" style="margin:14px 2px 0">「相对平均」= 这篇的互动(赞+藏+评)÷ 该账号所有笔记的平均(去掉最高 5%),再除以「同样发布天数的笔记通常是多少」(发布越久互动越多,新稿不能直接和老笔记比);账号互动很少时改比阅读量。刚发布的稿子数据还没沉淀,标为「观察中」,不下结论。阈值由管理端调整。数据更新于 ${esc(String(dr.data_at || "-").slice(0, 16))}。</p>`;
+  ${lpStepBar(S, ov)}
+  <div class="lp-step-body">${body()}</div>
+  <details class="lp-lab"><summary><b>系统自检</b><span class="sub">给管理员看:系统的评分准不准、标题结构有没有规律(默认收起)</span></summary>
+    ${lpStructCard(ov.title_struct)}
+    <section class="card" style="margin-top:12px"><div class="card-h"><b>评分准不准 · 哪些做法有效</b><span class="sub">拿稿子发布时的评分和写法,对比后来的真实表现;用「相对本账号平均」比,弱账号的低数据不拖累结论</span></div>${lpLearn(ov.learn, ov.adherence)}</section></details>`;
   // 勾选 / 全选只改界面,不用重新请求整页
   const syncSel = () => {
     const n = LP.sel.size, all = regList.length && regList.every(r => LP.sel.has(r.id));
@@ -887,6 +916,8 @@ async function fLoop() {
   };
   let lib = null;
   $("#main").onclick = async e => {
+    const st = e.target.closest("[data-step]"); if (st) { LP.step = st.dataset.step; try { localStorage.lpStep = LP.step; } catch { } return fLoop(); }
+    const cm = e.target.closest("[data-cmp]"); if (cm) { LP.cmp = cm.dataset.cmp; return fLoop(); }
     const lt = e.target.closest("[data-lt]"); if (lt) { LP.tier = lt.dataset.lt; LP.page = 1; return fLoop(); }
     if (e.target.closest("[data-winall]")) { LP.winAll = !LP.winAll; return fLoop(); }
     const gp = e.target.closest("[data-lpg]"); if (gp) { if (gp.disabled) return; LP.page = +gp.dataset.lpg; return fLoop(); }
@@ -896,7 +927,7 @@ async function fLoop() {
     if (e.target.closest("[data-rall]")) { LP.sel = regList.length && regList.every(r => LP.sel.has(r.id)) ? new Set() : new Set([...LP.sel, ...regList.map(r => r.id)]); return syncSel(); }
     const flags = el => { const c = el.closest(".lp-rc"); return { cover: !!c.querySelector("[data-ed=cover]")?.checked, body: !!c.querySelector("[data-ed=body]")?.checked }; };
     const bindDone = r => { toast(r.pending ? "已记下,千帆数据同步后会自动对上" : "已对上,数据会出现在复盘里"); return fLoop(); };
-    if (e.target.closest("[data-gobind]")) { LP.reg = "nodata"; LP.regPage = 1; LP.sel.clear(); await fLoop(); return $(".lp-rcs")?.scrollIntoView({ block: "start" }); }
+    if (e.target.closest("[data-gobind]")) { LP.step = "publish"; LP.reg = "nodata"; LP.regPage = 1; LP.sel.clear(); await fLoop(); return $(".lp-rcs")?.scrollIntoView({ block: "start" }); }
     const qk = e.target.closest("[data-quick]");
     if (qk) { const [did, nid] = qk.dataset.quick.split(":"); try { return bindDone(await api(`/api/drafts/${did}/link`, "POST", { note_id: nid, ...flags(qk) })); } catch (err) { return toast(err.message, 1); } }
     const bd = e.target.closest("[data-bind]");

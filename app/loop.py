@@ -25,7 +25,8 @@ def _cover_kind(d: dict) -> str:
     return kind_of(cc["layout"]) if cc.get("layout") else ""
 
 
-TIERS = {"winner": "爆款", "good": "不错", "normal": "一般", "weak": "偏弱", "observing": "观察中", "nodata": "没对上数据", "unpublished": "未发布"}
+TIERS = {"winner": "爆款", "good": "表现好", "normal": "一般", "weak": "偏低", "observing": "数据还在涨", "nodata": "没绑定笔记", "unpublished": "未发布"}
+WITH_DATA = ("winner", "good", "normal", "weak", "observing")   # 已经对上千帆笔记、有数据的
 _auto_at = 0.0
 
 
@@ -359,6 +360,75 @@ def _title_lab(ev: dict) -> dict | None:
     return {**cal, "ours": {"n": len(titles), "share": share}}
 
 
+def _median(v):
+    v = sorted(v)
+    return None if not v else v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
+
+
+def _compare(rows: list[dict], keyf, top: int = 8) -> list[dict]:
+    """按某个维度分组:篇数、平均阅读、相对同龄笔记的中位倍数(只算发布满 N 天的)。"""
+    g = defaultdict(list)
+    for r in rows:
+        k = keyf(r)
+        if k:
+            g[k].append(r)
+    out = []
+    for k, rs in g.items():
+        mat = [r for r in rs if r["tier"] in ("winner", "good", "normal", "weak") and r.get("lift") is not None]
+        views = [r["views"] for r in rs if r.get("views") is not None]
+        out.append({"name": k, "n": len(rs), "n_mature": len(mat), "views_avg": round(sum(views) / len(views)) if views else None,
+                    "lift": round(_median([r["lift"] for r in mat]), 2) if mat else None})
+    out.sort(key=lambda x: (-(x["views_avg"] or 0), -x["n"]))
+    return out[:top]
+
+
+ADVICE_MIN_N = 5        # 一组至少这么多篇(发布满 N 天、有数据)才给建议
+ADVICE_NEED = 10        # 整体有结论的稿子少于这么多,不给建议,只说还差几篇
+
+
+def review_steps(ev: dict) -> dict:
+    """复盘页「四步」要用的数字:发出去、数据回来、谁好谁差、下一步(爆款数、对比、一句话建议)。"""
+    import datetime as _dt
+    rows, today = ev["rows"], _dt.date.today()
+    pub = [r for r in rows if r["published"] or r["tier"] not in ("unpublished", "nodata")]
+    day_of = lambda r: str(r.get("published_at") or "")[:10]
+    days = []
+    for i in range(6, -1, -1):
+        d = (today - _dt.timedelta(days=i)).isoformat()
+        days.append({"day": d[5:], "n": sum(1 for r in pub if day_of(r) == d)})
+    week_lo, last_lo = (today - _dt.timedelta(days=6)).isoformat(), (today - _dt.timedelta(days=13)).isoformat()
+    last_week = sum(1 for r in pub if last_lo <= day_of(r) < week_lo)
+    linked = sum(1 for r in pub if r.get("edit"))
+    tiers = {t: sum(1 for r in rows if r["tier"] == t) for t in TIERS}
+    try:
+        shops = [{"name": x["name"], "online": bool(x["online"]), "last_sync": x.get("last_sync") or ""} for x in qianfan.shops()]
+    except Exception:
+        shops = []
+    withdata = [r for r in rows if r["tier"] in WITH_DATA]
+    cmp = {"account": _compare(withdata, lambda r: r.get("account_name") or "未指定账号"), "cover": _compare(withdata, lambda r: r.get("cover_name")),
+           "ptype": _compare(withdata, lambda r: r.get("ptype")), "topic": _compare(withdata, lambda r: r.get("topic"))}
+    mature = [r for r in withdata if r["tier"] != "observing" and r.get("lift") is not None]
+    advice = []
+    if len(mature) >= ADVICE_NEED:
+        labels = {"cover": "封面", "ptype": "帖子类型", "topic": "选题"}
+        for dim, label in labels.items():
+            ok = [g for g in cmp[dim] if g["n_mature"] >= ADVICE_MIN_N and g["lift"] is not None]
+            if len(ok) < 2:
+                continue
+            best, worst = max(ok, key=lambda g: g["lift"]), min(ok, key=lambda g: g["lift"])
+            if best["lift"] >= 1.2 and best["lift"] >= worst["lift"] * 1.3:
+                advice.append(f"{label}「{best['name']}」的稿子表现更好(比同龄笔记中位高到 ×{best['lift']},{best['n_mature']} 篇),下批可以多用。")
+            if worst["lift"] <= 0.8 and worst["name"] != best["name"] and worst["lift"] * 1.3 <= best["lift"]:
+                advice.append(f"{label}「{worst['name']}」的稿子偏低(×{worst['lift']},{worst['n_mature']} 篇),可以少用或换个写法。")
+        advice = advice[:3]
+    return {"pub": {"total": len(pub), "week": sum(x["n"] for x in days), "last_week": last_week, "days": days},
+            "data": {"linked": linked, "published": len(pub), "rate": round(linked / len(pub), 2) if pub else None, "waiting": tiers["observing"], "data_at": ev.get("data_at") or "",
+                     "hours": int(float(get_settings().get("qf_account_hours") or 24)), "shops": shops},
+            "result": {"good": tiers["winner"] + tiers["good"], "normal": tiers["normal"], "low": tiers["weak"], "observing": tiers["observing"], "n": len(withdata), "n_mature": len(mature)},
+            "next": {"winners": tiers["winner"], "advice": advice, "need": max(0, ADVICE_NEED - len(mature)) if len(mature) < ADVICE_NEED else 0},
+            "compare": cmp}
+
+
 def bind_todo(ev: dict) -> dict:
     """已标发布但还没绑定千帆笔记的稿子(绑定后数据才能追踪,复盘才有用):总数、按人分、标记发布已满 N 天的(多半已经发出去了,该绑了)。"""
     min_days = ev["cfg"]["min_days"]
@@ -427,7 +497,7 @@ def overview(ev: dict | None = None) -> dict:
                          key=lambda x: x["created"], reverse=True)[:12]
     gens = {"original": _rate([r for r in got if not r["generation"]]), "spawned": _rate([r for r in got if r["generation"]])}
     return {"funnel": [{"key": k, "name": n, "n": v} for k, n, v in funnel], "tiers": {t: sum(1 for r in rows if r["tier"] == t) for t in TIERS},
-            "by_topic": group("topic"), "by_cover": group("cover_name", 1), "by_ptype": group("ptype", 1), "by_account": group("account_name", 1), "learn": learning(ev), "adherence": adherence(ev), "bind_todo": bind_todo(ev), "title_lab": _title_lab(ev), "title_struct": _title_struct(ev), "by_project": by_project, "spawn_effect": gens, "cfg": ev["cfg"], "data_at": ev["data_at"],
+            "by_topic": group("topic"), "by_cover": group("cover_name", 1), "by_ptype": group("ptype", 1), "by_account": group("account_name", 1), "learn": learning(ev), "adherence": adherence(ev), "bind_todo": bind_todo(ev), "steps": review_steps(ev), "title_lab": _title_lab(ev), "title_struct": _title_struct(ev), "by_project": by_project, "spawn_effect": gens, "cfg": ev["cfg"], "data_at": ev["data_at"],
             "no_data": not got and not q_one("SELECT 1 AS x FROM qf_snapshots WHERE kind='notes' LIMIT 1")}
 
 

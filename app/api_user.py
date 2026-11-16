@@ -957,7 +957,7 @@ _TIER_ORDER = {"winner": 0, "good": 1, "normal": 2, "weak": 3, "observing": 4, "
 
 
 def _loop_rows(ev: dict, tier: str = "", account_id: str = "") -> list[dict]:
-    rows = [r for r in ev["rows"] if (not tier or r["tier"] == tier) and (not account_id or r["account_id"] == account_id)]
+    rows = [r for r in ev["rows"] if (not tier or (r["tier"] in loop.WITH_DATA if tier == "withdata" else r["tier"] == tier)) and (not account_id or r["account_id"] == account_id)]
     rows.sort(key=lambda r: (_TIER_ORDER[r["tier"]], -(r["lift"] or 0), -r["id"]))
     return rows
 
