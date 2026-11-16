@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from .textgzip import TextGZip
-from . import db, auth, worker, notes, api_user, api_admin, api_collector, autorun, api_qianfan, api_kol, kol, api_live, thumbs, imagegen, mirror, backup
+from . import db, auth, worker, notes, api_user, api_admin, api_collector, autorun, api_qianfan, api_kol, kol, api_live, thumbs, imagegen, mirror, backup, health
 
 db.init()
 auth.bootstrap()
@@ -30,6 +30,9 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 
 for r in (api_collector.router, api_admin.public, api_admin.router, api_user.public, api_user.router, api_qianfan.router, api_qianfan.user, api_kol.router, api_kol.admin, api_live.router, api_live.worker_router, api_live.vworker_router):
     app.include_router(r)
+
+
+app.add_exception_handler(RuntimeError, health.service_error)   # 调大模型 / 生图失败时给页面一句看得懂的话
 
 
 @app.middleware("http")

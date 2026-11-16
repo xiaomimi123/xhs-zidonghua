@@ -56,3 +56,20 @@ def run(rep, env):
     rep.check("生图风格:要求每件物品完整入镜、不被边缘切掉、杯把杯口完整、物品留间距互不穿插;不再写「构图随意」;Live 拍法里不再要求「遮挡」",
               "完整入镜" in pr and "杯把和杯口完整可见" in pr and "互不穿插重叠" in pr and "构图随意" not in pr
               and not any("遮挡" in x for x in covers.LOOK_STATES) and any("不穿插" in x for x in covers.LOOK_STATES))
+
+    # ---- 调外部服务失败:给页面一句看得懂的话(以前是「Internal Server Error」) ----
+    from fastapi import FastAPI as _F
+    from fastapi.testclient import TestClient as _TC
+    from app import health as _h
+    raw402 = 'DeepSeek 返回 402:{"error":{"message":"Insufficient Balance"}}'
+    rep.check("错误翻译:余额不足 / Key 无效 / 限流翻成员工看得懂的话;其他错误原样",
+              "余额不足" in _h.friendly(raw402) and "Key" in _h.friendly("DeepSeek 返回 401:invalid api key") and "限流" in _h.friendly("DeepSeek 返回 429:x")
+              and _h.friendly("连不上 DeepSeek:ConnectError") == "连不上 DeepSeek:ConnectError")
+    _a = _F()
+    _a.add_exception_handler(RuntimeError, _h.service_error)
+
+    @_a.post("/boom")
+    def _boom():
+        raise RuntimeError(raw402)
+    r = _TC(_a, raise_server_exceptions=False).post("/boom")
+    rep.check("接口里调大模型失败(余额不足):返回 502 和一句看得懂的话,不再是 500「Internal Server Error」", r.status_code == 502 and "余额不足" in r.json()["detail"], r.text[:120])
