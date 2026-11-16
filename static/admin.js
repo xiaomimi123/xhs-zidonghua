@@ -249,7 +249,7 @@ const tierB = t => `<span class="tier ${t}">${TIER[t] || t}</span>`;
 const NF = { track: "", topic: "", keyword: "", ai_type: "", tier: "", ai_status: "", project_id: "0", q: "", sort: "new" };
 async function vNotes() {
   const f = state.nf ||= { ...NF };
-  const [fa, projects, tracks, fx] = await Promise.all([api(`/api/admin/notes/facets?track=${encodeURIComponent(f.track)}`), api("/api/admin/projects"), api("/api/admin/tracks"), api("/api/admin/notes/fields")]);
+  const [fa, projects, tracks, fx] = await Promise.all([api(`/api/admin/notes/facets?${["track", "topic", "keyword", "ai_type", "tier", "ai_status", "project_id"].map(k => `${k}=${encodeURIComponent(f[k] ?? "")}`).join("&")}`), api("/api/admin/projects"), api("/api/admin/tracks"), api("/api/admin/notes/fields")]);
   const opt = (list, cur, label, name = k => k || "(空)") => `<option value="">${label}</option>` + list.map(x => `<option value="${esc(x.k)}" ${x.k === cur ? "selected" : ""}>${esc(name(x.k))}(${x.n})</option>`).join("");
   const trackNames = [...new Set([...tracks.map(t => t.name), ...fa.tracks.map(t => t.k).filter(Boolean)])];
   const aiN = Object.fromEntries(fa.ai.map(x => [x.k, x.n]));

@@ -577,7 +577,7 @@ const nbCard = (n, i) => `<article class="fl-nc" data-nb="${i}" tabindex="0">
 
 async function fNoteBase() {
   const f = NB.f;
-  const fa = await api(`/api/notebase/facets?track=${encodeURIComponent(f.track)}`);
+  const fa = await api(`/api/notebase/facets?${["track", "topic", "ai_type", "kind", "tier"].map(k => `${k}=${encodeURIComponent(f[k])}`).join("&")}`);   // 联动筛选:每个下拉框的数量按其他已选条件统计
   const opt = (list, cur, label, name = k => k) => `<option value="">${label}</option>` + list.map(x => `<option value="${esc(x.k)}" ${x.k === cur ? "selected" : ""}>${esc(name(x.k))}(${x.n})</option>`).join("");
   const filtered = Object.entries(f).some(([k, v]) => v !== (k === "sort" ? "new" : ""));
   $("#main").onclick = null;

@@ -464,22 +464,33 @@ def fill_tracks():
 
 
 @router.get("/notes/facets")
-def note_facets(track: str = ""):
-    """筛选项和每项的数量。选了赛道时,关键词只列该赛道下的。"""
-    def grp(col, where="1=1", *a):
-        return [{"k": r["k"], "n": r["n"]} for r in q_all(
-            f"SELECT {col} k, COUNT(*) n FROM notes n WHERE {where} GROUP BY k ORDER BY n DESC", *a)]
+def note_facets(track: str = "", topic: str = "", keyword: str = "", ai_type: str = "", tier: str = "", ai_status: str = "", project_id: int = 0, kind: str = "", kind_sub: str = ""):
+    """筛选项和每项的数量。联动筛选:每个下拉框的选项和数量,都按「除它自己以外」已经选了的条件统计,
+    这样选了某个类型之后,其他下拉框里的数字就是这个类型里的数量,不会列出点进去是 0 篇的选项;已选的值始终留在列表里(数量为 0 也留)。"""
+    cur = {"track": track, "topic": topic, "keyword": keyword, "ai_type": ai_type, "tier": tier, "ai_status": ai_status, "project_id": project_id, "kind": kind, "kind_sub": kind_sub}
+
+    def grp(col, key, base=""):
+        w, args = _note_filter(**{k: v for k, v in cur.items() if k != key})
+        rows = [{"k": r["k"], "n": r["n"]} for r in q_all(
+            f"SELECT {col} k, COUNT(*) n FROM notes n WHERE {w}{' AND ' + base if base else ''} GROUP BY k ORDER BY n DESC", *args)]
+        v = cur.get(key)
+        if v and not any(r["k"] == v for r in rows):
+            rows.append({"k": v, "n": 0})
+        return rows
+
+    def plain(col, where="1=1", *a):
+        return [{"k": r["k"], "n": r["n"]} for r in q_all(f"SELECT {col} k, COUNT(*) n FROM notes n WHERE {where} GROUP BY k ORDER BY n DESC", *a)]
     return {
-        "tracks": grp("n.track"),
+        "tracks": grp("n.track", "track"),
         "no_track": q_one("SELECT COUNT(*) n FROM notes WHERE track='' OR track IS NULL")["n"],
-        "topics": grp("n.topic", "n.topic!='' AND n.track=?", track) if track else grp("n.topic", "n.topic!=''"),
-        "keywords": grp("n.keyword", "n.track=?", track) if track else grp("n.keyword")[:100],
-        "types": grp("n.ai_type", "n.ai_status='done'"),
-        "kinds": grp("n.kind", "n.kind_status='done'"),
-        "kind_status": grp("n.kind_status"),
-        "tiers": grp(tier_sql()),
-        "ai": grp("n.ai_status"),
-        "mirror": grp("n.mirror_status"),
+        "topics": grp("n.topic", "topic", "n.topic!=''"),
+        "keywords": grp("n.keyword", "keyword")[:100],
+        "types": grp("n.ai_type", "ai_type", "n.ai_status='done'"),
+        "kinds": grp("n.kind", "kind", "n.kind_status='done'"),
+        "kind_status": plain("n.kind_status"),
+        "tiers": grp(tier_sql(), "tier"),
+        "ai": grp("n.ai_status", "ai_status"),
+        "mirror": plain("n.mirror_status"),
         "content_types": CONTENT_TYPES,
     }
 
