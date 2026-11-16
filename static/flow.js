@@ -716,6 +716,13 @@ async function bindDialog(ids, onDone) {
     } catch (err) { toast(err.message, 1); }
   };
 }
+// 复盘页顶部提醒:已标发布但没绑定千帆笔记的稿子(绑定后数据才能追踪);点「去绑定」切到「标了发布但没对上数据」
+function lpBindBanner(b) {
+  if (!b || !b.total) return "";
+  const ppl = b.people.filter(p => p.n).slice(0, 8).map(p => `<span class="lp-bp">${esc(p.name)} <b>${p.n}</b>${p.old ? `<small>(其中 ${p.old} 篇已发出 ${b.min_days} 天以上)</small>` : ""}</span>`).join("");
+  return `<div class="banner warn lp-bind-bn" role="status"><div><b>还有 ${b.total} 篇稿子标了「已发布」,但没绑定对应的千帆笔记</b>${b.old ? `,其中 <b>${b.old}</b> 篇标记发布已超过 ${b.min_days} 天,多半已经发出去了` : ""}。
+    绑定之后这些稿子的数据才能追踪到,复盘里的爆款判断和「评分准不准」才有依据。</div>${ppl ? `<div class="lp-bps">${ppl}</div>` : ""}<button class="btn sm" data-gobind>去绑定</button></div>`;
+}
 // 标了发布但没对上数据:发布时改了标题 / 封面,系统读不到正文和封面,只能给几篇最可能的笔记让人点选,或粘贴笔记链接绑定;改了封面 / 正文的勾上,评分对比时会排除
 const lpBind = r => {
   const cs = r.cands || [];
@@ -738,11 +745,32 @@ function lpTitleCard(T, tc) {
     <td class="num">${r.n_with} 篇 · 中位 ${r.med_with == null ? "-" : "×" + r.med_with}</td><td class="num">${r.n_without} 篇 · 中位 ${r.med_without == null ? "-" : "×" + r.med_without}</td>
     <td class="num">${r.auc == null ? "-" : r.auc}</td><td><span class="fl-pill ${cls}">${lab}</span></td></tr>`; }).join("");
   const check = tc && tc.corr != null ? `<p class="sub" style="margin:8px 0 0">用这些规律给我们自己发出去的稿子标题打「写法分」,和它们的真实表现的排名相关系数是 <b>${lpR(tc.corr)}</b>(${tc.n} 篇;越接近 1 说明规律在我们的稿子上也管用)。</p>` : tc && tc.n ? `<p class="sub" style="margin:8px 0 0">我们自己的稿子目前只有 ${tc.n} 篇有结论,不够验证这些规律在我们的稿子上管不管用(够 8 篇后会显示)。</p>` : "";
-  return `<section class="card" style="margin-top:12px"><div class="card-h"><b>标题写法 · 从千帆 ${T.n_used} 篇真实笔记看规律</b><span class="sub">发布满 ${T.min_days} 天的笔记;表现 = 相对本账号平均;比排名而不是平均数(个别爆款会把平均数拉高)</span></div>
+  return `<section class="card" style="margin-top:12px"><div class="card-h"><b>标题写法 · 从千帆 ${T.n_used} 篇真实笔记看规律</b><span class="sub">发布满 ${T.min_days} 天的笔记;表现 = 相对本账号平均,并按发布天数校正;比排名而不是平均数(个别爆款会把平均数拉高)</span></div>
     <p style="margin:0 0 10px;line-height:1.7">${good.length ? `<b>明显更好:</b>${good.map(esc).join("、")}。` : "暂时没有统计上明显更好的写法。"}${bad.length ? ` <b>明显更差:</b>${bad.map(esc).join("、")}。` : ""}
       ${usedBad.length ? `<span class="fl-err" style="display:block;margin-top:4px">我们常用但偏不利的写法:${usedBad.map(esc).join("、")}</span>` : ""}</p>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>标题写法</th><th class="num">有这种写法</th><th class="num">没有</th><th class="num" title="有这种写法的笔记排在没有的前面的概率,0.5 = 没差别">排名概率</th><th>结论</th></tr></thead><tbody>${rows}</tbody></table></div>
     ${absent.length ? `<p class="sub" style="margin:8px 0 0">这些写法在样本里没有(或全都是),没法比较:${absent.map(esc).join("、")}。</p>` : ""}<p class="sub" style="margin:8px 0 0">「明显」要求差别在统计上站得住(比了十几种写法,偶然碰出差别的概率不低,所以门槛放得高);「可能」只是有倾向,别当结论。这只是相关,不代表改了标题就一定变好,账号、内容、发布时间都有影响。</p>${check}</section>`;
+}
+// 标题结构:大模型按结构(场景痛点结果 / 数字清单 / 认知反差 / 悬念好奇 / 避坑挑选 / 画面情绪)给每个标题分类,再看真实数据里哪种结构更吸引人。
+// 判断标题好坏看结构和吸引力,不看 emoji / 问号 / 字数这类表面特征
+const LP_SV = { sig_pos: ["明显更好", "ok"], lean_pos: ["可能更好", "ok soft"], sig_neg: ["明显更差", "bad"], lean_neg: ["可能更差", "bad soft"], none: ["看不出差别", ""], few: ["样本太少", ""] };
+function lpStructCard(S) {
+  if (!S) return "";
+  const tg = S.tagging || {}, pct = S.n_titles ? Math.round((S.n_titles - (tg.untagged || 0)) * 100 / S.n_titles) : 0;
+  const prog = tg.running ? `正在让大模型给标题分类… ${tg.done}/${tg.total}(分类完刷新页面)` : tg.untagged ? `还有 ${tg.untagged} 个标题没分类${tg.error ? `(上次失败:${esc(tg.error)})` : ",稍后会自动继续"}` : "全部标题都已分类";
+  const head = `<div class="card-h"><b>标题结构 · 哪种写法在你们的账号上更吸引人</b><span class="sub">大模型按结构给标题分类,再看真实数据里谁表现更好;表现 = 相对本账号平均,按发布天数校正</span></div>
+    <div class="lp-lp"><div class="lp-lbar"><i style="width:${pct}%"></i></div><span class="sub">${prog} · 已用 ${S.n_used} 篇发布满 ${S.min_days} 天的笔记做对比</span></div>`;
+  if (!S.n_used) return `<section class="card" style="margin-top:12px">${head}<p class="sub" style="margin:10px 0 0">标题分类需要一点时间(几百个标题,几分钟),分完后这里会出现对比结果。</p></section>`;
+  const sh = (S.ours && S.ours.share) || {};
+  const row = r => { const [lab, cls] = LP_SV[r.verdict]; return `<tr><td>${esc(r.name)}${r.hint ? ` <span class="sub">${esc(r.hint)}</span>` : ""}${r.group === "struct" && sh[r.key] != null ? `<div class="sub">我们 ${Math.round(sh[r.key] * 100)}% 的稿子这样写</div>` : ""}</td>
+    <td class="num">${r.n_with} 篇 · 中位 ${r.med_with == null ? "-" : "×" + r.med_with}</td><td class="num">${r.n_without} 篇 · 中位 ${r.med_without == null ? "-" : "×" + r.med_without}</td>
+    <td class="num">${r.auc == null ? "-" : r.auc}</td><td><span class="fl-pill ${cls}">${lab}</span></td></tr>`; };
+  const tbl = (title, rows) => rows.length ? `<h4 class="lp-h4">${title}</h4><div class="tbl-wrap"><table class="tbl"><thead><tr><th>写法</th><th class="num">有</th><th class="num">没有</th><th class="num" title="有这种写法的笔记排在没有的前面的概率,0.5 = 没差别">排名概率</th><th>结论</th></tr></thead><tbody>${rows.map(row).join("")}</tbody></table></div>` : "";
+  const ok = S.rows.filter(r => r.n_with && r.n_without);
+  const good = ok.filter(r => r.verdict === "sig_pos").map(r => r.name), bad = ok.filter(r => r.verdict === "sig_neg").map(r => r.name);
+  const sum = `<p style="margin:10px 0 0;line-height:1.7">${good.length ? `<b>明显更好:</b>${good.map(esc).join("、")}。` : "暂时没有统计上明显更好的结构或特征。"}${bad.length ? ` <b>明显更差:</b>${bad.map(esc).join("、")}。` : ""}</p>`;
+  return `<section class="card" style="margin-top:12px">${head}${sum}${tbl("标题结构", ok.filter(r => r.group === "struct"))}${tbl("标题特征(大模型判断)", ok.filter(r => r.group === "feat"))}
+    <p class="sub" style="margin:8px 0 0">比的是排名而不是平均数(个别爆款会拉高平均);「明显」要求差别在统计上站得住,「可能」只是倾向。分类由大模型完成,会有误判,结论只作参考;「其他」是日常吐槽、问候这类没有明显结构的标题。证据足够强的结构,会自动写进写标题的提示词(每 5 篇留 1 篇对照)。</p></section>`;
 }
 // 评分准不准 / 什么做法有效:发布时的打分快照 vs 后来的真实表现(相对本账号平均的倍数)
 function lpLearn(L, adh) {
@@ -827,6 +855,7 @@ async function fLoop() {
   const coverRows = (ov.by_cover || []).map(x => `<tr><td>${esc(x.name)}</td><td class="num">${x.mature}</td><td class="num">${x.winners}</td><td class="num">${lpPct(x.rate)}</td></tr>`).join("");
   const none = `<div class="empty" style="border:0">数据还不够</div>`;
   $("#main").innerHTML = `${ov.no_data ? `<div class="banner warn">还没有千帆里的「笔记表现」数据。采集端把这份数据同步过来后,系统会自动把发出去的稿子对上号、判断谁爆了。</div>` : ""}
+  ${lpBindBanner(ov.bind_todo)}
   <section class="card lp-fun"><div class="card-h"><b>从生成到爆款</b><span class="sub">稿子发布后,系统按标题自动和千帆里的笔记对上号,不用手动登记</span></div>
     <div class="lp-steps">${fun.map((f, i) => `<div class="lp-step ${f.key === "winner" ? "win" : ""}"><b>${f.n}</b><span>${f.name}</span><i style="width:${Math.round(f.n / mx * 100)}%"></i></div>${i < fun.length - 1 ? `<s aria-hidden="true">›</s>` : ""}`).join("")}</div></section>
   ${regBlock}
@@ -840,13 +869,13 @@ async function fLoop() {
   <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按任务批次</b></div>${ov.by_project.length ? tbl("任务", projRows) : none}</section>
   <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按封面类型</b></div>${(ov.by_cover || []).length ? tbl("封面", coverRows) : none}</section>
   <section class="card flush"><div class="card-h" style="padding:12px 14px"><b>按帖子类型</b></div>${(ov.by_ptype || []).length ? tbl("类型", ptypeRows) : none}</section></div>
-  ${lpTitleCard(ov.title_lab, ov.learn.title_check)}
+  ${lpStructCard(ov.title_struct)}
   <section class="card" style="margin-top:12px"><div class="card-h"><b>评分准不准 · 哪些做法有效</b><span class="sub">拿稿子发布时的评分和写法,对比后来的真实表现;用「相对本账号平均」比,弱账号的低数据不拖累结论</span></div>${lpLearn(ov.learn, ov.adherence)}</section>
   <h3 class="lp-h">全部稿子的表现</h3>
   <div class="fl-chips" style="margin-bottom:10px">${Object.entries(names).map(([k, n]) => `<button class="chip ${LP.tier === k ? "on" : ""}" data-lt="${k}">${n}${k ? ` ${ov.tiers[k] ?? 0}` : ""}</button>`).join("")}</div>
   ${rows.length ? `<div class="lp-nc-grid">${rows.map(lpCard).join("")}</div>` : `<section class="card"><div class="empty" style="border:0">这个筛选下没有稿子</div></section>`}
   ${pager(LP.page, pg.rows.total, LP_SIZE, "lpg")}
-  <p class="sub" style="margin:14px 2px 0">「相对平均」= 这篇的互动(赞+藏+评)÷ 该账号所有笔记的平均(去掉最高 5%);账号互动很少时改比阅读量。刚发布的稿子数据还没沉淀,标为「观察中」,不下结论。阈值由管理端调整。数据更新于 ${esc(String(dr.data_at || "-").slice(0, 16))}。</p>`;
+  <p class="sub" style="margin:14px 2px 0">「相对平均」= 这篇的互动(赞+藏+评)÷ 该账号所有笔记的平均(去掉最高 5%),再除以「同样发布天数的笔记通常是多少」(发布越久互动越多,新稿不能直接和老笔记比);账号互动很少时改比阅读量。刚发布的稿子数据还没沉淀,标为「观察中」,不下结论。阈值由管理端调整。数据更新于 ${esc(String(dr.data_at || "-").slice(0, 16))}。</p>`;
   // 勾选 / 全选只改界面,不用重新请求整页
   const syncSel = () => {
     const n = LP.sel.size, all = regList.length && regList.every(r => LP.sel.has(r.id));
@@ -867,6 +896,7 @@ async function fLoop() {
     if (e.target.closest("[data-rall]")) { LP.sel = regList.length && regList.every(r => LP.sel.has(r.id)) ? new Set() : new Set([...LP.sel, ...regList.map(r => r.id)]); return syncSel(); }
     const flags = el => { const c = el.closest(".lp-rc"); return { cover: !!c.querySelector("[data-ed=cover]")?.checked, body: !!c.querySelector("[data-ed=body]")?.checked }; };
     const bindDone = r => { toast(r.pending ? "已记下,千帆数据同步后会自动对上" : "已对上,数据会出现在复盘里"); return fLoop(); };
+    if (e.target.closest("[data-gobind]")) { LP.reg = "nodata"; LP.regPage = 1; LP.sel.clear(); await fLoop(); return $(".lp-rcs")?.scrollIntoView({ block: "start" }); }
     const qk = e.target.closest("[data-quick]");
     if (qk) { const [did, nid] = qk.dataset.quick.split(":"); try { return bindDone(await api(`/api/drafts/${did}/link`, "POST", { note_id: nid, ...flags(qk) })); } catch (err) { return toast(err.message, 1); } }
     const bd = e.target.closest("[data-bind]");

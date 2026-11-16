@@ -1359,3 +1359,10 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 
 /* 标题写法校准 */
 .fl-pill.soft{opacity:.7}
+
+/* 复盘:绑定提醒 */
+.lp-bind-bn{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-bottom:12px}
+.lp-bind-bn>div:first-child{flex:1 1 360px;line-height:1.6}
+.lp-bps{display:flex;flex-wrap:wrap;gap:6px 10px;font-size:12px}
+.lp-bp{padding:2px 9px;border-radius:999px;background:rgba(0,0,0,.06)}
+.lp-bp small{color:var(--sub);margin-left:3px}

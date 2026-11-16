@@ -60,7 +60,7 @@ DEFAULT_SETTINGS = {
     "auto_compress": "1",        # 正文明显超过爆款组字数时,自动压缩一次(原稿保留,可切换)
     "auto_review": "1",          # 复刻后自动审稿打分并给出修改版
     "review_comments": "0",      # 审稿时附带模拟评论区(多一些 token)
-    "title_hint": "1",           # 写标题时参考千帆真实笔记里「明显」有效的标题写法(每 5 篇留 1 篇不参考做对照)
+    "title_hint": "1",           # 写标题时参考「按结构分类后、在真实数据里明显表现更好的标题结构」(只有证据够强才会出现;每 5 篇留 1 篇不参考做对照)
     "loop_win_lift": "2",        # 爆款判定:互动(赞+藏+评)≥ 本账号平均的几倍
     "loop_min_eng": "20",        # 爆款判定:互动至少多少(防止账号数据太小,几个赞就算爆款)
     "loop_min_days": "3",        # 发布满几天,数据才算够久、可以下结论(之前显示「观察中」)
@@ -367,6 +367,11 @@ def _m012_kind(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
 
 
+def _m021_title_struct(c):
+    """标题结构分类结果(大模型按结构给每个标题打类型和特征,只存一次):title_key = 去掉标点表情后的标题,同一个标题只分类一次。"""
+    c.execute("CREATE TABLE IF NOT EXISTS title_struct(title_key TEXT PRIMARY KEY, title TEXT, struct TEXT, dims TEXT DEFAULT '{}', at TEXT DEFAULT CURRENT_TIMESTAMP)")
+
+
 def _m020_buyer_voice(c):
     """商家账号不能装成买家(平台判违规):给已有稿子的质检结果补上「买家口吻」这一项;原来标「质检合格」的、含买家口吻的改成需检查。
     只改 checks / auto_ok / auto_note,不动稿子内容;可重复执行。"""
@@ -464,6 +469,7 @@ MIGRATIONS = [
     (18, "draft_feat", _m018_draft_feat),
     (19, "pub_edit", _m019_pub_edit),
     (20, "buyer_voice", _m020_buyer_voice),
+    (21, "title_struct", _m021_title_struct),
     # (2, "说明", _m002_xxx),
 ]
 

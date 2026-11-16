@@ -122,3 +122,44 @@ def run(rep, env):
     he = {x["label"]: x for x in loop.learning(ev_h)["hint_effect"]}
     rep.check("提示有没有用:带提示 2 篇(标题被改过的不算)vs 对照 1 篇;老稿不算;只有一组时不给",
               he["带提示"]["n"] == 2 and he["带提示"]["lift"] == 1.5 and he["没带提示(对照)"]["n"] == 1 and loop.learning({**ev_h, "rows": ev_h["rows"][:2]})["hint_effect"] == [])
+
+    # ---- 发布天数校正:新笔记不和老笔记直接比 ----
+    today = datetime.date.today()
+    mkn = lambda i, age, likes: {"note_id": f"a{i}_{age}", "title": f"笔记{i}", "likes": likes, "collects": 0, "comments": 0, "views": 100, "account_id": "accA",
+                                 "published_at": (today - datetime.timedelta(days=age)).isoformat()}
+    notes = [mkn(i, 4, 2) for i in range(20)] + [mkn(i, 15, 10) for i in range(20)] + [mkn(i, 60, 6) for i in range(20)] + [mkn(i, 200, 5) for i in range(3)]   # 最后 3 篇:这个天数段样本不足
+    fac = loop.age_factors(notes, today)
+    rep.check("天数校正系数:每个天数段取该段所有笔记「相对账号平均」的中位数;样本不足 8 篇的段不给;老笔记互动多、新笔记少",
+              fac[loop._age_bucket(4)] < 1 < fac[loop._age_bucket(15)] and loop._age_bucket(200) not in fac and all(loop.AGE_CLAMP[0] <= v <= loop.AGE_CLAMP[1] for v in fac.values()), str(fac))
+    rep.check("系数取用:没给的段 / 没有发布日期 / 日期是未来 = 1(不校正)", loop.age_factor(200, fac) == 1.0 and loop.age_factor(None, fac) == 1.0 and loop.age_factor(-3, fac) == 1.0 and loop.age_factor(4, None) == 1.0)
+    cfg = {"win_lift": 2.0, "min_eng": 5, "min_days": 3}
+    d_pub = {"published": 1, "published_at": (today - datetime.timedelta(days=4)).isoformat()}
+    it = {"likes": 2, "collects": 0, "comments": 0, "views": 100, "published_at": d_pub["published_at"]}
+    t_raw, l_raw = loop.classify(it, d_pub, ("eng", 5.0), cfg)
+    t_adj, l_adj = loop.classify(it, d_pub, ("eng", 5.0), cfg, fac)
+    rep.check("判定按同龄校正:发布 4 天、互动只有账号平均的 0.4 倍,不校正被判「偏弱」,校正后和同龄笔记比是「一般」(≈ 1 倍)",
+              t_raw == "weak" and l_raw == 0.4 and t_adj == "normal" and 0.8 <= l_adj <= 1.3, str((t_raw, l_raw, t_adj, l_adj)))
+    nl_adj = dict(tl.note_lifts(notes, 3, today)), dict(tl.note_lifts(notes, 3, today))
+    young = [l for t, l in tl.note_lifts(notes, 3, today) if "笔记" in t][:20]
+    rep.check("标题校准用校正后的表现:同样是账号平均的 0.4 倍,新笔记和老笔记校正后拉到同一水平", len(young) > 0 and all(0.5 < x < 3 for x in young))
+
+    # ---- 标题改按结构写 / 评;表面特征提示停用;绑定提醒 ----
+    from app import db as _db
+    dflt = next(v for k, v in vars(_db).items() if isinstance(v, dict) and "auto_fix" in v)
+    rep.check("标题按结构写:写稿提示词给出标题结构(人群 / 场景 + 痛点 + 结果、数字 + 结果、认知反差、悬念、避坑、画面 + 情绪)和好标题的共同点,备选标题换结构;不再靠表面特征",
+              all(w in llm.WRITE_SYSTEM for w in ("人群 / 场景 + 痛点 + 结果", "认知反差", "好奇缺口", "两个备选标题换成不同的结构", "不说空话")) and "emoji" not in llm.TITLE_GUIDE and "问号" not in llm.TITLE_GUIDE.replace("?", ""))
+    try:
+        llm.WRITE_SYSTEM.format(banned="x")
+        ok_fmt = True
+    except Exception:
+        ok_fmt = False
+    rep.check("提示词仍可格式化;审稿的「标题」维度按结构和吸引力打分(不看 emoji / 问号 / 字数)", ok_fmt and "按结构和吸引力打分" in llm.REVIEW_SYSTEM and "不要看有没有 emoji、问号、字数" in llm.REVIEW_SYSTEM)
+    rep.check("标题提示总开关默认开(现在给的是按结构分析的提示,证据不够强时不加内容,见 iso_titlestruct)", dflt["title_hint"] == "1")
+    evb = {"cfg": {"min_days": 3}, "rows": [{"published": True, "edit": None, "created_by": "玉珍", "days": 5}, {"published": True, "edit": None, "created_by": "玉珍", "days": 1},
+                                           {"published": True, "edit": None, "created_by": "丽敏", "days": 9}, {"published": True, "edit": {"level": "原样"}, "created_by": "丽敏", "days": 9},
+                                           {"published": False, "edit": None, "created_by": "丽敏", "days": None}]}
+    bt = loop.bind_todo(evb)
+    pp = {p["name"]: p for p in bt["people"]}
+    rep.check("绑定提醒:已标发布但没绑笔记的总数、按人分、其中发出满 N 天的;已绑的、没发布的不算;发出久的人排前面",
+              bt["total"] == 3 and bt["old"] == 2 and pp["玉珍"] == {"name": "玉珍", "n": 2, "old": 1} and pp["丽敏"]["n"] == 1 and pp["丽敏"]["old"] == 1 and bt["min_days"] == 3
+              and loop.bind_todo({"cfg": {"min_days": 3}, "rows": []})["total"] == 0 and "bind_todo" in loop.overview(loop.evaluate(register=False)), str(bt))

@@ -74,13 +74,51 @@ def _topic(angle: str) -> str:
     return t[:20]
 
 
-def classify(it: dict | None, d: dict, base: tuple[str, float] | None, c: dict) -> tuple[str, float | None]:
+# 发布天数对表现的影响很大(实测:发布 3~5 天的笔记中位数只有账号平均的 0.4 倍,6~20 天的是 1.5~1.7 倍),
+# 新稿不能直接和账号里所有笔记的平均比,所以「相对平均」要再除以「同样发布天数的笔记通常是多少」。
+AGE_BUCKETS = [(0, 2), (3, 5), (6, 10), (11, 20), (21, 40), (41, 90), (91, 100000)]
+AGE_MIN_N = 8                 # 某个天数段的笔记少于这么多,不校正(系数 1)
+AGE_CLAMP = (0.3, 3.0)        # 系数限幅:样本再怪也不会把表现放大 / 缩小太多
+
+
+def _age_bucket(age: int) -> int:
+    return next(i for i, (lo, hi) in enumerate(AGE_BUCKETS) if lo <= age <= hi)
+
+
+def age_factors(items: list[dict], today: datetime.date | None = None) -> dict[int, float]:
+    """{天数段: 系数}:该天数段所有笔记「相对本账号平均」的中位数(所有账号、所有笔记一起算,不只是我们的稿子)。样本不足的段不给。"""
+    today = today or datetime.date.today()
+    base = _baselines(items)
+    rel: dict[int, list[float]] = defaultdict(list)
+    for it in items:
+        try:
+            age = (today - datetime.date.fromisoformat(str(it.get("published_at") or "")[:10])).days
+        except ValueError:
+            continue
+        b = base.get(it.get("account_id") or "") or base.get("")
+        if age < 0 or not b or not b[1]:
+            continue
+        rel[_age_bucket(age)].append((_eng(it) if b[0] == "eng" else (it.get("views") or 0)) / b[1])
+    out = {}
+    for k, v in rel.items():
+        if len(v) >= AGE_MIN_N:
+            v = sorted(v)
+            m = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
+            out[k] = min(max(m, AGE_CLAMP[0]), AGE_CLAMP[1])
+    return out
+
+
+def age_factor(age: int | None, factors: dict | None) -> float:
+    return (factors or {}).get(_age_bucket(age), 1.0) if age is not None and age >= 0 else 1.0
+
+
+def classify(it: dict | None, d: dict, base: tuple[str, float] | None, c: dict, factors: dict | None = None) -> tuple[str, float | None]:
     if not it:
         return ("nodata" if d["published"] else "unpublished"), None
     metric, b = base or ("eng", 0.0)
     value = _eng(it) if metric == "eng" else (it.get("views") or 0)
-    lift = round(value / b, 2) if b else None
     age = _days_since(it.get("published_at") or d["published_at"] or "")
+    lift = round(value / b / age_factor(age, factors), 2) if b else None   # 相对「本账号平均 × 同龄笔记的通常水平」
     if age is not None and age < c["min_days"]:
         return "observing", lift
     eng = _eng(it)
@@ -130,6 +168,7 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
         perf = qianfan.match_drafts(items)
     base = _baselines(items)
     cal = titlelab.cached(items, at, c["min_days"])
+    fac = age_factors(items)
     spawned = {r["spawn_from"]: r["n"] for r in q_all("SELECT spawn_from, COUNT(*) AS n FROM projects WHERE spawn_from IS NOT NULL GROUP BY spawn_from")}
     drafts = q_all("""SELECT d.id, d.title, d.angle, d.account_id, d.account_name, d.project_id, d.published, d.published_at, d.qf_note_id, d.status, d.auto_ok, d.created, d.images, d.cover_card, d.ptype,
         p.track, p.created_by, p.owner_id, p.spawn_from, COALESCE(p.generation, 0) AS generation, d.feat, d.pub_edit
@@ -159,7 +198,7 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
             q_exec("UPDATE drafts SET account_id=?, account_name=? WHERE id=?", it["account_id"], nm, d["id"])
             d["account_id"], d["account_name"] = it["account_id"], nm
         acc = it.get("account_id") if it else (d["account_id"] or "")
-        tier, lift = classify(it, d, base.get(acc or "") or base.get(""), c)
+        tier, lift = classify(it, d, base.get(acc or "") or base.get(""), c, fac)
         rows.append({"id": d["id"], "title": d["title"], "topic": _topic(d["angle"]), "angle": d["angle"], "track": d["track"] or "", "project_id": d["project_id"],
                      "account_id": acc or "", "account_name": (it or {}).get("account_name") or d["account_name"] or "", "created_by": d["created_by"] or "", "owner_id": d["owner_id"],
                      "tier": tier, "tier_name": TIERS[tier], "lift": lift, "generation": d["generation"], "spawn_from": d["spawn_from"], "spawned": spawned.get(d["id"], 0),
@@ -169,7 +208,7 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
                      "comments": (it or {}).get("comments"), "eng": _eng(it) if it else None,
                      "feat": d["feat"] if isinstance(d["feat"], dict) else None, "edit": edit_info(pe, ts) if it else None,
                      "cover_kind": _cover_kind(d), "cover_name": COVER_KINDS.get(_cover_kind(d), "(旧稿没记录)"), "cover_layout": (d["cover_card"] or {}).get("layout", ""), "ptype": d["ptype"] or "(未标注)"})
-    return {"rows": rows, "cfg": c, "data_at": at, "title_cal": cal}
+    return {"rows": rows, "cfg": c, "data_at": at, "title_cal": cal, "title_tags": titlelab.tag_map(), "notes": items}
 
 
 def _rate(rs: list[dict]) -> dict:
@@ -280,6 +319,15 @@ def learning(ev: dict) -> dict:
         items = sorted(({"label": k, **agg(v)} for k, v in g.items()), key=lambda x: -(x["lift"] or 0))
         if len(items) > 1:   # 只有一种做法没得比,不列
             factors.append({"name": name, "items": items})
+    # 标题结构:大模型给我们稿子的标题分类后,看哪种结构在我们自己的稿子上表现更好(标题发布时没被改过的才算)
+    tg_map = ev.get("title_tags") or {}
+    sg = defaultdict(list)
+    for r in done_all:
+        tg = tg_map.get(titlelab.title_key(r.get("title") or "")) if _unedited(r, "title") else None
+        if tg:
+            sg[tg["struct"]].append(r)
+    if len(sg) > 1:
+        factors.append({"name": "标题结构(大模型分类)", "items": sorted(({"label": k, **agg(v)} for k, v in sg.items()), key=lambda x: -(x["lift"] or 0))})
     egroups = defaultdict(list)
     for r in mature:
         egroups[(r.get("edit") or {}).get("level") or "原样"].append(r)
@@ -312,6 +360,33 @@ def _title_lab(ev: dict) -> dict | None:
         feats = [titlelab.title_features(t) for t in titles]
         share = {k: round(sum(1 for f in feats if f[k]) / len(feats), 2) for k, *_ in titlelab.FEATURES}
     return {**cal, "ours": {"n": len(titles), "share": share}}
+
+
+def bind_todo(ev: dict) -> dict:
+    """已标发布但还没绑定千帆笔记的稿子(绑定后数据才能追踪,复盘才有用):总数、按人分、标记发布已满 N 天的(多半已经发出去了,该绑了)。"""
+    min_days = ev["cfg"]["min_days"]
+    by = defaultdict(lambda: {"n": 0, "old": 0})
+    for r in ev["rows"]:
+        if r["published"] and not r.get("edit"):
+            b = by[r.get("created_by") or "(未记录)"]
+            b["n"] += 1
+            if (r.get("days") or 0) >= min_days:
+                b["old"] += 1
+    people = sorted(({"name": k, **v} for k, v in by.items()), key=lambda x: (-x["old"], -x["n"]))
+    return {"total": sum(p["n"] for p in people), "old": sum(p["old"] for p in people), "people": people, "min_days": min_days}
+
+
+def _title_struct(ev: dict) -> dict | None:
+    """标题结构校准(按大模型分类的结构看哪种更吸引人)+ 我们已生成稿子的标题结构分布 + 分类进度。"""
+    items = ev.get("notes")
+    if items is None:
+        return None
+    tags = ev.get("title_tags") or {}
+    cal = titlelab.calibrate_struct(items, tags, ev["cfg"]["min_days"])
+    ours = [tags[k] for k in (titlelab.title_key(r["title"]) for r in ev["rows"] if r.get("title")) if k in tags]
+    share = {s: round(sum(1 for t in ours if t["struct"] == s) / len(ours), 2) for s in {t["struct"] for t in ours}} if ours else {}
+    titles = [it.get("title") or "" for it in items] + [r["title"] for r in ev["rows"] if r["published"] and r.get("title")]
+    return {**cal, "ours": {"n": len(ours), "share": share}, "tagging": titlelab.tagging_status(titles), "n_titles": len(items)}
 
 
 def adherence(ev: dict) -> list[dict]:
@@ -355,7 +430,7 @@ def overview(ev: dict | None = None) -> dict:
                          key=lambda x: x["created"], reverse=True)[:12]
     gens = {"original": _rate([r for r in got if not r["generation"]]), "spawned": _rate([r for r in got if r["generation"]])}
     return {"funnel": [{"key": k, "name": n, "n": v} for k, n, v in funnel], "tiers": {t: sum(1 for r in rows if r["tier"] == t) for t in TIERS},
-            "by_topic": group("topic"), "by_cover": group("cover_name", 1), "by_ptype": group("ptype", 1), "by_account": group("account_name", 1), "learn": learning(ev), "adherence": adherence(ev), "title_lab": _title_lab(ev), "by_project": by_project, "spawn_effect": gens, "cfg": ev["cfg"], "data_at": ev["data_at"],
+            "by_topic": group("topic"), "by_cover": group("cover_name", 1), "by_ptype": group("ptype", 1), "by_account": group("account_name", 1), "learn": learning(ev), "adherence": adherence(ev), "bind_todo": bind_todo(ev), "title_lab": _title_lab(ev), "title_struct": _title_struct(ev), "by_project": by_project, "spawn_effect": gens, "cfg": ev["cfg"], "data_at": ev["data_at"],
             "no_data": not got and not q_one("SELECT 1 AS x FROM qf_snapshots WHERE kind='notes' LIMIT 1")}
 
 

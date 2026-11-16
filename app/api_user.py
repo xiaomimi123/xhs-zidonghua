@@ -973,6 +973,9 @@ def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1
     """复盘页一次取齐:只算一次对号,各个列表按页切(原来要请求 5 次,每次都重算,稿子多了很慢)。"""
     size = min(max(size, 1), 100)
     ev = _my_eval()
+    from . import titlelab
+    titles = [it.get("title") or "" for it in ev.get("notes", [])] + [r["title"] for r in ev["rows"] if r["published"] and r.get("title")]
+    titlelab.maybe_start_tagging(titles)   # 千帆笔记和已发布稿子的标题,还没按结构分类的,后台让大模型分类(不阻塞页面)
     rows = _loop_rows(ev, tier)
     regs = _loop_rows(ev, "unpublished" if reg == "todo" else "nodata")
     n_noacc = sum(1 for r in regs if not r["account_id"])   # 没指定发布账号的有几篇(「只看没指定账号」按钮上显示)
