@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 
-from . import mirror, thumbs
+from . import health, mirror, thumbs
 from .db import get_settings
 
 IMG_DIR = Path(__file__).resolve().parent.parent / "data" / "images"
@@ -128,6 +128,7 @@ def _poll(c: httpx.Client, base: str, task_id: str) -> str:
     raise RuntimeError(f"生图超时:等了 {POLL_MAX // 60} 分钟还没出图")
 
 
+@health.tracked("image")
 def generate_image(prompt: str, name: str, s: dict | None = None, refs: list | None = None) -> str:
     """生成一张图并保存到 data/images,返回文件名。瞬时错误自动重试。
     s 可传入临时配置(测试用),不传则读已保存的设置。"""

@@ -72,6 +72,7 @@ async function vOverview() {
     [s.staff_count > 0 || s.user_password_set, "创建员工账号(前端需要登录才能使用)", "staff"],
   ];
   $("#main").innerHTML = `${o.init_pw_file ? `<div class="banner err">⚠ 还在使用自动生成的初始密码,请尽快到「账号安全」修改。</div>` : ""}
+    ${(o.services || []).filter(x => x.failing).map(x => `<div class="banner err">⚠ ${esc(x.name)}最近一次调用失败(${esc(new Date(x.err_at * 1000).toLocaleString("zh-CN", { hour12: false }))}):${esc(x.err)}。检查 Key、余额和网络后,成功一次这条提示就会消失。</div>`).join("")}
     ${o.backup && (o.backup.last_err || !o.backup.count) ? `<div class="banner err">⚠ 数据库备份${o.backup.last_err ? "失败:" + esc(o.backup.last_err) : "还没有成功做过"}。</div>` : ""}
   <div class="stats">
     <div class="card stat"><span class="sub">采集端</span><b style="color:${c.online ? "var(--ok)" : "var(--faint)"}">${c.online ? "在线" : "离线"}</b><div class="mini">最近心跳 ${ago(c.ago)}</div></div>

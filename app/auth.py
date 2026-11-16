@@ -9,7 +9,7 @@ import time
 from fastapi import HTTPException, Request
 from .db import DATA, get_settings, save_settings, q_one
 
-SECRET_FILE = DATA / "secret.key"
+SECRET_FILE = DATA / "secret.key"   # 和 vault.master() 用的是同一个文件
 INIT_PW_FILE = DATA / "初始管理员密码.txt"
 SESSION_DAYS = 7
 _fails: dict[str, list[float]] = {}  # ip -> 最近失败时间,用于登录限流
@@ -49,8 +49,22 @@ def _valid(token: str, role: str) -> bool:
             and hmac.compare_digest(sig, hmac.new(_secret(), msg.encode(), "sha256").hexdigest()))
 
 
+def admin_ver() -> str:
+    r = q_one("SELECT value FROM settings WHERE key='admin_token_ver'")
+    return (r["value"] if r else "0") or "0"
+
+
+def make_admin_token() -> str:
+    return make_token(f"admin:{admin_ver()}")
+
+
+def bump_admin_ver():
+    """作废所有已登录的管理员会话(改密码 / 密码被环境变量重置时调用)。"""
+    save_settings({"admin_token_ver": str(int(admin_ver()) + 1)})
+
+
 def is_admin(request: Request) -> bool:
-    return _valid(request.cookies.get("adm", ""), "admin")
+    return _valid(request.cookies.get("adm", ""), f"admin:{admin_ver()}")
 
 
 def require_admin(request: Request):
@@ -152,6 +166,7 @@ def bootstrap():
     env_pw = os.environ.get("ADMIN_PASSWORD", "").strip()
     if env_pw and not check_pw(env_pw, s["admin_password_hash"]):
         upd["admin_password_hash"] = hash_pw(env_pw)
+        upd["admin_token_ver"] = str(int(s.get("admin_token_ver") or 0) + 1)
     elif not s["admin_password_hash"]:
         pw = secrets.token_urlsafe(9)
         upd["admin_password_hash"] = hash_pw(pw)

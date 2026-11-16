@@ -79,9 +79,11 @@ DEFAULT_SETTINGS = {
     "kol_pages": "30",           # 每个品类最多翻几页(每页 20 位)
     "kb_common": "",             # 全赛道通用知识(平台规则等),首次启动写入默认内容
     "admin_password_hash": "",   # 管理端登录密码(只存哈希)
+    "svc_health": "",            # 大模型 / 生图 / 看图最近的调用结果(内部使用)
+    "admin_token_ver": "0",      # 管理员登录版本:改密码时 +1,旧的登录立刻失效
     "user_password_hash": "",    # 用户端访问密码,留空则用户端无需登录
 }
-SECRET_KEYS = {"admin_password_hash", "user_password_hash"}
+SECRET_KEYS = {"admin_password_hash", "user_password_hash", "admin_token_ver", "svc_health"}
 
 DEFAULT_TRACKS = [
     ("美妆护肤", ["通勤妆", "新手化妆", "油皮护肤", "平价彩妆", "敏感肌", "防晒"]),
@@ -519,6 +521,7 @@ def init():
         c.execute("PRAGMA journal_mode=WAL")
         migrate(c)
         _startup_fixups(c)
+    seal_existing_settings()
 
 
 def _startup_fixups(c):
@@ -588,18 +591,31 @@ def _migrate_v2(c):
 
 
 def get_settings():
+    from . import vault
     s = dict(DEFAULT_SETTINGS)
     with conn() as c:
         for r in c.execute("SELECT key,value FROM settings"):
-            s[r["key"]] = r["value"]
+            s[r["key"]] = vault.unseal(r["value"]) if r["key"] in vault.ENC_KEYS else r["value"]
     return s
 
 
 def save_settings(d):
+    from . import vault
     with conn() as c:
         for k, v in d.items():
             if k in DEFAULT_SETTINGS:
-                c.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (k, str(v)))
+                v = str(v)
+                c.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (k, vault.seal(v) if k in vault.ENC_KEYS else v))
+
+
+def seal_existing_settings():
+    """把库里还是明文的 Key / Token 转成密文(每次启动做一遍,已经是密文的不动)。"""
+    from . import vault
+    with conn() as c:
+        for k in vault.ENC_KEYS:
+            r = c.execute("SELECT value FROM settings WHERE key=?", (k,)).fetchone()
+            if r and r["value"] and not r["value"].startswith(vault.PREFIX):
+                c.execute("UPDATE settings SET value=? WHERE key=?", (vault.seal(r["value"]), k))
 
 
 def q_all(sql, *a):

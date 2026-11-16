@@ -23,7 +23,7 @@ def run(rep, env):
         ca, cb = TestClient(app), TestClient(app)
         rep.check("两个员工都能登录", ca.post("/api/login", json={"username": "own_a", "password": "passA1"}).status_code == 200
                   and cb.post("/api/login", json={"username": "own_b", "password": "passB1"}).status_code == 200)
-        adm = TestClient(app, cookies={"adm": auth.make_token("admin")})
+        adm = TestClient(app, cookies={"adm": auth.make_admin_token()})
 
         # 造数据:A 的任务(走接口,验证自动记归属)+ 稿子 / 拆解卡 / 采集任务 / 一键生成;一个历史任务(owner_id 为空)
         pa = ca.post("/api/projects", json={"track": "美食", "keywords": ["早餐归属测试"], "direction": ""}).json()["id"]

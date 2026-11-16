@@ -2,12 +2,14 @@ import json
 import re
 import time
 import httpx
+from . import health
 from .db import get_settings
 
 
 CHAT_WAITS = (0, 2, 6)  # 最多试 3 次,间隔 2 秒、6 秒
 
 
+@health.tracked("llm")
 def chat(system: str, user: str, temperature: float = 1.0) -> dict:
     """调用 DeepSeek(OpenAI 兼容),要求返回 JSON 对象。
     网络抖动、限流(429)、服务暂不可用(5xx)、返回的不是合法 JSON,这几种偶发情况自动重试;
@@ -494,6 +496,7 @@ def parse_chat_text(raw: str) -> str:
 VISION_WAITS = (0, 3, 6, 10)  # 到服务商的连接偶尔会被掐断,多试几次
 
 
+@health.tracked("vision")
 def vision_chat(system: str, text: str, images: list, model: str | None = None, s: dict | None = None) -> str:
     """带图片的对话(OpenAI 兼容的 /chat/completions)。地址和 Key 优先用「看图接口」的配置,没填就沿用生图接口。images 是本地图片路径。"""
     import base64

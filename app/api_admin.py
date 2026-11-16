@@ -6,10 +6,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from .auth import require_admin, is_admin, check_pw, hash_pw, make_token, throttle, SESSION_DAYS, INIT_PW_FILE
+from .auth import require_admin, is_admin, check_pw, hash_pw, make_admin_token, bump_admin_ver, throttle, SESSION_DAYS, INIT_PW_FILE
 from .api_collector import collector_summary
 from . import worker
-from . import backup
+from . import backup, health
 from .db import get_settings, save_settings, SECRET_KEYS, conn, q_all, q_one, q_exec, tier_sql
 from .llm import CONTENT_TYPES, ping as ping_deepseek, suggest_topic_merges, expand_keywords, expand_adjacent
 from . import imagegen
@@ -37,7 +37,7 @@ def login(d: PwIn, request: Request, response: Response):
     throttle(request, ok, "admin")
     if not ok:
         raise HTTPException(400, "密码不正确")
-    response.set_cookie("adm", make_token("admin"), max_age=SESSION_DAYS * 86400, httponly=True, samesite="strict")
+    response.set_cookie("adm", make_admin_token(), max_age=SESSION_DAYS * 86400, httponly=True, samesite="strict")
     return {"ok": True}
 
 
@@ -63,6 +63,7 @@ def overview():
         "collector": collector_summary(),
         "init_pw_file": INIT_PW_FILE.exists(),
         "backup": backup.status(),
+        "services": health.status(),
     }
 
 
@@ -107,7 +108,7 @@ class ChangePw(BaseModel):
 
 
 @router.post("/password")
-def change_pw(d: ChangePw, request: Request):
+def change_pw(d: ChangePw, request: Request, response: Response):
     throttle(request, None, "admin")
     ok = check_pw(d.old, get_settings()["admin_password_hash"])
     throttle(request, ok, "admin")
@@ -116,6 +117,8 @@ def change_pw(d: ChangePw, request: Request):
     if len(d.new) < 8:
         raise HTTPException(400, "新密码至少 8 位")
     save_settings({"admin_password_hash": hash_pw(d.new)})
+    bump_admin_ver()   # 其他设备上的管理员登录全部失效,当前这台换新会话继续用
+    response.set_cookie("adm", make_admin_token(), max_age=SESSION_DAYS * 86400, httponly=True, samesite="strict")
     INIT_PW_FILE.unlink(missing_ok=True)
     return {"ok": True}
 
