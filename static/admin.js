@@ -72,6 +72,7 @@ async function vOverview() {
     [s.staff_count > 0 || s.user_password_set, "创建员工账号(前端需要登录才能使用)", "staff"],
   ];
   $("#main").innerHTML = `${o.init_pw_file ? `<div class="banner err">⚠ 还在使用自动生成的初始密码,请尽快到「账号安全」修改。</div>` : ""}
+    ${o.backup && (o.backup.last_err || !o.backup.count) ? `<div class="banner err">⚠ 数据库备份${o.backup.last_err ? "失败:" + esc(o.backup.last_err) : "还没有成功做过"}。</div>` : ""}
   <div class="stats">
     <div class="card stat"><span class="sub">采集端</span><b style="color:${c.online ? "var(--ok)" : "var(--faint)"}">${c.online ? "在线" : "离线"}</b><div class="mini">最近心跳 ${ago(c.ago)}</div></div>
     <div class="card stat"><span class="sub">采集任务</span><b>${sum(o.tasks)}</b><div class="mini"><span>等待 <em>${o.tasks.pending || 0}</em></span><span>进行中 <em>${o.tasks.running || 0}</em></span><span>失败 <em style="color:var(--err)">${o.tasks.failed || 0}</em></span></div></div>

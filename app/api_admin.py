@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from .auth import require_admin, is_admin, check_pw, hash_pw, make_token, throttle, SESSION_DAYS, INIT_PW_FILE
 from .api_collector import collector_summary
 from . import worker
+from . import backup
 from .db import get_settings, save_settings, SECRET_KEYS, conn, q_all, q_one, q_exec, tier_sql
 from .llm import CONTENT_TYPES, ping as ping_deepseek, suggest_topic_merges, expand_keywords, expand_adjacent
 from . import imagegen
@@ -31,9 +32,9 @@ def session(request: Request):
 
 @public.post("/login")
 def login(d: PwIn, request: Request, response: Response):
-    throttle(request, None)
+    throttle(request, None, "admin")
     ok = check_pw(d.password, get_settings()["admin_password_hash"])
-    throttle(request, ok)
+    throttle(request, ok, "admin")
     if not ok:
         raise HTTPException(400, "密码不正确")
     response.set_cookie("adm", make_token("admin"), max_age=SESSION_DAYS * 86400, httponly=True, samesite="strict")
@@ -61,7 +62,16 @@ def overview():
         "tasks": counts("crawl_tasks"), "drafts": counts("drafts"), "playbooks": counts("playbooks"),
         "collector": collector_summary(),
         "init_pw_file": INIT_PW_FILE.exists(),
+        "backup": backup.status(),
     }
+
+
+@router.post("/backup/run")
+def backup_run():
+    try:
+        return {"ok": True, **backup.run_once()}
+    except Exception as e:
+        raise HTTPException(500, f"备份失败:{e}")
 
 
 # ---------- 接口配置 ----------
@@ -97,8 +107,11 @@ class ChangePw(BaseModel):
 
 
 @router.post("/password")
-def change_pw(d: ChangePw):
-    if not check_pw(d.old, get_settings()["admin_password_hash"]):
+def change_pw(d: ChangePw, request: Request):
+    throttle(request, None, "admin")
+    ok = check_pw(d.old, get_settings()["admin_password_hash"])
+    throttle(request, ok, "admin")
+    if not ok:
         raise HTTPException(400, "原密码不正确")
     if len(d.new) < 8:
         raise HTTPException(400, "新密码至少 8 位")

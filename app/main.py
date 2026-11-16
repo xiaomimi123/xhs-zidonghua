@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from .textgzip import TextGZip
-from . import db, auth, worker, notes, api_user, api_admin, api_collector, autorun, api_qianfan, api_kol, kol, api_live, thumbs, imagegen, mirror
+from . import db, auth, worker, notes, api_user, api_admin, api_collector, autorun, api_qianfan, api_kol, kol, api_live, thumbs, imagegen, mirror, backup
 
 db.init()
 auth.bootstrap()
@@ -17,6 +17,7 @@ async def lifespan(_):
     kol.rescore()  # 达人库评分规则或目标品类改过:启动时按当前规则重算一遍(几百行,很快)
     worker.resume()  # 接着跑上次中断的拆解、复刻,启动打标签线程
     autorun.start()  # 一键批量生成的监督线程
+    backup.start()  # 数据库每天备份一次
     api_live.start_gen()  # Live 图:产品图 → 场景图的生成线程
     thumbs.warm_dirs([imagegen.IMG_DIR, mirror.DIR])  # 后台补齐已有图片的缩略图(只补缺的)
     mirror.disk_mb(wait=False)  # 后台先算好图片目录大小(管理端概览要用,算一次要几秒)

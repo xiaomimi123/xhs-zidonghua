@@ -124,16 +124,25 @@ def require_collector(request: Request):
         raise HTTPException(401, "采集端 token 无效")
 
 
-def throttle(request: Request, ok: bool):
-    """同一 IP 10 分钟内失败 5 次就锁定。ok=None 时只检查不记录。"""
+def throttle(request: Request, ok: bool, who: str = ""):
+    """登录限流:同一个账号 10 分钟内失败 5 次就锁定这个账号(其他账号不受影响);同一 IP 失败 30 次也锁。
+    容器里看到的来源 IP 可能是同一个网关地址,所以不能只按 IP 计数,否则一个人输错会把所有人锁在外面。
+    ok=None 时只检查不记录;ok=True 时清掉这个账号的失败记录。"""
     ip = request.client.host if request.client else "?"
     now = time.time()
-    recent = [t for t in _fails.get(ip, []) if now - t < 600]
-    if len(recent) >= 5:
-        raise HTTPException(429, "尝试次数过多,请 10 分钟后再试")
+    keys = [(f"ip:{ip}", 30)] + ([(f"who:{who}", 5)] if who else [])
+    for k, limit in keys:
+        _fails[k] = [t for t in _fails.get(k, []) if now - t < 600]
+        if len(_fails[k]) >= limit:
+            raise HTTPException(429, "尝试次数过多,请 10 分钟后再试")
     if ok is False:
-        recent.append(now)
-    _fails[ip] = recent
+        for k, _ in keys:
+            _fails[k].append(now)
+    elif ok and who:
+        _fails.pop(f"who:{who}", None)
+    if len(_fails) > 5000:   # 防止被乱填账号名撑大内存:清掉已过期的
+        for k in [k for k, v in _fails.items() if not v or now - v[-1] >= 600]:
+            _fails.pop(k, None)
 
 
 def bootstrap():

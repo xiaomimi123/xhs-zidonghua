@@ -17,5 +17,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     volumes:
       - ./data:/app/data
+      # 数据库备份的第二份:在 .env 里把 BACKUP_EXTRA_DIR 设成另一块盘 / 另一台机器的目录(默认放项目下 backups/,同一块盘,只防误删)
+      - ${BACKUP_EXTRA_DIR:-./backups}:/app/backups
       # 回归测试:代码、样本集、基线和结果都放在项目目录里,方便改提示词前后对比
       - ./evals:/app/evals

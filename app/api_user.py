@@ -55,12 +55,13 @@ def session(request: Request):
 @public.post("/login")
 def login(d: LoginIn, request: Request, response: Response):
     """有员工账号时用「账号 + 密码」登录;没建过员工账号时沿用旧的通用访问密码。"""
-    throttle(request, None)
     username = d.username.strip()
+    who = f"login:{username.lower()}" if staff_mode() else "login:shared"
+    throttle(request, None, who)
     if staff_mode():
         st = q_one("SELECT * FROM staff WHERE username=?", username) if username else None
         ok = check_pw(d.password, st["password_hash"] if st else _DUMMY_HASH) and bool(st)
-        throttle(request, ok)
+        throttle(request, ok, who)
         if not ok:
             raise HTTPException(400, "账号或密码不正确")
         if not st["enabled"]:
@@ -71,7 +72,7 @@ def login(d: LoginIn, request: Request, response: Response):
         response.set_cookie("usr", make_staff_token(st), max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax")
         return {"ok": True}
     ok = check_pw(d.password, get_settings()["user_password_hash"])
-    throttle(request, ok)
+    throttle(request, ok, who)
     if not ok:
         raise HTTPException(400, "密码不正确")
     response.set_cookie("usr", make_token("user"), max_age=SESSION_DAYS * 86400, httponly=True, samesite="lax")
@@ -95,10 +96,10 @@ def change_my_password(d: MyPw, request: Request, response: Response):
     st = current_staff(request)
     if not st:
         raise HTTPException(400, "只有员工账号可以在这里改密码")
-    throttle(request, None)
+    throttle(request, None, f"pw:{st['id']}")
     row = q_one("SELECT * FROM staff WHERE id=?", st["id"])
     ok = check_pw(d.old, row["password_hash"])
-    throttle(request, ok)
+    throttle(request, ok, f"pw:{st['id']}")
     if not ok:
         raise HTTPException(400, "原密码不正确")
     if len(d.new) < 6:

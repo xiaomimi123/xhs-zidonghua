@@ -51,3 +51,6 @@ collector/ego/*
 tools/livephoto/*.log
 tools/livephoto/*.log.err
 app/version.json
+
+# 数据库备份的第二份(compose 默认目录)
+backups/
