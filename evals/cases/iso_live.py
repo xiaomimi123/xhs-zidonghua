@@ -273,6 +273,10 @@ def run(rep, env):
             ps2 = user.post("/api/live/jobs/generate", json={"product_id": pid_s, "count": 1}).json()["ids"]
             g_u = db.q_one("SELECT gen FROM live_jobs WHERE id=?", ps2[0])["gen"]
             rep.check("Live 场景图:用户填了产品大小,用用户的", g_u.get("size") == "用户填:罐高 8cm", str(g_u))
+            pm = api_live._gen_prompt(gps[0], motion=True)
+            rep.check("要做成视频的场景图:提示词要求静止瞬间(不拍倒入 / 冲泡 / 搅拌等进行中的动作、液面平稳)、任何饮品都不要热气、最多一只手;通用风格里「热饮杯口除外」被去掉;不做视频的(Live 图)不加这些要求",
+                      "静止的瞬间" in pm and "倒入" in pm and "包括热饮" in pm and "最多出现一只手" in pm and "热饮的杯口除外" not in pm
+                      and "静止的瞬间" not in pr0 and "热饮的杯口除外" in pr0, pm[-300:])
             db.q_exec(f"DELETE FROM live_jobs WHERE id IN ({','.join(str(i) for i in ps2)})")
             db.q_exec(f"DELETE FROM live_jobs WHERE id IN ({','.join(str(i) for i in ps)})")
             db.q_exec("DELETE FROM products WHERE id=?", pid_s)

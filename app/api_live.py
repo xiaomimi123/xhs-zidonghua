@@ -639,7 +639,15 @@ def _gen_history(gen: dict) -> tuple[dict, dict]:
     return used, pairs
 
 
-def _gen_prompt(g: dict) -> str:
+# 场景图之后要做成 3 秒视频(图生视频模型会把「正在发生的事」继续演下去):画面必须是静止的瞬间,否则会出现
+# 倒满了还在倒(反物理)、热气乱飘、多出一只手这类一眼就能看出是 AI 的问题
+MOTION_STILL_RULES = ("这张图之后要做成 3 秒的动态视频,所以画面必须是静止的瞬间:"
+                      "不要拍倒入、倒牛奶、冲泡、搅拌、研磨、撒粉、淋酱这类「正在进行」的动作,杯子里的饮品是已经做好的、液面平稳,没有液体在流动或下落;"
+                      "任何食物和饮品(包括热饮)都不要有热气、蒸汽、烟雾;"
+                      "画面里最多出现一只手,而且只拿着一件东西,不要出现第二只手、第二个人的手,也不要一个人双手同时做不同的事")
+
+
+def _gen_prompt(g: dict, motion: bool = False) -> str:
     from . import covers, worker
     scene = g.get("scene") or covers.scene("美食", g.get("idx", 0), 1)
     if g.get("look"):
@@ -651,8 +659,11 @@ def _gen_prompt(g: dict) -> str:
         scene += f"。{g['avoid']}"
     if g.get("size"):   # 产品实际大小:不然模型不知道多大,盒子和罐子的相对大小、产品和手的比例每张都不一样
         scene += f"。产品的真实大小:{g['size']};画面里产品要和手、杯子、碗等周围的东西保持真实比例,不要画得过大或过小"
+    if motion:
+        scene += f"。{MOTION_STILL_RULES}"
     subject = g.get("note") or "产品是画面里的主角,摆在或拿在真实生活场景中,像用户自己随手拍的分享照"
-    return worker._image_prompt("", subject, True, scene)
+    out = worker._image_prompt("", subject, True, scene)
+    return out.replace("(热饮的杯口除外)", "") if motion else out   # 通用风格词里热饮可以有热气,做视频的图不行
 
 
 def _gen_refs(g: dict) -> list[Path]:
@@ -674,7 +685,7 @@ def process_gen_job(jid: int):
         refs = _gen_refs(g)
         if not refs:
             raise RuntimeError("产品图不见了,请重新上传")
-        name = imagegen.generate_image(_gen_prompt(g), f"lvgen_{jid}_{int(time.time())}", refs=refs)
+        name = imagegen.generate_image(_gen_prompt(g, (j["opts"] or {}).get("mode") == "motion"), f"lvgen_{jid}_{int(time.time())}", refs=refs)
         nxt = "video" if (j["opts"] or {}).get("mode") == "motion" else "live"
         q_exec("UPDATE live_jobs SET image=?, status='pending', stage=?, worker='', claimed_at=NULL, error='' WHERE id=?", name, nxt, jid)
     except Exception as e:
