@@ -64,8 +64,8 @@ def run(rep, env):
         dd = {d["name"]: d for d in L["dims"]}
         rep.check("评分准不准:各维度和表现的相关性,方向对得上(标题分高表现好为正,倒着设的结构分为负)", dd["标题"]["r"] > 0.8 and dd["结构"]["r"] < -0.8 and dd["标题"]["n"] == 7)
         fac = {f["name"]: {x["label"]: x for x in f["items"]} for f in L["factors"]}
-        rep.check("哪些做法有效:封面版式 / 标题带不带数字分组,按平均表现从高到低,带样本数",
-                  fac["封面版式"]["a"]["n"] == 6 and fac["封面版式"]["b"]["lift"] == 0.3 and fac["标题带数字"]["带数字"]["n"] == 6
+        rep.check("哪些做法有效:封面版式分组,按平均表现从高到低,带样本数;标题的数字 / 问号 / emoji / 字数这类表面特征不再列(没有参考价值)",
+                  fac["封面版式"]["a"]["n"] == 6 and fac["封面版式"]["b"]["lift"] == 0.3 and not {"标题带数字", "标题带问号 / 感叹号", "标题带 emoji", "标题字数"} & set(fac)
                   and list(fac["封面版式"])[0] == "a" and "封面类型" not in fac, str(fac.keys()))
         rep.check("评分准不准:没有有结论的稿子时给空汇总(页面只显示进度);攒够 30 篇才标记 ready",
                   loop.learning({"cfg": {"min_days": 3}, "rows": []})["n_done"] == 0 and loop.learning({"cfg": {"min_days": 3}, "rows": []})["bands"] == []
@@ -124,8 +124,8 @@ def run(rep, env):
                                                fe(5, 0.1, {"level": "大改", "title_sim": 0.3, "cover": True, "body": True})]}
         L3 = loop.learning(ev3)
         fac3 = {f["name"]: {x["label"]: x["n"] for x in f["items"]} for f in L3["factors"]}
-        rep.check("归因过滤:改了封面的不进封面版式对比;标题改多了的不进标题带数字对比;大改的不进评分对比,单独计数",
-                  fac3["封面版式"] == {"a": 2, "b": 1} and fac3["标题带数字"] == {"带数字": 2, "不带数字": 1} and L3["n_done"] == 4 and L3["n_edited"] == 1 and sum(b["n"] for b in L3["bands"]) == 4, str(fac3))
+        rep.check("归因过滤:改了封面的不进封面版式对比;大改的不进评分对比,单独计数",
+                  fac3["封面版式"] == {"a": 2, "b": 1} and "标题带数字" not in fac3 and L3["n_done"] == 4 and L3["n_edited"] == 1 and sum(b["n"] for b in L3["bands"]) == 4, str(fac3))
         eg = {x["label"]: x for x in L3["edits"]}
         rep.check("改过的 vs 原样:按原样 / 小改 / 大改分组的篇数和平均表现", eg["原样"]["n"] == 2 and eg["小改"]["n"] == 2 and eg["大改"]["n"] == 1 and eg["原样"]["lift"] == 1.5 and eg["小改"]["lift"] == 1.6)
 

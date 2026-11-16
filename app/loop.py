@@ -258,14 +258,11 @@ def _band(v, cuts, labels):
 
 
 # 要对比的「做法」:(名称, 把快照变成分组标签的函数)。只放能在出稿前决定的东西
+# 标题的 emoji / 问号 / 数字 / 字数这类表面特征不放在这里:和流量没有可靠的关系,不能指导写标题;标题看「标题结构」(大模型分类,见 learning 里的动态一项和 titlelab)
 # 第三项:这个做法要「发布时没被改」才能算:cover = 封面没换;title = 标题基本没改(相似度 ≥ 0.8);body = 正文没改;None = 只要不是大改
 FACTORS = [
     ("封面类型", lambda f: COVER_KINDS.get(f.get("cover_kind"), "") or "(没记录)", "cover"),
     ("封面版式", lambda f: f.get("cover_layout") or "(没记录)", "cover"),
-    ("标题带数字", lambda f: "带数字" if f.get("t_digit") else "不带数字", "title"),
-    ("标题带问号 / 感叹号", lambda f: "带" if f.get("t_mark") else "不带", "title"),
-    ("标题带 emoji", lambda f: "带" if f.get("t_emoji") else "不带", "title"),
-    ("标题字数", lambda f: _band(f.get("title_len") or 0, (19, 13, 0), ("19 字以上", "13–18 字", "12 字以内")), "title"),
     ("正文字数", lambda f: _band(f.get("body_len") or 0, (600, 300, 0), ("600 字以上", "300–599 字", "300 字以内")), "body"),
     ("结尾有互动引导", lambda f: "有" if f.get("cta") else "没有", "body"),
     ("帖子类型", lambda f: f.get("ptype") or "(未标注)", None),
