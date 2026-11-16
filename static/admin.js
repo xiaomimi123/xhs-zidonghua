@@ -246,15 +246,19 @@ const PAGE = 50;
 const TIER = { viral: "爆款", hot: "热门", normal: "普通" };
 const AIS = { pending: "待打标签", running: "打标签中", done: "已打标签", error: "打标签失败" };
 const tierB = t => `<span class="tier ${t}">${TIER[t] || t}</span>`;
-const NF = { track: "", topic: "", keyword: "", ai_type: "", tier: "", ai_status: "", project_id: "0", q: "", sort: "new" };
+const NF = { track: [], topic: [], keyword: "", ai_type: [], tier: [], ai_status: "", project_id: "0", q: "", sort: "new" };
+const NF_MULTI = ["track", "topic", "ai_type", "tier"];   // 可以多选的筛选项(值是数组)
 async function vNotes() {
   const f = state.nf ||= { ...NF };
-  const [fa, projects, tracks, fx] = await Promise.all([api(`/api/admin/notes/facets?${["track", "topic", "keyword", "ai_type", "tier", "ai_status", "project_id"].map(k => `${k}=${encodeURIComponent(f[k] ?? "")}`).join("&")}`), api("/api/admin/projects"), api("/api/admin/tracks"), api("/api/admin/notes/fields")]);
+  NF_MULTI.forEach(k => { if (!Array.isArray(f[k])) f[k] = f[k] ? [f[k]] : []; });
+  const fval = k => NF_MULTI.includes(k) ? MS.join(f[k]) : (f[k] ?? "");
+  const hadFocus = document.activeElement?.dataset?.nf === "q";
+  const [fa, projects, tracks, fx] = await Promise.all([api(`/api/admin/notes/facets?${["track", "topic", "keyword", "ai_type", "tier", "ai_status", "project_id", "q"].map(k => `${k}=${encodeURIComponent(fval(k))}`).join("&")}`), api("/api/admin/projects"), api("/api/admin/tracks"), api("/api/admin/notes/fields")]);
   const opt = (list, cur, label, name = k => k || "(空)") => `<option value="">${label}</option>` + list.map(x => `<option value="${esc(x.k)}" ${x.k === cur ? "selected" : ""}>${esc(name(x.k))}(${x.n})</option>`).join("");
   const trackNames = [...new Set([...tracks.map(t => t.name), ...fa.tracks.map(t => t.k).filter(Boolean)])];
   const aiN = Object.fromEntries(fa.ai.map(x => [x.k, x.n]));
   const mN = Object.fromEntries((fa.mirror || []).map(x => [x.k, x.n]));
-  const filtered = Object.entries(f).some(([k, v]) => v !== NF[k]);
+  const filtered = Object.entries(f).some(([k, v]) => Array.isArray(v) ? v.length : v !== NF[k]);
   $("#pa").innerHTML = `<button class="btn gray" id="tpc">整理主题</button><button class="btn gray" id="exp">导出备份</button><button class="btn gray" id="imp">导入笔记</button><button class="btn gray" id="retag" disabled>重新打标签</button><button class="btn" id="dels" disabled>删除选中</button>`;
   $("#main").innerHTML = `<section class="card import" id="impbox" hidden style="margin-bottom:16px">
       <div><div class="card-h"><b>导入笔记</b><span class="sub">支持 .json / .xlsx / .csv,字段与采集端回传标准相同</span></div>
@@ -273,11 +277,11 @@ async function vNotes() {
     ${mN.pending || mN.running ? `<div class="banner warn">${(mN.pending || 0) + (mN.running || 0)} 篇笔记的图片正在转存到本地(采集端的图片链接会过期,收到后立即下载)。</div>` : ""}
     ${(mN.error || 0) + (mN.partial || 0) ? `<div class="banner err">${(mN.error || 0) + (mN.partial || 0)} 篇笔记的图片没有完全转存成功(多为链接已过期)· <a href="#" id="rtm">全部重试</a>;让采集端重新采集同一篇,会换上新链接再转存</div>` : ""}
     <div class="tbar">
-      <select data-nf="track">${opt(fa.tracks, f.track, "全部赛道")}</select>
-      <select data-nf="topic">${opt(fa.topics, f.topic, "全部主题")}</select>
+      ${MS.html("track", "全部赛道", "赛道", fa.tracks, f.track, k => k || "(空)")}
+      ${MS.html("topic", "全部主题", "主题", fa.topics, f.topic)}
       <select data-nf="keyword" title="采集时用的搜索词">${opt(fa.keywords, f.keyword, "全部搜索词")}</select>
-      <select data-nf="ai_type">${opt(fa.types, f.ai_type, "全部内容类型")}</select>
-      <select data-nf="tier">${opt(fa.tiers, f.tier, "全部分级", k => TIER[k] || k)}</select>
+      ${MS.html("ai_type", "全部内容类型", "内容类型", fa.types, f.ai_type)}
+      ${MS.html("tier", "全部分级", "分级", fa.tiers, f.tier, k => TIER[k] || k)}
       <select data-nf="ai_status">${opt(fa.ai, f.ai_status, "全部标签状态", k => AIS[k] || k)}</select>
       <select data-nf="project_id"><option value="0">全部项目</option>${projects.map(p => `<option value="${p.id}" ${String(p.id) === f.project_id ? "selected" : ""}>#${p.id} ${esc(p.track)}(${p.note_count})</option>`).join("")}</select>
       <select data-nf="sort"><option value="new" ${f.sort === "new" ? "selected" : ""}>最新入库</option><option value="hot" ${f.sort === "hot" ? "selected" : ""}>互动最高</option><option value="updated" ${f.sort === "updated" ? "selected" : ""}>最近更新</option></select>
@@ -287,7 +291,7 @@ async function vNotes() {
       <th class="num">赞 / 藏 / 评</th><th>来源</th><th>入库</th><th></th></tr></thead><tbody id="tb"></tbody></table></div>
       <div class="pager"><span class="sub" id="pinfo"></span><span><button class="btn gray sm" id="prev">上一页</button> <button class="btn gray sm" id="next">下一页</button></span></div></section>`;
   let total = 0, file = null, items = [];
-  const qs = () => Object.entries(f).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+  const qs = () => Object.keys(f).map(k => `${k}=${encodeURIComponent(fval(k))}`).join("&");
   const selInfo = () => {
     $("#dels").disabled = $("#retag").disabled = !state.nsel.size;
     $("#pinfo").textContent = `共 ${total} 篇 · 第 ${state.np + 1} / ${Math.max(1, Math.ceil(total / PAGE))} 页${state.nsel.size ? ` · 已选 ${state.nsel.size}` : ""}`;
@@ -312,9 +316,12 @@ async function vNotes() {
   };
   await draw();
   $$("[data-nf]").forEach(el => {
-    if (el.tagName === "INPUT") { let deb; el.oninput = () => { clearTimeout(deb); deb = setTimeout(() => { f.q = el.value.trim(); state.np = 0; draw(); }, 300); }; }
-    else el.onchange = () => { f[el.dataset.nf] = el.value; if (el.dataset.nf === "track") f.keyword = f.topic = ""; state.np = 0; vNotes(); };
+    // 搜索词也参与下拉框里的数量:输入停下来后整页按新的搜索词重画(输入框保持焦点)
+    if (el.tagName === "INPUT") { let deb; el.oninput = () => { clearTimeout(deb); deb = setTimeout(() => { f.q = el.value.trim(); state.np = 0; vNotes(); }, 350); }; }
+    else el.onchange = () => { f[el.dataset.nf] = el.value; state.np = 0; vNotes(); };
   });
+  MS.bind($("#main"), (k, vals) => { f[k] = vals; state.np = 0; vNotes(); });
+  if (hadFocus && $("[data-nf=q]")) { const q = $("[data-nf=q]"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   if ($("#ftr")) $("#ftr").onclick = async e => { e.preventDefault(); const r = await api("/api/admin/notes/fill_tracks", "POST"); toast(`已开始为 ${r.n} 篇笔记判断赛道,稍后刷新页面查看`); };
   if ($("#nreset")) $("#nreset").onclick = () => { state.nf = { ...NF }; state.np = 0; vNotes(); };
   if ($("#rtm")) $("#rtm").onclick = async e => { e.preventDefault(); const { n } = await api("/api/admin/notes/remirror", "POST", {}); toast(`已重新排队 ${n} 篇`); vNotes(); };

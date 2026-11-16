@@ -565,7 +565,7 @@ document.addEventListener("keydown", e => { if (!FL.pv) return; if (e.key === "E
 
 
 // ---------- 笔记库(只读):采集到的笔记,按赛道 / 主题 / 内容类型 / 分级找参考 ----------
-const NB = { f: { track: "", topic: "", ai_type: "", kind: "", tier: "", q: "", sort: "new" }, items: [], total: 0, page: 1 };
+const NB = { f: { track: [], topic: [], ai_type: [], kind: [], tier: [], q: "", sort: "new" }, items: [], total: 0, page: 1 };
 const NB_SIZE = 36;   // 每页篇数
 const NB_TIER = { viral: "爆款", hot: "热门", normal: "普通" };
 const nbCard = (n, i) => `<article class="fl-nc" data-nb="${i}" tabindex="0">
@@ -577,24 +577,28 @@ const nbCard = (n, i) => `<article class="fl-nc" data-nb="${i}" tabindex="0">
 
 async function fNoteBase() {
   const f = NB.f;
-  const fa = await api(`/api/notebase/facets?${["track", "topic", "ai_type", "kind", "tier"].map(k => `${k}=${encodeURIComponent(f[k])}`).join("&")}`);   // 联动筛选:每个下拉框的数量按其他已选条件统计
-  const opt = (list, cur, label, name = k => k) => `<option value="">${label}</option>` + list.map(x => `<option value="${esc(x.k)}" ${x.k === cur ? "selected" : ""}>${esc(name(x.k))}(${x.n})</option>`).join("");
-  const filtered = Object.entries(f).some(([k, v]) => v !== (k === "sort" ? "new" : ""));
+  const MULTI = ["track", "topic", "kind", "ai_type", "tier"];   // 这几项可以多选(值是数组);其余是单个值
+  MULTI.forEach(k => { if (!Array.isArray(f[k])) f[k] = f[k] ? [f[k]] : []; });
+  const fq = (extra = "") => [...MULTI.map(k => `${k}=${encodeURIComponent(MS.join(f[k]))}`), `q=${encodeURIComponent(f.q)}`, `sort=${f.sort}`].join("&") + extra;
+  // 联动筛选:每个下拉框的选项和数量按其他已选条件(含搜索词)统计
+  const fa = await api(`/api/notebase/facets?${fq()}`);
+  const filtered = !!f.q || MULTI.some(k => f[k].length);
+  const hadFocus = document.activeElement?.id === "nbq";
   $("#main").onclick = null;
   $("#main").innerHTML = `<div class="fl-bar nb-bar">
-    <select data-nb-f="track" aria-label="赛道">${opt(fa.tracks, f.track, "全部赛道")}</select>
-    <select data-nb-f="topic" aria-label="主题">${opt(fa.topics, f.topic, "全部主题")}</select>
-    <select data-nb-f="kind" aria-label="帖子类型">${opt(fa.kinds || [], f.kind, "全部帖子类型")}</select>
-    <select data-nb-f="ai_type" aria-label="内容类型">${opt(fa.types, f.ai_type, "全部类型")}</select>
-    <select data-nb-f="tier" aria-label="热度分级">${opt(fa.tiers, f.tier, "全部分级", k => NB_TIER[k] || k)}</select>
+    ${MS.html("track", "全部赛道", "赛道", fa.tracks, f.track)}
+    ${MS.html("topic", "全部主题", "主题", fa.topics, f.topic)}
+    ${MS.html("kind", "全部帖子类型", "帖子类型", fa.kinds || [], f.kind)}
+    ${MS.html("ai_type", "全部类型", "内容类型", fa.types, f.ai_type)}
+    ${MS.html("tier", "全部分级", "分级", fa.tiers, f.tier, k => NB_TIER[k] || k)}
     <select data-nb-f="sort" aria-label="排序"><option value="new" ${f.sort === "new" ? "selected" : ""}>最新入库</option><option value="hot" ${f.sort === "hot" ? "selected" : ""}>互动最高</option></select>
     <input id="nbq" placeholder="搜索标题 / 正文 / 作者 / 标签" value="${esc(f.q)}" style="flex:1;min-width:160px">
     ${filtered ? `<button class="btn ghost sm" id="nbreset">清除筛选</button>` : ""}</div>
     <div id="nbres"></div>`;
+  if (hadFocus) { const q = $("#nbq"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   // 真分页:每页只渲染 NB_SIZE 篇,换页替换内容并回到顶部;筛选 / 搜索变了回到第 1 页
   const load = async page => {
-    const qs = Object.entries(f).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
-    const r = await api(`/api/notebase?${qs}&offset=${(page - 1) * NB_SIZE}&limit=${NB_SIZE}`);
+    const r = await api(`/api/notebase?${fq()}&offset=${(page - 1) * NB_SIZE}&limit=${NB_SIZE}`);
     const pages = Math.max(1, Math.ceil(r.total / NB_SIZE));
     if (page > pages) return load(pages);   // 筛选后总数变少,当前页已经不存在
     NB.items = r.items; NB.total = r.total; NB.page = page;
@@ -605,9 +609,11 @@ async function fNoteBase() {
         : `<div class="empty"><b>笔记库还是空的</b>新建任务后,采集端会按关键词采集笔记,采到的会汇总在这里<br><button class="btn" data-go="new">新建任务</button></div>`;
   };
   await load(NB.page || 1);
-  $$("[data-nb-f]").forEach(el => el.onchange = () => { f[el.dataset.nbF] = el.value; if (el.dataset.nbF === "track") f.topic = ""; NB.page = 1; fNoteBase(); });
-  let deb; $("#nbq").oninput = e => { clearTimeout(deb); deb = setTimeout(() => { f.q = e.target.value.trim(); load(1); }, 350); };
-  $("#nbreset") && ($("#nbreset").onclick = () => { NB.f = { track: "", topic: "", ai_type: "", kind: "", tier: "", q: "", sort: "new" }; NB.page = 1; fNoteBase(); });
+  MS.bind($("#main"), (k, vals) => { f[k] = vals; NB.page = 1; fNoteBase(); });
+  $$("select[data-nb-f]").forEach(el => el.onchange = () => { f[el.dataset.nbF] = el.value; NB.page = 1; fNoteBase(); });
+  // 搜索词也参与下拉框里的数量:输入停下来后整条筛选条按新的搜索词重画(输入框保持焦点)
+  let deb; $("#nbq").oninput = e => { clearTimeout(deb); deb = setTimeout(() => { f.q = e.target.value.trim(); NB.page = 1; fNoteBase(); }, 350); };
+  $("#nbreset") && ($("#nbreset").onclick = () => { NB.f = { track: [], topic: [], ai_type: [], kind: [], tier: [], q: "", sort: "new" }; NB.page = 1; fNoteBase(); });
   const open = e => {
     const g = e.target.closest("[data-pg]");
     if (g) { if (g.disabled) return; return load(+g.dataset.pg).then(() => window.scrollTo({ top: 0, behavior: "smooth" })); }

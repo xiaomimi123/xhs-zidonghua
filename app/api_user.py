@@ -513,9 +513,9 @@ def notebase(track: str = "", topic: str = "", ai_type: str = "", tier: str = ""
 
 
 @router.get("/api/notebase/facets")
-def notebase_facets(track: str = "", topic: str = "", ai_type: str = "", tier: str = "", kind: str = "", kind_sub: str = ""):
+def notebase_facets(track: str = "", topic: str = "", ai_type: str = "", tier: str = "", kind: str = "", kind_sub: str = "", q: str = ""):
     from .api_admin import note_facets
-    f = note_facets(track=track, topic=topic, ai_type=ai_type, tier=tier, kind=kind, kind_sub=kind_sub)
+    f = note_facets(track=track, topic=topic, ai_type=ai_type, tier=tier, kind=kind, kind_sub=kind_sub, q=q)
     return {k: [x for x in f[k] if x["k"]] for k in ("tracks", "topics", "types", "tiers", "kinds")}
 
 

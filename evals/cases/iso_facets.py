@@ -33,5 +33,27 @@ def run(rep, env):
         for kw, want in ((dict(track="fx美食", ai_type="fx好物种草"), 2), (dict(topic="fx通勤"), 2), (dict(ai_type="fx测评", track="fx穿搭"), 2)):
             got = aa.all_notes(**kw, q="fx_")["total"] if False else aa.all_notes(q="fx_", **kw)["total"]
             rep.check(f"下拉框显示的数量和点进去的结果数一致:{kw}", got == want, str(got))
+        # ---- 多选:同一项选几个是「或」,不同项之间是「且」 ----
+        S = aa.SEP
+        tot = lambda **kw: aa.all_notes(q="fx_", **kw)["total"]
+        rep.check("多选:赛道选「美食 + 穿搭」= 6 篇;主题选「咖啡 + 通勤」= 4 篇(或);赛道「美食」且主题「咖啡 + 通勤」= 2 篇(不同项之间是且)",
+                  tot(track=f"fx美食{S}fx穿搭") == 6 and tot(topic=f"fx咖啡{S}fx通勤") == 4 and tot(track="fx美食", topic=f"fx咖啡{S}fx通勤") == 2, str((tot(track=f"fx美食{S}fx穿搭"), tot(topic=f"fx咖啡{S}fx通勤"))))
+        rep.check("多选的分级:爆款 + 普通 = 全部 6 篇;只选爆款 = 1 篇", tot(tier=f"viral{S}normal") == 6 and tot(tier="viral") == 1)
+        rep.check("多选值的容错:重复、空段、前后空格都忽略;单个值、列表写法也认",
+                  aa._vals(f"a{S}{S}a{S} b ") == ["a", "b"] and aa._vals("") == [] and aa._vals(None) == [] and aa._vals(["x", "x", ""]) == ["x"] and aa._vals("单个") == ["单个"])
+        fm = aa.note_facets(ai_type=f"fx好物种草{S}fx测评")
+        rep.check("多选后其他下拉框联动:内容类型选「好物种草 + 测评」,赛道只统计这两类(美食 2 / 穿搭 5 → 穿搭里好物种草 1 + 测评 2 = 3,美食好物种草 2);数量等于结果数",
+                  cnt(fm["tracks"]) == {"fx美食": 2, "fx穿搭": 3} and cnt(fm["topics"]) == {"fx咖啡": 2, "fx通勤": 2, "fx秋冬": 1}, str((cnt(fm["tracks"]), cnt(fm["topics"]))))
+        fz = aa.note_facets(track=f"fx美食{S}不存在的赛道")
+        rep.check("多选里有一个已经没有结果的值:仍然留在列表里(数量 0),不会悄悄消失", next(x for x in fz["tracks"] if x["k"] == "不存在的赛道")["n"] == 0 and cnt(fz["tracks"]) == {"fx美食": 3, "fx穿搭": 3})
+        # ---- 搜索词参与下拉框数量 ----
+        fs = aa.note_facets(q="fx_1")
+        rep.check("搜索词参与统计:搜「fx_1」时赛道只剩美食(1),主题只剩咖啡(1),内容类型只剩好物种草(1),和搜索结果数一致",
+                  cnt(fs["tracks"]) == {"fx美食": 1} and cnt(fs["topics"]) == {"fx咖啡": 1} and cnt(fs["types"]) == {"fx好物种草": 1} and aa.all_notes(q="fx_1")["total"] == 1, str(cnt(fs["tracks"])))
+        fsq = aa.note_facets(track="fx美食", q="fx_3")
+        rep.check("搜索词 + 筛选一起联动:美食里搜「fx_3」,内容类型只剩「教程」(1)", cnt(fsq["types"]) == {"fx教程": 1} and aa.all_notes(track="fx美食", q="fx_3")["total"] == 1, str(cnt(fsq["types"])))
+        us = api_user.notebase_facets(q="fx_1", track=f"fx美食{S}fx穿搭")
+        un = api_user.notebase(q="fx_1", track=f"fx美食{S}fx穿搭")
+        rep.check("员工端接口同样支持多选和搜索词:美食 + 穿搭里搜「fx_1」= 1 篇,筛选项也只剩它", un["total"] == 1 and cnt(us["topics"]) == {"fx咖啡": 1}, str((un["total"], cnt(us["topics"]))))
     finally:
         db.q_exec("DELETE FROM notes WHERE uid LIKE 'fx_%'")

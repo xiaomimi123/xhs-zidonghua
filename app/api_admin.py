@@ -412,13 +412,24 @@ def projects():
                  "FROM projects p ORDER BY id DESC")
 
 
+SEP = ""   # 多选时,同一个筛选项的多个值用这个字符隔开(主题名、赛道名里不会出现)
+
+
+def _vals(v) -> list[str]:
+    """筛选值转成列表:单个值、用 SEP 隔开的多个值、列表都认,去掉空的。"""
+    xs = v if isinstance(v, (list, tuple)) else str(v or "").split(SEP)
+    return [x for x in dict.fromkeys(str(i).strip() for i in xs) if x]
+
+
 def _note_filter(track="", keyword="", ai_type="", tier="", ai_status="", project_id=0, q="", topic="", kind="", kind_sub=""):
     where, args = ["1=1"], []
     for col, v in (("n.track", track), ("n.topic", topic), ("n.keyword", keyword), ("n.ai_type", ai_type), ("n.ai_status", ai_status), ("n.kind", kind), ("n.kind_sub", kind_sub)):
-        if v:
-            where.append(f"{col}=?"); args.append(v)
-    if tier:
-        where.append(f"{tier_sql()}=?"); args.append(tier)
+        vs = _vals(v)
+        if vs:   # 多选:同一项里选了几个就是「或」,不同项之间是「且」
+            where.append(f"{col} IN ({','.join('?' * len(vs))})"); args += vs
+    vs = _vals(tier)
+    if vs:
+        where.append(f"{tier_sql()} IN ({','.join('?' * len(vs))})"); args += vs
     if project_id:
         where.append("n.id IN (SELECT note_id FROM project_notes WHERE project_id=?)"); args.append(project_id)
     if q:
@@ -464,18 +475,18 @@ def fill_tracks():
 
 
 @router.get("/notes/facets")
-def note_facets(track: str = "", topic: str = "", keyword: str = "", ai_type: str = "", tier: str = "", ai_status: str = "", project_id: int = 0, kind: str = "", kind_sub: str = ""):
-    """筛选项和每项的数量。联动筛选:每个下拉框的选项和数量,都按「除它自己以外」已经选了的条件统计,
+def note_facets(track: str = "", topic: str = "", keyword: str = "", ai_type: str = "", tier: str = "", ai_status: str = "", project_id: int = 0, kind: str = "", kind_sub: str = "", q: str = ""):
+    """筛选项和每项的数量。联动筛选:每个下拉框的选项和数量,都按「除它自己以外」已经选了的条件(含搜索词)统计,每一项可多选,
     这样选了某个类型之后,其他下拉框里的数字就是这个类型里的数量,不会列出点进去是 0 篇的选项;已选的值始终留在列表里(数量为 0 也留)。"""
-    cur = {"track": track, "topic": topic, "keyword": keyword, "ai_type": ai_type, "tier": tier, "ai_status": ai_status, "project_id": project_id, "kind": kind, "kind_sub": kind_sub}
+    cur = {"track": track, "topic": topic, "keyword": keyword, "ai_type": ai_type, "tier": tier, "ai_status": ai_status, "project_id": project_id, "kind": kind, "kind_sub": kind_sub, "q": q.strip()[:60]}
 
     def grp(col, key, base=""):
         w, args = _note_filter(**{k: v for k, v in cur.items() if k != key})
         rows = [{"k": r["k"], "n": r["n"]} for r in q_all(
             f"SELECT {col} k, COUNT(*) n FROM notes n WHERE {w}{' AND ' + base if base else ''} GROUP BY k ORDER BY n DESC", *args)]
-        v = cur.get(key)
-        if v and not any(r["k"] == v for r in rows):
-            rows.append({"k": v, "n": 0})
+        for v in _vals(cur.get(key)):   # 已选的值始终留在列表里
+            if not any(r["k"] == v for r in rows):
+                rows.append({"k": v, "n": 0})
         return rows
 
     def plain(col, where="1=1", *a):
