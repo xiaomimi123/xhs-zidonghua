@@ -12,6 +12,24 @@ user = APIRouter(prefix="/api/qianfan", dependencies=[Depends(require_user)])
 SETTING_KEYS = ("qf_enabled", "qf_kinds", "qf_account_hours", "qf_hot_hours", "qf_categories", "qf_periods")
 
 
+def _summary(perf_all: list[dict], sid: str, shop_list: list[dict]) -> dict:
+    """总览页要用的:总粉丝近 90 天变化(页面可切 7 / 30 / 90 天)、近 30 天表现最好的 3 篇笔记、市场热点预览(热门关键词 / 话题各前 6 个)。"""
+    import datetime
+    cut = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+    pool = [it for it in perf_all if str(it.get("published_at") or "") >= cut] or perf_all
+    top = sorted(pool, key=lambda r: (r.get("engagement") or 0, r.get("views") or 0), reverse=True)[:3]
+    top = [{k: it.get(k) for k in ("title", "account_name", "views", "likes", "collects", "comments", "published_at")} for it in top]
+    hot, shop_for_hot = {}, sid or (shop_list[0]["shop_id"] if shop_list else "")
+    for kind in ("hot_keywords", "hot_topics"):
+        sc = qianfan.scopes_any(kind) if kind in qianfan.SHOP_FREE else qianfan.scopes(kind, shop_for_hot)
+        snap = None
+        if sc:
+            snap = qianfan.latest_any(kind, sc[0]["scope"], sc[0]["period"]) if kind in qianfan.SHOP_FREE else qianfan.latest(kind, sc[0]["scope"], sc[0]["period"], shop_for_hot)
+        hot[kind] = {"items": [i.get("name") or i.get("keyword") or "" for i in ((snap["data"] or {}).get("items", []) if snap else [])[:6]], "at": snap["snap_at"] if snap else "",
+                     "period": sc[0]["period"] if sc else ""}
+    return {"trend": qianfan.fans_trend(90, sid), "top_notes": top, "hot": hot}
+
+
 @router.get("/overview")
 def overview(account: str = "", shop: str = ""):
     """shop 为空看全部店铺;account 为空看全部账号;传了就只看这个店铺 / 账号的趋势和笔记表现。"""
@@ -35,6 +53,7 @@ def overview(account: str = "", shop: str = ""):
         it["mine"] = any(v is it for v in matched.values())
     top = sorted(perf, key=lambda r: r.get("engagement", 0), reverse=True)
     return {"settings": {k: s[k] for k in SETTING_KEYS}, "status": qianfan.status(), "sample": qianfan.has_sample(),
+            "summary": _summary(perf_all, sid, shop_list),
             "shops": shop_list, "shop": sid,
             "accounts": accs, "selected": sel, "note_counts": by_acc,
             "account": cur, "series": acc,

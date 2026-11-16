@@ -1,8 +1,8 @@
 // ---------- 数据看板(千帆后台数据) ----------
 const QFSTAFF = () => window.QF_STAFF === true;   // 员工端(小红书流水线)里的数据看板:只读,不带同步设置和管理操作
 const qfu = p => (QFSTAFF() ? "/api/qianfan/board" : "/api/admin/qianfan") + p;
-const QF = { tab: "account", kind: "hot_notes", scope: "", period: "", account: "", shop: "" };
-const QF_TABS_ALL = [["account", "账号数据"], ["notes", "笔记表现"], ["topics", "选题分析"], ["hot_notes", "热门笔记榜"], ["hot_topics", "热门话题榜"], ["hot_keywords", "热门关键词榜"], ["sync", "同步设置"]];
+const QF = { tab: "overview", scope: "", period: "", account: "", shop: "", mk: {}, range: 30 };
+const QF_TABS_ALL = [["overview", "总览"], ["account", "我们的账号"], ["notes", "我们的笔记"], ["topics", "选题分析"], ["market", "市场热点"], ["sync", "同步设置"]];
 const qfTabs = () => QF_TABS_ALL.filter(t => !(QFSTAFF() && t[0] === "sync"));
 const QF_PERIOD = { "": "默认", "1d": "近 1 天", "7d": "近 7 天", "30d": "近 30 天" };
 const dlt = (cur, prev, k) => { if (!prev || cur?.[k] == null || prev[k] == null) return ""; const d = cur[k] - prev[k]; return d ? `<em class="qf-d ${d > 0 ? "up" : "down"}">${d > 0 ? "▲" : "▼"} ${fmt(Math.abs(d))}</em>` : ""; };
@@ -19,27 +19,28 @@ async function vQianfan() {
   const o = await api(qfu(`/overview?account=${encodeURIComponent(QF.account)}&shop=${encodeURIComponent(QF.shop)}`));
   if (QF.shop && o.shop !== QF.shop) { QF.shop = ""; QF.account = ""; return vQianfan(); }
   if (QF.account && o.selected !== QF.account) { QF.account = ""; return vQianfan(); }
-  if (o.shops.length && !QF.shop && QF.tab.startsWith("hot_") && QF.tab !== "hot_topics") { QF.shop = o.shops[0].shop_id; return vQianfan(); }   // 榜单是分店铺存的,没选就看第一个店铺
+  if (o.shops.length && !QF.shop && QF.tab === "market") { QF.shop = o.shops[0].shop_id; return vQianfan(); }   // 榜单是分店铺存的,没选就看第一个店铺
   const stat = o.status;
   $("#pa").innerHTML = QFSTAFF() ? (typeof dataSwitch === "function" ? dataSwitch("data") : "") : `<button class="btn" id="qsync">立即同步</button>`;
   if (QFSTAFF()) $("#main").onclick = null;
   const lastAt = Object.values(stat.kinds).map(k => k.last).sort().pop();
   const body = {
-    account: () => qfAccount(o), notes: () => qfNotes(o), topics: () => qfTopics(o), sync: () => qfSync(o),
-    hot_notes: () => qfHot(o, "hot_notes"), hot_topics: () => qfHot(o, "hot_topics"), hot_keywords: () => qfHot(o, "hot_keywords"),
+    overview: () => qfOverview(o), account: () => qfAccount(o), notes: () => qfNotes(o), topics: () => qfTopics(o), market: () => qfMarket(o), sync: () => qfSync(o),
   }[QF.tab];
   const stale = o.shops.filter(x => !x.online && (x.pending > 0 || !x.last_sync || (Date.now() - new Date(x.last_sync.replace(" ", "T") + "Z")) > 24 * 3600e3)), live = o.shops.filter(x => x.online);
   const shopBanner = !QFSTAFF() && o.shops.length > 1 && stale.length ? `<div class="banner warn">${stale.map(x => `「${esc(x.name || x.shop_id)}」${x.last_sync ? `最近同步 ${lt(x.last_sync)}` : "还没有同步过"}${x.pending ? `,有 ${x.pending} 个同步任务在等` : ""}`).join(";")}。${live.length ? `采集端现在登录的是「${esc(live.map(x => x.name).join("、"))}」。` : "采集端现在没有登录任何店铺。"}同一个千帆账号同一时间只能登录一个店铺:在 ego lite 里登录该店铺后,采集端会自动补采。</div>` : "";
   $("#main").innerHTML = `${shopBanner}${o.sample && !QFSTAFF() ? `<div class="banner">当前显示的是<b>示例数据</b>(用来预览页面),采集端接上以后点这里 <button class="btn gray sm" id="qclr">清除示例数据</button></div>` : ""}
   <div class="qf-top"><div class="seg" id="qtabs">${qfTabs().map(([k, n]) => `<button class="${k === QF.tab ? "on" : ""}" data-t="${k}">${n}</button>`).join("")}</div>
-    ${qfSyncChip(o, lastAt)}</div>${["account", "notes", "topics", "hot_notes", "hot_keywords"].includes(QF.tab) ? qfFilters(o) : ""}<div id="qbody"></div>`;
+    ${qfSyncChip(o, lastAt)}</div>${["overview", "account", "notes", "topics", "market"].includes(QF.tab) ? qfFilters(o) : ""}<div id="qbody"></div>`;
   $("#qbody").innerHTML = await body();
+  if (QF.tab === "overview") qfMountTrend(o);
   $$("[data-qnp]").forEach(b => b.onclick = () => { if (b.disabled) return; QF.np = +b.dataset.qnp; vQianfan().then(() => $("#qbody")?.scrollIntoView({ block: "start" })); });
   $$(".qacc-sel").forEach(b => b.onchange = () => { QF.account = b.value; QF.np = 1; vQianfan(); });
   $$("[data-sort]").forEach(h => h.onclick = e => { e.stopPropagation(); const k = h.dataset.sort; QF_SORT.dir = QF_SORT.k === k ? -QF_SORT.dir : -1; QF_SORT.k = k; vQianfan(); });
   $$(".qshop button").forEach(b => b.onclick = () => { QF.shop = b.dataset.s; QF.account = ""; vQianfan(); });
   $$("[data-pick]").forEach(r => r.onclick = () => { QF.account = r.dataset.pick; vQianfan(); });
-  $$("#qtabs button").forEach(b => b.onclick = () => { QF.tab = b.dataset.t; QF.np = 1; if (b.dataset.t.startsWith("hot_")) { QF.kind = b.dataset.t; QF.scope = ""; QF.period = ""; } vQianfan(); });
+  $$("#qtabs button").forEach(b => b.onclick = () => { QF.tab = b.dataset.t; QF.np = 1; if (QF.tab === "market") { QF.scope = ""; QF.period = ""; } vQianfan(); });
+  $$("[data-go]").forEach(b => b.onclick = () => { QF.tab = b.dataset.go; QF.np = 1; vQianfan(); });
   if ($("#qsync")) $("#qsync").onclick = async e => { e.target.disabled = true; try { const r = await api("/api/admin/qianfan/sync", "POST", { kinds: [] }); toast(r.created ? `已下发 ${r.created} 个同步任务,等采集端领取` : "已有同步任务在排队,不用重复下发"); } catch (x) { toast(x.message, 1) } e.target.disabled = false; };
   if ($("#qtag")) $("#qtag").onclick = async e => { e.target.disabled = true; try { await api("/api/admin/qianfan/topics/tag", "POST"); } catch (x) { toast(x.message, 1); } vQianfan(); };
   if ($("#qclr")) $("#qclr").onclick = async () => { await api("/api/admin/qianfan/sample", "DELETE"); vQianfan(); };
@@ -60,7 +61,7 @@ function qfSyncChip(o, lastAt) {
 
 // 筛选条:店铺(几个就几个按钮,带在线状态)+ 账号(下拉,账号再多也只占一行)
 function qfFilters(o) {
-  const hot = QF.tab.startsWith("hot_"), withAcc = ["account", "notes", "topics"].includes(QF.tab) && o.accounts.length > 1;
+  const hot = QF.tab === "market", withAcc = ["account", "notes", "topics"].includes(QF.tab) && o.accounts.length > 1;
   const shopBtns = o.shops.length > 1 ? `<div class="qf-f"><span class="qf-l">店铺</span><div class="qf-chips qshop">${hot ? "" : `<button class="${QF.shop === "" ? "on" : ""}" data-s="">全部</button>`}${o.shops.map(x => `<button class="${QF.shop === x.shop_id ? "on" : ""}" data-s="${esc(x.shop_id)}" title="${x.online ? "采集端在线" : x.last_sync ? `采集端离线,最近同步 ${lt(x.last_sync)}` : "还没有同步过"}"><i class="qf-dot ${x.online ? "ok" : "off"}"></i>${esc((x.name || x.shop_id).replace(/的店$/, ""))}</button>`).join("")}</div></div>` : "";
   const tag = QF.tab === "notes", cnt = a => o.note_counts?.[a] ?? 0, all = Object.values(o.note_counts || {}).reduce((x, y) => x + y, 0);
   const accSel = withAcc ? `<div class="qf-f"><span class="qf-l">账号</span><select class="qacc-sel" aria-label="按账号筛选"><option value="">全部账号${tag ? ` · ${all}` : ""}(${o.accounts.length})</option>${o.accounts.map(a => `<option value="${esc(a.account_id)}" ${QF.account === a.account_id ? "selected" : ""}>${esc(a.name || "未命名")}${tag ? ` · ${cnt(a.account_id)}` : ""}</option>`).join("")}</select></div>` : "";
@@ -85,15 +86,9 @@ function qfAccount(o) {
   if (o.accounts.length > 1 && !o.selected) {
     const cols = [["views", "阅读"], ["likes", "点赞"], ["collects", "收藏"], ["comments", "评论"], ["shares", "分享"]];
     const accs = [...o.accounts].sort((x, y) => ((y[QF_SORT.k] ?? -1) - (x[QF_SORT.k] ?? -1)) * -QF_SORT.dir);
-    const sum = (k, f = a => a) => o.accounts.reduce((t, a) => t + (a[k] ?? 0), 0), sumPrev = k => o.accounts.reduce((t, a) => t + (a.prev?.[k] ?? a[k] ?? 0), 0);
-    const eng = a => (a.likes ?? 0) + (a.collects ?? 0) + (a.comments ?? 0), engPrev = a => a.prev ? (a.prev.likes ?? 0) + (a.prev.collects ?? 0) + (a.prev.comments ?? 0) : eng(a);
-    const d = (cur, prev) => { const x = cur - prev; return x ? `<em class="qf-d ${x > 0 ? "up" : "down"}">${x > 0 ? "▲" : "▼"} ${fmt(Math.abs(x))}</em>` : `<em class="qf-d">较上次持平</em>`; };
-    const kpi = [["总粉丝", fmt(sum("fans")), d(sum("fans"), sumPrev("fans"))], ["账号数", o.accounts.length, `<em class="qf-d">${o.shops.length > 1 && !o.shop ? `${o.shops.length} 个店铺` : ""}</em>`],
-      ["近 7 日阅读", fmt(sum("views")), d(sum("views"), sumPrev("views"))], ["近 7 日互动(赞+藏+评)", fmt(o.accounts.reduce((t, a) => t + eng(a), 0)), d(o.accounts.reduce((t, a) => t + eng(a), 0), o.accounts.reduce((t, a) => t + engPrev(a), 0))]];
     const th = (k, n, cls = "") => `<th class="${cls} qf-th" data-sort="${k}" title="点一下按${n}排序">${n}${QF_SORT.k === k ? (QF_SORT.dir < 0 ? " ↓" : " ↑") : ""}</th>`;
     const multiShop = o.shops.length > 1 && !o.shop;
-    return `<div class="stats qf-kpi">${kpi.map(([n, v, x]) => `<div class="card stat"><span class="sub">${n}</span><b>${v}</b><div class="mini">${x || "&nbsp;"}</div></div>`).join("")}</div>
-    <section class="card flush"><div class="card-h"><b>各账号对比</b><span class="sub">点一行看这个账号的趋势和笔记 · 阅读、互动为近 7 日 · 涨跌对比上一次同步</span></div><div class="tbl-wrap"><table class="tbl qf-tbl"><thead><tr><th>账号</th>${th("fans", "粉丝", "num")}<th class="qf-tr">粉丝趋势</th>${cols.map(([k, n]) => th(k, n, "num")).join("")}<th class="num">数据更新</th></tr></thead><tbody>
+    return `<section class="card flush"><div class="card-h"><b>各账号对比</b><span class="sub">点一行看这个账号的趋势和笔记 · 阅读、互动为近 7 日 · 涨跌对比上一次同步</span></div><div class="tbl-wrap"><table class="tbl qf-tbl"><thead><tr><th>账号</th>${th("fans", "粉丝", "num")}<th class="qf-tr">粉丝趋势</th>${cols.map(([k, n]) => th(k, n, "num")).join("")}<th class="num">数据更新</th></tr></thead><tbody>
     ${accs.map(a => `<tr data-pick="${esc(a.account_id)}"><td><div class="qf-acc"><span class="qf-av">${esc((a.name || "?").slice(0, 1))}</span><span class="qf-an"><b>${esc(a.name || "未命名")}</b><span class="sub">${multiShop && a.shop_name ? `${esc(a.shop_name.replace(/的店$/, ""))}` : ""}${multiShop && a.shop_name && a.red_id ? " · " : ""}${a.red_id ? `小红书号 ${esc(a.red_id)}` : ""}</span></span></div></td>
       <td class="num qf-c">${qfNum(a, a.prev, "fans", true)}</td><td class="qf-tr">${qfMini(a.spark)}</td>${cols.map(([k]) => `<td class="num qf-c">${qfNum(a, a.prev, k)}</td>`).join("")}<td class="num sub" title="${lt(a.at)}">${qfAgo(a.at)}</td></tr>`).join("")}</tbody></table></div></section>`;
   }
@@ -125,7 +120,7 @@ async function qfTopics(o) {
     ${good.length ? `<div>表现好:${good.map(x => `<b>${esc(x.name)}</b>(${x.n} 篇,${mname} ${fmt(byEng ? x.eng_avg : x.views_avg)},是账号平均的 ${x.lift} 倍)`).join(";")}</div>` : `<div class="sub">暂时没有明显跑赢账号平均的类别(某类至少 3 篇、总量够大才下结论)</div>`}
     ${weak.length ? `<div>偏弱:${weak.map(x => `<b>${esc(x.name)}</b>(${x.n} 篇,×${x.lift})`).join(";")}</div>` : ""}
     <div class="sub">互动数是笔记累计值,发布得早的笔记会占便宜;少于 3 篇或总量太小的类别只作参考。</div></div></section>
-  ${tbl("按选题角度", r.by_angle)}${tbl("按内容类型", r.by_type)}`;
+  ${tbl("按内容角度(吃法搭配、产品种草……)", r.by_angle)}${tbl("按笔记类型(教程、测评、软文……)", r.by_type)}`;
 }
 
 function qfNotes(o) {
@@ -141,23 +136,123 @@ function qfNotes(o) {
   ${rows.map(i => `<tr><td class="tt" title="${esc(i.title)}">${i.mine ? `<span class="st done" title="工作台生成的稿子">自产</span> ` : ""}${esc(i.title)}</td>${multi ? `<td class="sub">${esc(i.account_name || "未归属")}</td>` : ""}${cols.map(([k]) => `<td class="num">${cell(i[k])}</td>`).join("")}<td class="nowrap">${esc((i.published_at || "").slice(0, 10))}</td></tr>`).join("")}</tbody></table></div>${usePg ? pager(page, n.items.length, SZ, "qnp") : ""}</section>`;
 }
 
-async function qfHot(o, kind) {
-  const sc = o.scopes[kind] || [];
-  if (!sc.length) return qfEmpty("还没有这个榜单的数据");
-  const scopes = [...new Set(sc.map(s => s.scope))];
+// 总览:关键数字 + 总粉丝变化 + 近 30 天表现最好的笔记 + 市场热点预览(只看数据,不给建议)
+// 总粉丝趋势:可切 7 / 30 / 90 天,网格 + 刻度 + 面积 + 末端直接标值 + 悬停十字线和提示框 + 数据表;只有真的同步过的日子画小圆点
+const QF_RANGES = [[7, "7 天"], [30, "30 天"], [90, "90 天"]];
+const qfSign = x => (x > 0 ? "+" : x < 0 ? "−" : "") + fmt(Math.abs(x));
+const qfDay = d => { const t = new Date(d + "T00:00:00"); return `${d.slice(5)} 周${"日一二三四五六"[t.getDay()]}`; };
+function qfTrendHtml() {
+  return `<section class="card qf-trend"><div class="card-h"><b>总粉丝变化</b><span class="lp-seg" id="qrange" role="group" aria-label="时间范围">${QF_RANGES.map(([n, l]) => `<button data-range="${n}" class="${QF.range === n ? "on" : ""}">近 ${l}</button>`).join("")}</span></div><div id="qtrend" class="qf-tbody"></div></section>`;
+}
+function qfMountTrend(o) {
+  const el = $("#qtrend"); if (!el) return;
+  QF._trend = (o.summary || {}).trend || [];
+  $$("#qrange button").forEach(b => b.onclick = () => { QF.range = +b.dataset.range; $$("#qrange button").forEach(x => x.classList.toggle("on", x === b)); qfPaintTrend(); });
+  qfPaintTrend();
+  if (QF._ro) QF._ro.disconnect();
+  if (window.ResizeObserver) { QF._ro = new ResizeObserver(() => { const c = $("#qchart"); if (c && Math.abs(c.clientWidth - (c._w || 0)) > 2) qfDrawChart(c, qfSlice()); }); QF._ro.observe(el); }
+}
+const qfSlice = () => (QF._trend || []).slice(-QF.range);
+function qfPaintTrend() {
+  const el = $("#qtrend"); if (!el) return;
+  const tr = qfSlice();
+  if (tr.length < 2) { el.innerHTML = `<div class="sub" style="padding:26px 0;text-align:center">数据点不够,再同步几次就能看到变化</div>`; return; }
+  const first = tr[0], last = tr[tr.length - 1], chg = last.fans - first.fans, pct = first.fans ? chg / first.fans * 100 : null;
+  const hi = tr.reduce((a, b) => b.fans > a.fans ? b : a), lo = tr.reduce((a, b) => b.fans < a.fans ? b : a);
+  const cls = chg > 0 ? "up" : chg < 0 ? "down" : "";
+  const rows = [...tr].reverse().map((x, i, a) => { const prev = a[i + 1]; return `<tr><td>${esc(qfDay(x.day))}</td><td class="num">${fmt(x.fans)}</td><td class="num">${prev ? qfSign(x.fans - prev.fans) : "—"}</td><td>${x.synced ? "已同步" : "沿用上次"}</td></tr>`; }).join("");
+  el.innerHTML = `<div class="qf-thead"><div><span class="qf-big2">${fmt(last.fans)}</span><span class="sub"> 当前总粉丝</span></div>
+      <div class="qf-tchg ${cls}">近 ${tr.length} 天 <b>${qfSign(chg)}</b>${pct != null ? `<span>(${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(1)}%)</span>` : ""}</div></div>
+    <div id="qchart" class="qf-chart" tabindex="0" role="img" aria-label="总粉丝近 ${tr.length} 天变化:从 ${first.fans} 到 ${last.fans},${chg >= 0 ? "增加" : "减少"} ${Math.abs(chg)}"></div>
+    <div class="qf-tfoot"><span>起点 <b>${fmt(first.fans)}</b> <small>${esc(first.day.slice(5))}</small></span><span>最高 <b>${fmt(hi.fans)}</b> <small>${esc(hi.day.slice(5))}</small></span><span>最低 <b>${fmt(lo.fans)}</b> <small>${esc(lo.day.slice(5))}</small></span><span class="qf-legend"><i></i>当天同步过 <i class="soft"></i>没同步,沿用上次</span></div>
+    <details class="qf-tab"><summary>查看数据表</summary><div class="tbl-wrap" style="max-height:260px;overflow:auto"><table class="tbl"><thead><tr><th>日期</th><th class="num">总粉丝</th><th class="num">较前一天</th><th>数据</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+  qfDrawChart($("#qchart"), tr);
+}
+function qfDrawChart(el, tr) {
+  const NS = "http://www.w3.org/2000/svg", W = Math.max(280, el.clientWidth || 560), H = W < 480 ? 190 : 230, m = { l: 46, r: 16, t: 16, b: 26 }, n = tr.length;
+  el._w = W;
+  const vals = tr.map(x => x.fans); let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi === lo) { const pad = Math.max(2, Math.round(hi * 0.02)); lo -= pad; hi += pad; } else { const pad = (hi - lo) * 0.2; lo -= pad; hi += pad; }
+  const nice = x => { const e = Math.pow(10, Math.floor(Math.log10(x))), f = x / e; return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * e; };
+  const step = nice((hi - lo) / 3), y0 = Math.floor(lo / step) * step, y1 = Math.ceil(hi / step) * step, ticks = []; for (let v = y0; v <= y1 + step / 1e6; v += step) ticks.push(v);
+  const X = i => m.l + (n === 1 ? 0 : i / (n - 1)) * (W - m.l - m.r), Y = v => m.t + (1 - (v - y0) / (y1 - y0)) * (H - m.t - m.b);
+  const col = vals[n - 1] > vals[0] ? "var(--ok)" : vals[n - 1] < vals[0] ? "var(--err)" : "var(--sub)";
+  const pts = tr.map((x, i) => [X(i), Y(x.fans)]), line = pts.map(p => p.map(v => v.toFixed(1)).join(",")).join(" ");
+  const area = `M${pts[0][0].toFixed(1)},${(H - m.b).toFixed(1)} L${line.replace(/ /g, " L")} L${pts[n - 1][0].toFixed(1)},${(H - m.b).toFixed(1)} Z`;
+  const xi = n <= 8 ? tr.map((_, i) => i) : [0, Math.round((n - 1) / 3), Math.round((n - 1) * 2 / 3), n - 1];
+  const yl = v => v >= 10000 ? (v / 10000).toFixed(v % 10000 ? 1 : 0) + "w" : String(Math.round(v));
+  el.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+    ${ticks.map(v => `<line class="qf-gl" x1="${m.l}" x2="${W - m.r}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text class="qf-yl" x="${m.l - 8}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end">${yl(v)}</text>`).join("")}
+    ${xi.map((i, k) => `<text class="qf-xl" x="${X(i).toFixed(1)}" y="${H - 6}" text-anchor="${k === 0 ? "start" : k === xi.length - 1 ? "end" : "middle"}">${esc(tr[i].day.slice(5))}</text>`).join("")}
+    <path d="${area}" fill="${col}" fill-opacity="0.10"/>
+    <polyline points="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    ${tr.map((x, i) => x.synced && i !== n - 1 ? `<circle cx="${pts[i][0].toFixed(1)}" cy="${pts[i][1].toFixed(1)}" r="3" fill="var(--panel)" stroke="${col}" stroke-width="1.6"/>` : "").join("")}
+    <circle cx="${pts[n - 1][0].toFixed(1)}" cy="${pts[n - 1][1].toFixed(1)}" r="6.5" fill="var(--panel)"/><circle cx="${pts[n - 1][0].toFixed(1)}" cy="${pts[n - 1][1].toFixed(1)}" r="4.5" fill="${col}"/>
+    <text class="qf-end" x="${(pts[n - 1][0] - 10).toFixed(1)}" y="${(pts[n - 1][1] - 11).toFixed(1)}" text-anchor="end">${fmt(vals[n - 1])}</text>
+    <g class="qf-hv" style="display:none"><line class="qf-cx" y1="${m.t}" y2="${H - m.b}"/><circle r="6.5" fill="var(--panel)"/><circle r="4.5" fill="${col}"/></g>
+    <rect class="qf-hit" x="${m.l}" y="0" width="${W - m.l - m.r}" height="${H}" fill="transparent"/></svg><div class="qf-tip" style="display:none"></div>`;
+  const hv = el.querySelector(".qf-hv"), tip = el.querySelector(".qf-tip"), hit = el.querySelector(".qf-hit");
+  const show = i => {
+    const x = tr[i], prev = tr[i - 1], d = prev ? x.fans - prev.fans : null;
+    hv.style.display = ""; hv.querySelector("line").setAttribute("x1", pts[i][0]); hv.querySelector("line").setAttribute("x2", pts[i][0]);
+    hv.querySelectorAll("circle").forEach(c => { c.setAttribute("cx", pts[i][0]); c.setAttribute("cy", pts[i][1]); });
+    tip.style.display = ""; tip.textContent = "";
+    const mk = (cls, text) => { const e = document.createElement("div"); e.className = cls; e.textContent = text; tip.appendChild(e); };
+    mk("qf-tv", `${fmt(x.fans)} 粉丝`); mk("qf-td", qfDay(x.day));
+    if (d != null) mk(`qf-tdl ${d > 0 ? "up" : d < 0 ? "down" : ""}`, d === 0 ? "和前一天持平" : `较前一天 ${qfSign(d)}`);
+    mk("qf-tn2", x.synced ? "这天同步过" : "这天没同步,沿用上次的数");
+    const tw = tip.offsetWidth, left = Math.min(Math.max(pts[i][0] - tw / 2, 0), W - tw);
+    tip.style.left = left + "px"; tip.style.top = Math.max(0, pts[i][1] - tip.offsetHeight - 14) + "px";
+  };
+  const hide = () => { hv.style.display = "none"; tip.style.display = "none"; };
+  let cur = n - 1;
+  hit.addEventListener("pointermove", e => { const r = hit.getBoundingClientRect(), f = (e.clientX - r.left) / r.width; cur = Math.max(0, Math.min(n - 1, Math.round(f * (n - 1)))); show(cur); });
+  hit.addEventListener("pointerleave", hide);
+  el.onkeydown = e => { if (e.key === "ArrowLeft") { cur = Math.max(0, cur - 1); show(cur); e.preventDefault(); } else if (e.key === "ArrowRight") { cur = Math.min(n - 1, cur + 1); show(cur); e.preventDefault(); } else if (e.key === "Escape") hide(); };
+  el.onblur = hide;
+}
+function qfOverview(o) {
+  if (!o.accounts.length) return qfEmpty("还没有账号数据");
+  const A = o.accounts, sm = o.summary || { trend: [], top_notes: [], hot: {} };
+  const sum = k => A.reduce((t, a) => t + (a[k] ?? 0), 0), sumPrev = k => A.reduce((t, a) => t + (a.prev?.[k] ?? a[k] ?? 0), 0);
+  const eng = a => (a.likes ?? 0) + (a.collects ?? 0) + (a.comments ?? 0), engPrev = a => a.prev ? (a.prev.likes ?? 0) + (a.prev.collects ?? 0) + (a.prev.comments ?? 0) : eng(a);
+  const E = A.reduce((t, a) => t + eng(a), 0), EP = A.reduce((t, a) => t + engPrev(a), 0);
+  const d = (c, p) => { const x = c - p; return x ? `<em class="qf-d ${x > 0 ? "up" : "down"}">比上次 ${x > 0 ? "+" : "−"}${fmt(Math.abs(x))}</em>` : `<em class="qf-d">和上次持平</em>`; };
+  const cards = [["总粉丝", fmt(sum("fans")), d(sum("fans"), sumPrev("fans"))], ["近 7 日阅读", fmt(sum("views")), d(sum("views"), sumPrev("views"))], ["近 7 日互动", fmt(E), `${d(E, EP)} <span class="sub">赞 + 藏 + 评</span>`],
+    ["账号 / 店铺", `${A.length} / ${o.shops.length || 1}`, `<em class="qf-d">${o.shop ? "当前店铺" : "全部店铺"}</em>`]];
+  const notes = sm.top_notes.length ? sm.top_notes.map((n, i) => `<div class="qf-tn"><span class="qf-rk">${i + 1}</span><span class="qf-tt" title="${esc(n.title)}">${esc(n.title)}<small>${esc(n.account_name || "")}${n.published_at ? " · " + esc(String(n.published_at).slice(5, 10)) : ""}</small></span><span class="qf-tm">阅读 <b>${fmt(n.views ?? 0)}</b> · 赞 ${fmt(n.likes ?? 0)}</span></div>`).join("") : `<div class="sub" style="padding:14px 0">还没有笔记数据</div>`;
+  const chips = k => (sm.hot[k]?.items || []).filter(Boolean).map(w => `<span class="qf-chip">${esc(w)}</span>`).join("") || `<span class="sub">暂无</span>`;
+  return `<div class="stats qf-kpi">${cards.map(([n, v, x]) => `<div class="card stat"><span class="sub">${n}</span><b>${v}</b><div class="mini">${x}</div></div>`).join("")}</div>
+  ${qfTrendHtml()}
+  <div class="qf-ov2" style="margin-top:12px"><section class="card"><div class="card-h"><b>表现最好的笔记</b><span class="sub">近 30 天发布,按互动排</span></div><div style="padding:2px 16px 12px">${notes}</div>
+      <div style="padding:0 16px 12px"><button class="btn ghost sm" data-go="notes">看全部笔记 →</button></div></section>
+  <section class="card"><div class="card-h"><b>市场热点</b><span class="sub">全站近 ${QF_PERIOD[sm.hot.hot_keywords?.period || sm.hot.hot_topics?.period]?.replace("近 ", "") || "7 天"},看看大家在搜什么</span></div>
+    <div class="qf-hotrow"><span class="sub">热门关键词</span><div class="qf-chips2">${chips("hot_keywords")}</div></div>
+    <div class="qf-hotrow"><span class="sub">热门话题</span><div class="qf-chips2">${chips("hot_topics")}</div></div>
+    <div style="padding:0 16px 12px"><button class="btn ghost sm" data-go="market">看全部榜单 →</button></div></section></div>`;
+}
+
+// 市场热点:热门笔记、热门话题、热门关键词三个榜并排,共用一个品类和周期选择
+async function qfMarket(o) {
+  const kinds = [["hot_notes", "热门笔记", "标题"], ["hot_topics", "热门话题", "话题"], ["hot_keywords", "热门关键词", "关键词"]];
+  const sc = k => o.scopes[k] || [];
+  if (!kinds.some(([k]) => sc(k).length)) return qfEmpty("还没有榜单数据");
+  const scopes = [...new Set(kinds.flatMap(([k]) => sc(k).map(s => s.scope)))];
   if (!scopes.includes(QF.scope)) QF.scope = scopes[0];
-  const periods = sc.filter(s => s.scope === QF.scope).map(s => s.period);
+  const periods = [...new Set(kinds.flatMap(([k]) => sc(k).filter(s => s.scope === QF.scope).map(s => s.period)))];
   if (!periods.includes(QF.period)) QF.period = periods[0] ?? "";
-  const r = await api(qfu(`/hot?kind=${kind}&scope=${encodeURIComponent(QF.scope)}&period=${QF.period}&shop=${encodeURIComponent(QF.shop)}`));
-  const isNote = kind === "hot_notes", name = i => isNote ? i.title : i.name;
+  const pick = k => { const l = sc(k), scope = l.some(s => s.scope === QF.scope) ? QF.scope : l[0]?.scope, per = l.some(s => s.scope === scope && s.period === QF.period) ? QF.period : l.find(s => s.scope === scope)?.period; return l.length ? { scope, per } : null; };
+  const got = await Promise.all(kinds.map(async ([k]) => { const p = pick(k); if (!p) return { items: [], at: "" }; try { return await api(qfu(`/hot?kind=${k}&scope=${encodeURIComponent(p.scope)}&period=${p.per ?? ""}&shop=${encodeURIComponent(QF.shop)}`)); } catch { return { items: [], at: "" }; } }));
+  QF.mk = Object.fromEntries(kinds.map(([k], i) => [k, got[i].items]));
   const sel = (id, opts, cur, label) => opts.length > 1 || (opts[0] ?? "") !== "" ? `<select id="${id}" class="sm">${opts.map(v => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(label(v))}</option>`).join("")}</select>` : "";
-  const act = isNote ? (QFSTAFF() ? "" : `<button class="btn gray sm" id="qtt">前 10 条加入沉淀任务</button>`) : `<button class="btn gray sm" id="qtk">复制前 10 个词</button>`;
-  const has = k => r.items.some(i => i[k] != null);
-  const cols = (isNote ? [["likes", "点赞"], ["collects", "收藏"], ["comments", "评论"]] : [["notes", "笔记数"]]).filter(([k]) => has(k));
-  const heatName = isNote && !has("likes") ? "热度(阅读)" : kind === "hot_keywords" ? "热度(搜索)" : kind === "hot_topics" ? "热度(浏览)" : "热度";
-  return `<section class="card flush"><div class="card-h"><b>${qfTabs().find(t => t[0] === kind)[1]}</b>${sel("qscope", scopes, QF.scope, v => v || "全站")}${sel("qper", periods, QF.period, v => QF_PERIOD[v] || v)}<span class="sub">数据时间 ${lt(r.at)}</span>${act}</div>
-  <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:48px">#</th><th>${isNote ? "标题" : kind === "hot_topics" ? "话题" : "关键词"}</th>${isNote ? "<th>作者</th>" : ""}${cols.map(([, t]) => `<th class="num">${t}</th>`).join("")}${has("heat") ? `<th class="num">${heatName}</th>` : ""}</tr></thead><tbody>
-  ${r.items.map(i => `<tr><td class="sub">${i.rank}</td><td class="tt" title="${esc(name(i))}">${esc(name(i))}</td>${isNote ? `<td class="sub nowrap">${esc(i.author || "")}</td>` : ""}${cols.map(([k]) => `<td class="num">${i[k] != null ? fmt(i[k]) : `<span class="na">-</span>`}</td>`).join("")}${has("heat") ? `<td class="num">${i.heat != null ? fmt(i.heat) : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div></section>`;
+  const card = ([k, title, head], i) => {
+    const r = got[i], isNote = k === "hot_notes";
+    const rows = r.items.slice(0, 20).map(x => `<div class="qf-mr"><span class="qf-rk">${x.rank}</span><span class="qf-tt" title="${esc(isNote ? x.title : x.name)}">${esc(isNote ? x.title : x.name)}${isNote && x.author ? `<small>${esc(x.author)}</small>` : ""}</span><span class="qf-tm">${isNote && x.likes != null ? `赞 ${fmt(x.likes)}` : x.heat != null ? `热度 ${fmt(x.heat)}` : ""}</span></div>`).join("");
+    const act = QFSTAFF() ? "" : isNote ? `<button class="btn gray sm" id="qtt">前 10 条加入沉淀任务</button>` : `<button class="btn gray sm" data-copy="${k}">复制前 10 个词</button>`;
+    return `<section class="card"><div class="card-h"><b>${title}</b><span class="sub">${r.at ? "更新于 " + esc(lt(r.at)) : ""}</span>${act ? `<span style="margin-left:auto">${act}</span>` : ""}</div><div style="padding:2px 14px 10px">${rows || `<div class="sub" style="padding:14px 0">这个榜单暂时没有数据</div>`}</div></section>`;
+  };
+  return `<div class="qf-mkbar"><span class="sub">品类</span>${sel("qscope", scopes, QF.scope, v => v || "全站")}<span class="sub">周期</span>${sel("qper", periods, QF.period, v => QF_PERIOD[v] || v)}</div>
+    <div class="qf-mk">${kinds.map(card).join("")}</div>`;
 }
 
 function qfSync(o) {
@@ -184,13 +279,11 @@ function qfBind(o) {
   if ($("#qscope")) $("#qscope").onchange = e => { QF.scope = e.target.value; QF.period = ""; vQianfan(); };
   if ($("#qper")) $("#qper").onchange = e => { QF.period = e.target.value; vQianfan(); };
   if ($("#qtt")) $("#qtt").onclick = async () => {
-    const r = await api(qfu(`/hot?kind=hot_notes&scope=${encodeURIComponent(QF.scope)}&period=${QF.period}&shop=${encodeURIComponent(QF.shop)}`));
-    const x = await api("/api/admin/qianfan/to_title_tasks", "POST", { titles: r.items.slice(0, 10).map(i => i.title) }); toast(`已新建 ${x.created} 个沉淀任务`);
+    const x = await api("/api/admin/qianfan/to_title_tasks", "POST", { titles: (QF.mk.hot_notes || []).slice(0, 10).map(i => i.title) }); toast(`已新建 ${x.created} 个沉淀任务`);
   };
-  if ($("#qtk")) $("#qtk").onclick = async () => {
-    const r = await api(qfu(`/hot?kind=${QF.kind}&scope=${encodeURIComponent(QF.scope)}&period=${QF.period}&shop=${encodeURIComponent(QF.shop)}`));
-    const t = r.items.slice(0, 10).map(i => i.name).join("、"); try { await copyText(t); toast("已复制:" + t); } catch { toast(t); }
-  };
+  $$("[data-copy]").forEach(b => b.onclick = async () => {
+    const t = (QF.mk[b.dataset.copy] || []).slice(0, 10).map(i => i.name).join("、"); try { await copyText(t); toast("已复制:" + t); } catch { toast(t); }
+  });
   if ($("#qfform")) $("#qfform").onsubmit = async e => {
     e.preventDefault();
     try {

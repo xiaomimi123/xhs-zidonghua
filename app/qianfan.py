@@ -291,6 +291,42 @@ def series(limit: int = 90, account_id: str | None = None) -> list[dict]:
     return [{"at": r["snap_at"], **((r["data"] or {}).get("account") or {}), "shop_id": r["shop_id"]} for r in reversed(rows)]
 
 
+TZ_OFFSET_H = 8   # 快照时间是 UTC,按北京时间算「哪一天」
+
+
+def fans_trend(days: int = 30, shop: str = "") -> list[dict]:
+    """所有账号(或某个店铺下)总粉丝的每日变化,最近 days 天:[{day, fans, synced}](synced = 这天真的同步过)。
+    没同步的日子沿用上一次的值;某个账号第一次出现之前,按它第一次的数算(不然新账号一加进来总数就凭空跳一截)。"""
+    import datetime
+    today = (datetime.datetime.utcnow() + datetime.timedelta(hours=TZ_OFFSET_H)).date()
+    per: dict[str, list] = {}
+    for r in q_all("SELECT account_id, snap_at, data, shop_id FROM qf_snapshots WHERE kind='account' ORDER BY id"):
+        if shop and r["shop_id"] != shop:
+            continue
+        f = ((r["data"] or {}).get("account") or {}).get("fans")
+        try:
+            d = (datetime.datetime.fromisoformat(r["snap_at"]) + datetime.timedelta(hours=TZ_OFFSET_H)).date()
+        except (TypeError, ValueError):
+            continue
+        if f is not None:
+            per.setdefault(r["account_id"], []).append((d, f))
+    synced_days = {dd for lst in per.values() for dd, _ in lst}   # 哪些天真的有同步(没有的是沿用上一次的数)
+    out = []
+    for i in range(days):
+        d = today - datetime.timedelta(days=days - 1 - i)
+        total = 0
+        for lst in per.values():
+            val = lst[0][1]
+            for dd, ff in lst:
+                if dd > d:
+                    break
+                val = ff
+            total += val
+        if per:
+            out.append({"day": d.isoformat(), "fans": total, "synced": d in synced_days})
+    return out
+
+
 def accounts(shop: str | None = None) -> list[dict]:
     """每个账号最新一份数据(+ 上一份用来算涨跌),粉丝多的排前面。没带账号 ID 的旧数据归在 account_id='' 下。"""
     out = []
