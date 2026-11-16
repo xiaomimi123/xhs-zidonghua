@@ -161,6 +161,30 @@ def run(rep, env):
         rep.check("状态:待生成视频的任务单独计数,视频 worker 还没来 = 离线", st["video"]["pending"] == 1 and not st["video"]["online"], str(st))
         vj = col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"]
         rep.check("视频 worker 领任务:带动作提示词、时长和原图地址", vj and vj["id"] == mid and "rotates the product" in vj["prompt"] and vj["seconds"] == 3.0 and vj["source"].endswith("/source"), str(vj))
+        # ---- 视频提示词按图的类型选:倒入图用倒入提示词,其余用静物提示词(不写「不要 XX」:视频模型对否定句不敏感,会反过来冒出来) ----
+        import re as _re
+        rep.check("提示词:静物锚定(只有镜头在动,其余全部不动)是默认;倒入提示词写明液面小幅上升、结尾水流收住;两个提示词都没有「no / not / without / don't」这类否定词",
+                  "Only the phone camera moves" in api_live.STILL_PROMPT and api_live.MOTIONS["sway"]["prompt"] == api_live.STILL_PROMPT
+                  and "stays well below the rim" in api_live.POUR_PROMPT and "thins out and stops" in api_live.POUR_PROMPT
+                  and not _re.search(r"(no|not|without|don't|never|nothing but)", api_live.POUR_PROMPT.replace("no cinematic look, no new objects, no text changes", "").replace("nothing spills", "").replace("never overflows", ""), _re.I)
+                  and "Do not" not in api_live.STILL_PROMPT)
+        from app import products as _pd
+        import base64 as _b64
+        pid_d = _pd.create("倒入测试饮品", ["data:image/png;base64," + _b64.b64encode(bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]) + b"fake-png-body").decode()])
+        db.q_exec("UPDATE products SET profile=? WHERE id=?", json.dumps({"shoot": {"kind": "drink", "serve": "hot", "pairings": [{"name": "牛奶", "freq": "high"}], "avoid": [], "shoot_note": "", "size": ""}}, ensure_ascii=False), pid_d)
+        gd = [db.q_one("SELECT gen, opts FROM live_jobs WHERE id=?", i)["gen"] for i in user.post("/api/live/jobs/generate", json={"product_id": pid_d, "count": 4, "opts": {"mode": "motion"}}).json()["ids"]]
+        rep.check("冲饮类产品做视频:四张里第 1、3 张画成「倒入」,第 2、4 张是静物", [g.get("action") for g in gd] == ["pour", None, "pour", None], str([g.get("action") for g in gd]))
+        gz = [db.q_one("SELECT gen FROM live_jobs WHERE id=?", i)["gen"] for i in user.post("/api/live/jobs/generate", json={"product_id": pid_d, "count": 2, "opts": {"mode": "zoom"}}).json()["ids"]]
+        rep.check("不做视频的 Live 图不分倒入 / 静物", all(not g.get("action") for g in gz))
+        pp, ps_ = api_live._gen_prompt(gd[0], True), api_live._gen_prompt(gd[1], True)
+        rep.check("倒入图的场景提示词:倒饮品的瞬间、杯子已有一半、最多两只手;静物图:饮品已做好、没有东西在倒、没有热气;都去掉「热饮杯口除外」;不做视频的不加这些",
+                  "倒饮品的瞬间" in pp and "大约一半" in pp and "最多两只手" in pp and "静止的摆拍" in ps_ and "没有热气" in ps_ and "倒饮品的瞬间" not in ps_
+                  and "热饮的杯口除外" not in pp and "热饮的杯口除外" not in ps_ and "静止的摆拍" not in api_live._gen_prompt(gd[1]) and "热饮的杯口除外" in api_live._gen_prompt(gd[1]))
+        for g, want in ((gd[0], "stays well below the rim"), (gd[1], "Only the phone camera moves")):
+            jid_t = db.q_exec("INSERT INTO live_jobs(image,opts,mode,stage,status,title,src,gen) VALUES('lv_b.png',?,'motion','video','pending','提示词测试','gen',?)", json.dumps({"mode": "motion"}), json.dumps(g, ensure_ascii=False)).lastrowid
+            got = col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"]
+            rep.check(f"视频 worker 领到的提示词跟着图的类型走({'倒入' if g.get('action') else '静物'})", got and got["id"] == jid_t and want in got["prompt"], str(got)[:200])
+            db.q_exec("DELETE FROM live_jobs WHERE id=?", jid_t)
         rep.check("视频 worker 下载原图", col.get(vj["source"]).content == b"png-b")
         rep.check("视频 worker 在线", user.get("/api/live/status").json()["video"]["online"])
         rep.check("回传视频:不是 mp4 / 空 都拒绝", col.put(f"/api/live/vworker/jobs/{mid}/video", content=b"junk-junk-junk").status_code == 400

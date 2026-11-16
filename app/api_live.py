@@ -44,10 +44,18 @@ MOTION_SECONDS = 3.0
 MAX_TAKES = 4   # 真实动作:同一张图最多拍几条(每条随机种子不同,挑效果最好的)
 # 真实动作模板:提示词统一往「手机随手拍的家庭视频」靠,避免电影感 / AI 感
 _BASE = "Casual handheld iPhone video filmed at home, ordinary phone footage, auto-exposure, no cinematic look, no new objects, no text changes"
+# 实测(2026-11-16,本机 H3 对比视频):
+# - 旧写法对静物图会「自己加戏」:咖啡罐旁凭空出现一个瓶子往罐子里倒咖啡;静物锚定写法(只有镜头在动,其余全部不动)重复测试都没有再加戏
+# - 「画面里如果有倒液体就……」这种通用写法会诱发假倒入(没有倒的图也被编出倒入),倒入提示词只能用在画面本来就在倒的图上
+# - 「no steam」这类否定句会让背景冒烟,所以提示词里不写「不要 XX」
+STILL_PROMPT = (f"{_BASE}. A still life: nothing in the scene moves. Only the phone camera moves, a very slow gentle sway with tiny natural hand tremor and slight parallax. "
+                "Every object, the drinks and the jars stay exactly in place with exactly the same look from the first frame to the last.")
+POUR_PROMPT = (f"{_BASE}. A hand pours the liquid from the pitcher into the glass in one smooth, continuous motion. The stream flows steadily with realistic gravity. "
+               "The liquid level in the glass rises only slightly and stays well below the rim; near the end the stream thins out and stops, so the glass never overflows and nothing spills. "
+               "Small natural hand tremor from the phone, the background stays still.")
 MOTIONS = {
-    "sway": {"label": "手持轻晃", "desc": "像手机随手拍一样轻轻晃动,前后景有细微错位,画面里的东西基本不动,最稳",
-             "prompt": f"{_BASE}. The phone sways very gently and drifts slightly, tiny natural hand tremor, subtle parallax between the "
-                       "foreground and the background, everything in the scene stays still and keeps its exact look."},
+    "sway": {"label": "手持轻晃", "desc": "像手机随手拍一样轻轻晃动,前后景有细微错位,画面里的东西基本不动,最稳(饮品类的图有一半会拍成自然倒入)",
+             "prompt": STILL_PROMPT},
     "rotate": {"label": "手转产品", "desc": "手慢慢转动产品,画面里有手和产品时效果最好;包装文字转动时可能走样",
                "prompt": f"{_BASE}. A hand slowly and slightly rotates the product toward the camera, small natural hand tremor, the background "
                          "stays still and a little out of focus, the product label stays sharp and unchanged."},
@@ -565,6 +573,7 @@ class GenIn(BaseModel):
 
 
 MAX_GEN = 10
+POUR_KINDS = ("drink", "mixed")   # 冲饮类产品才拍倒入
 
 
 @router.post("/jobs/generate")
@@ -609,6 +618,8 @@ def create_from_product(p: GenIn):
             g["pairing"] = pairs[k]
         if avoid:
             g["avoid"] = avoid
+        if opts["mode"] == "motion" and spec.get("kind") in POUR_KINDS and k % 2 == 0:
+            g["action"] = "pour"   # 这张场景图画成「正在倒饮品」,视频用倒入提示词;其余的画成静物,用静物提示词
         ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen,owner_id,batch_id) VALUES(NULL,'',?,?,?,'image',?,'gen',?,?,?)",
                           ojs, who, opts["mode"], title, json.dumps(g, ensure_ascii=False), my_id(), bid).lastrowid)
     return {"created": len(ids), "ids": ids}
@@ -639,7 +650,14 @@ def _gen_history(gen: dict) -> tuple[dict, dict]:
     return used, pairs
 
 
-def _gen_prompt(g: dict) -> str:
+# 做视频的场景图:图生视频会把画面里「正在发生的事」继续演下去,所以要么就是一个明确的倒入瞬间,要么就是完全静止的摆拍
+POUR_SCENE = ("画面是倒饮品的瞬间:一只手拿着壶,正在把饮品缓慢倒进杯子,水流细而稳,杯子里已经有大约一半的饮品,壶身和杯口的位置自然,产品罐放在旁边;"
+              "画面里只有这一个人的手(最多两只手:一只拿壶,另一只扶杯子或不入镜)")
+STILL_SCENE = ("画面是静止的摆拍:饮品已经做好放在桌上,液面平稳,没有任何东西正在倒或正在洒;杯口和饮品表面干净,没有热气;"
+               "画面里最多一个人的手,只拿着一件东西,手停在那里")
+
+
+def _gen_prompt(g: dict, motion: bool = False) -> str:
     from . import covers, worker
     scene = g.get("scene") or covers.scene("美食", g.get("idx", 0), 1)
     if g.get("look"):
@@ -651,8 +669,11 @@ def _gen_prompt(g: dict) -> str:
         scene += f"。{g['avoid']}"
     if g.get("size"):   # 产品实际大小:不然模型不知道多大,盒子和罐子的相对大小、产品和手的比例每张都不一样
         scene += f"。产品的真实大小:{g['size']};画面里产品要和手、杯子、碗等周围的东西保持真实比例,不要画得过大或过小"
+    if motion:
+        scene += f"。{POUR_SCENE if g.get('action') == 'pour' else STILL_SCENE}"
     subject = g.get("note") or "产品是画面里的主角,摆在或拿在真实生活场景中,像用户自己随手拍的分享照"
-    return worker._image_prompt("", subject, True, scene)
+    out = worker._image_prompt("", subject, True, scene)
+    return out.replace("(热饮的杯口除外)", "") if motion else out   # 通用风格词里热饮可以有热气,做视频的图不行:热气会被视频模型演成乱飘的烟
 
 
 def _gen_refs(g: dict) -> list[Path]:
@@ -674,7 +695,7 @@ def process_gen_job(jid: int):
         refs = _gen_refs(g)
         if not refs:
             raise RuntimeError("产品图不见了,请重新上传")
-        name = imagegen.generate_image(_gen_prompt(g), f"lvgen_{jid}_{int(time.time())}", refs=refs)
+        name = imagegen.generate_image(_gen_prompt(g, (j["opts"] or {}).get("mode") == "motion"), f"lvgen_{jid}_{int(time.time())}", refs=refs)
         nxt = "video" if (j["opts"] or {}).get("mode") == "motion" else "live"
         q_exec("UPDATE live_jobs SET image=?, status='pending', stage=?, worker='', claimed_at=NULL, error='' WHERE id=?", name, nxt, jid)
     except Exception as e:
@@ -1000,7 +1021,9 @@ def v_claim(request: Request, worker: str = ""):
                         "background": bgp, "subject": [] if bgp else clean_subject(g.get("subject")),
                         "orig": f"/api/live/vworker/jobs/{r['id']}/file/orig", "edit": f"/api/live/vworker/jobs/{r['id']}/file/edit"}}
     m = MOTIONS[opts["motion"] or "sway"]
-    return {"job": {"id": r["id"], "stage": "video", "image": r["image"], "opts": opts, "motion": opts["motion"], "prompt": m["prompt"],
+    action = json.loads(r["gen"] or "{}").get("action") if r["gen"] else ""
+    prompt = POUR_PROMPT if action == "pour" and (opts["motion"] or "sway") == "sway" else m["prompt"]
+    return {"job": {"id": r["id"], "stage": "video", "image": r["image"], "opts": opts, "motion": opts["motion"], "prompt": prompt,
                     "seconds": opts["seconds"], "source": f"/api/live/vworker/jobs/{r['id']}/source"}}
 
 
