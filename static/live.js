@@ -229,7 +229,7 @@ function lvUpload() {
           return (ai ? `<optgroup label="AI 为这个产品推荐的场景">${sc.slice(0, ai).map(opt).join("")}</optgroup>` : "") + `<optgroup label="${ai ? "适合这类产品的场景" : "场景模板"}">${sc.slice(ai).map(opt).join("")}</optgroup>`; })()}</select></div>
         <div><label class="f">生成几张</label><select id="lvcount">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<option value="${n}" ${G.count === n ? "selected" : ""}>${n} 张</option>`).join("")}</select></div></div>
       <p class="sub" style="margin:8px 0 0">指定了场景也一样:每张会换机位、光线和画面状态(有没有手入镜等),同一产品反复生成不会越来越像。</p>
-      <label class="f">画面补充 <span class="sub">可选</span></label><input id="lvnote" maxlength="100" placeholder="例如:一只手拿着罐子、旁边有一杯刚冲好的拿铁" value="${esc(G.note)}">` : ""}`,
+      <label class="f">画面补充 <span class="sub">可选</span></label><input id="lvnote" maxlength="100" placeholder="例如:一只手拿着罐子、旁边有一杯刚冲好的拿铁;想拍动作可以写「拿小木勺舀一勺粉末展示」「把牛奶倒进杯子里」" value="${esc(G.note)}">` : ""}`,
   }[m];
   sec.innerHTML = `<details class="lv-tipd"><summary>选图小提示</summary><p>${LV_TIP}</p></details>
     <div class="lv-modes" role="tablist" aria-label="上传方式">${LV_MODES.map(([k, t, d]) => `<button role="tab" class="lv-mode ${k === m ? "on" : ""}" data-m="${k}" aria-selected="${k === m}"><b>${t}</b><span>${d}</span></button>`).join("")}</div>

@@ -180,10 +180,24 @@ def run(rep, env):
         rep.check("倒入图的场景提示词:倒饮品的瞬间、杯子已有一半、最多两只手;静物图:饮品已做好、没有东西在倒、没有热气;都去掉「热饮杯口除外」;不做视频的不加这些",
                   "倒饮品的瞬间" in pp and "大约一半" in pp and "最多两只手" in pp and "静止的摆拍" in ps_ and "没有热气" in ps_ and "倒饮品的瞬间" not in ps_
                   and "热饮的杯口除外" not in pp and "热饮的杯口除外" not in ps_ and "静止的摆拍" not in api_live._gen_prompt(gd[1]) and "热饮的杯口除外" in api_live._gen_prompt(gd[1]))
-        for g, want in ((gd[0], "stays well below the rim"), (gd[1], "Only the phone camera moves")):
+        # ---- 「画面补充」里写的动作:认得出的换成明确的英文动作提示词(实测中文动作描述没用,「舀出来展示」会被演成「倒回罐子」) ----
+        rep.check("认动作:舀 / 小木勺 → scoop;倒入 / 倒进 → pour;只写画面(一只手拿着罐子)→ 不认;多步骤文字里有「舀一勺粉末展示」也认得出",
+                  api_live.action_from_note("拿小木勺舀一勺粉末展示") == "scoop" and api_live.action_from_note("1.制作黄金奶的全部步骤过程2.展示产品的粉末,拿小木勺舀一勺粉末展示") == "scoop"
+                  and api_live.action_from_note("把牛奶倒进杯子里") == "pour" and api_live.action_from_note("一只手拿着罐子、旁边有一杯刚冲好的拿铁") == "" and api_live.action_from_note("") == "")
+        sc_ = api_live.SCOOP_PROMPT
+        rep.check("舀粉提示词:粉末堆在勺上、慢慢抬起展示给镜头、粉末一直留在勺里(不倒回罐子);不含否定句",
+                  "scooped a heap of powder out of the jar" in sc_ and "toward the camera" in sc_ and "stays heaped on the spoon" in sc_ and "pour" not in sc_.lower())
+        gn = [db.q_one("SELECT gen FROM live_jobs WHERE id=?", i)["gen"] for i in user.post("/api/live/jobs/generate", json={"product_id": pid_d, "count": 4, "note": "拿小木勺舀一勺粉末展示", "opts": {"mode": "motion"}}).json()["ids"]]
+        rep.check("用户写了舀粉动作:冲饮类产品四张都按舀粉拍(不再随机分倒入);写了别的画面补充(没动作)时也不随机分倒入",
+                  [g.get("action") for g in gn] == ["scoop"] * 4 and all(g["note"] == "拿小木勺舀一勺粉末展示" for g in gn), str([g.get("action") for g in gn]))
+        gp = [db.q_one("SELECT gen FROM live_jobs WHERE id=?", i)["gen"] for i in user.post("/api/live/jobs/generate", json={"product_id": pid_d, "count": 4, "note": "一只手拿着罐子", "opts": {"mode": "motion"}}).json()["ids"]]
+        rep.check("画面补充没写动作:四张都是静物(不随机倒入,免得和补充冲突)", all(not g.get("action") for g in gp), str([g.get("action") for g in gp]))
+        ps_c = api_live._gen_prompt(gn[0], True)
+        rep.check("舀粉场景图提示词:勺里堆满粉、勺子举在罐口上方、只有一只手;不是倒饮品的瞬间", "小木勺从罐子里舀起一勺粉末" in ps_c and "只有这一个人的手" in ps_c and "倒饮品的瞬间" not in ps_c)
+        for g, want in ((gd[0], "stays well below the rim"), (gd[1], "Only the phone camera moves"), (gn[0], "scooped a heap of powder")):
             jid_t = db.q_exec("INSERT INTO live_jobs(image,opts,mode,stage,status,title,src,gen) VALUES('lv_b.png',?,'motion','video','pending','提示词测试','gen',?)", json.dumps({"mode": "motion"}), json.dumps(g, ensure_ascii=False)).lastrowid
             got = col.get("/api/live/vworker/claim?worker=gpu-pc").json()["job"]
-            rep.check(f"视频 worker 领到的提示词跟着图的类型走({'倒入' if g.get('action') else '静物'})", got and got["id"] == jid_t and want in got["prompt"], str(got)[:200])
+            rep.check(f"视频 worker 领到的提示词跟着图的类型走({'舀粉' if g.get('action') == 'scoop' else '倒入' if g.get('action') else '静物'})", got and got["id"] == jid_t and want in got["prompt"], str(got)[:200])
             db.q_exec("DELETE FROM live_jobs WHERE id=?", jid_t)
         rep.check("视频 worker 下载原图", col.get(vj["source"]).content == b"png-b")
         rep.check("视频 worker 在线", user.get("/api/live/status").json()["video"]["online"])

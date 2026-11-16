@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import random
+import re
 import threading
 import tempfile
 import time
@@ -53,6 +54,21 @@ STILL_PROMPT = (f"{_BASE}. A still life: nothing in the scene moves. Only the ph
 POUR_PROMPT = (f"{_BASE}. A hand pours the liquid from the pitcher into the glass in one smooth, continuous motion. The stream flows steadily with realistic gravity. "
                "The liquid level in the glass rises only slightly and stays well below the rim; near the end the stream thins out and stops, so the glass never overflows and nothing spills. "
                "Small natural hand tremor from the phone, the background stays still.")
+# 「画面补充」里写的动作(如「拿小木勺舀一勺粉末展示」):场景图只是静止的一帧,视频模型看不到你想要的动作,会自己猜
+# (实测把「舀出来展示」演成了「倒回罐子里」,中文动作描述也没用),所以认得出的动作要换成明确的英文动作提示词。只收实测过效果的:
+SCOOP_PROMPT = (f"{_BASE}. A hand holds a small wooden spoon that has just scooped a heap of powder out of the jar, and slowly lifts the spoon up and toward the camera to show the powder. "
+                "The powder stays heaped on the spoon. The jar and everything else stay still. Small natural hand tremor from the phone.")
+ACTION_PROMPTS = {"pour": POUR_PROMPT, "scoop": SCOOP_PROMPT}
+_SCOOP_RE = re.compile(r"舀|挖一勺|小勺|木勺|勺子|盛一勺|一勺粉")
+_POUR_RE = re.compile(r"倒入|倒进|倒牛奶|倒一杯|倒在杯|冲进杯")
+
+
+def action_from_note(note: str) -> str:
+    """从「画面补充」里认出要拍的动作:scoop 舀粉展示 / pour 倒入;认不出来返回空(按静物拍)。舀粉优先:「舀一勺粉倒进杯里」先拍舀。"""
+    n = note or ""
+    return "scoop" if _SCOOP_RE.search(n) else "pour" if _POUR_RE.search(n) else ""
+
+
 MOTIONS = {
     "sway": {"label": "手持轻晃", "desc": "像手机随手拍一样轻轻晃动,前后景有细微错位,画面里的东西基本不动,最稳(饮品类的图有一半会拍成自然倒入)",
              "prompt": STILL_PROMPT},
@@ -618,8 +634,12 @@ def create_from_product(p: GenIn):
             g["pairing"] = pairs[k]
         if avoid:
             g["avoid"] = avoid
-        if opts["mode"] == "motion" and spec.get("kind") in POUR_KINDS and k % 2 == 0:
-            g["action"] = "pour"   # 这张场景图画成「正在倒饮品」,视频用倒入提示词;其余的画成静物,用静物提示词
+        if opts["mode"] == "motion":
+            act = action_from_note(gen["note"])   # 用户在「画面补充」里写了要拍的动作,每张都按它拍
+            if act:
+                g["action"] = act
+            elif not gen["note"] and spec.get("kind") in POUR_KINDS and k % 2 == 0:
+                g["action"] = "pour"   # 没写补充的冲饮类产品:每两张有一张画成「正在倒饮品」,视频用倒入提示词;其余的画成静物
         ids.append(q_exec("INSERT INTO live_jobs(draft_id,image,opts,created_by,mode,stage,title,src,gen,owner_id,batch_id) VALUES(NULL,'',?,?,?,'image',?,'gen',?,?,?)",
                           ojs, who, opts["mode"], title, json.dumps(g, ensure_ascii=False), my_id(), bid).lastrowid)
     return {"created": len(ids), "ids": ids}
@@ -653,6 +673,8 @@ def _gen_history(gen: dict) -> tuple[dict, dict]:
 # 做视频的场景图:图生视频会把画面里「正在发生的事」继续演下去,所以要么就是一个明确的倒入瞬间,要么就是完全静止的摆拍
 POUR_SCENE = ("画面是倒饮品的瞬间:一只手拿着壶,正在把饮品缓慢倒进杯子,水流细而稳,杯子里已经有大约一半的饮品,壶身和杯口的位置自然,产品罐放在旁边;"
               "画面里只有这一个人的手(最多两只手:一只拿壶,另一只扶杯子或不入镜)")
+SCOOP_SCENE = ("画面是刚用小木勺从罐子里舀起一勺粉末的瞬间:一只手拿着小木勺,勺里的粉末堆得满满的,勺子举在罐口上方一点点;罐子是打开的、里面有粉末;"
+               "画面里只有这一个人的手,另一只手不入镜")
 STILL_SCENE = ("画面是静止的摆拍:饮品已经做好放在桌上,液面平稳,没有任何东西正在倒或正在洒;杯口和饮品表面干净,没有热气;"
                "画面里最多一个人的手,只拿着一件东西,手停在那里")
 
@@ -670,7 +692,7 @@ def _gen_prompt(g: dict, motion: bool = False) -> str:
     if g.get("size"):   # 产品实际大小:不然模型不知道多大,盒子和罐子的相对大小、产品和手的比例每张都不一样
         scene += f"。产品的真实大小:{g['size']};画面里产品要和手、杯子、碗等周围的东西保持真实比例,不要画得过大或过小"
     if motion:
-        scene += f"。{POUR_SCENE if g.get('action') == 'pour' else STILL_SCENE}"
+        scene += f"。{ {'pour': POUR_SCENE, 'scoop': SCOOP_SCENE}.get(g.get('action'), STILL_SCENE) }"
     subject = g.get("note") or "产品是画面里的主角,摆在或拿在真实生活场景中,像用户自己随手拍的分享照"
     out = worker._image_prompt("", subject, True, scene)
     return out.replace("(热饮的杯口除外)", "") if motion else out   # 通用风格词里热饮可以有热气,做视频的图不行:热气会被视频模型演成乱飘的烟
@@ -1022,7 +1044,7 @@ def v_claim(request: Request, worker: str = ""):
                         "orig": f"/api/live/vworker/jobs/{r['id']}/file/orig", "edit": f"/api/live/vworker/jobs/{r['id']}/file/edit"}}
     m = MOTIONS[opts["motion"] or "sway"]
     action = json.loads(r["gen"] or "{}").get("action") if r["gen"] else ""
-    prompt = POUR_PROMPT if action == "pour" and (opts["motion"] or "sway") == "sway" else m["prompt"]
+    prompt = ACTION_PROMPTS.get(action) if action in ACTION_PROMPTS and (opts["motion"] or "sway") == "sway" else m["prompt"]
     return {"job": {"id": r["id"], "stage": "video", "image": r["image"], "opts": opts, "motion": opts["motion"], "prompt": prompt,
                     "seconds": opts["seconds"], "source": f"/api/live/vworker/jobs/{r['id']}/source"}}
 
