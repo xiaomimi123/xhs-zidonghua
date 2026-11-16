@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from .auth import require_admin, is_admin, check_pw, hash_pw, make_admin_token, bump_admin_ver, throttle, SESSION_DAYS, INIT_PW_FILE
 from .api_collector import collector_summary
 from . import worker
-from . import backup, health
+from . import backup, health, qianfan
 from .db import get_settings, save_settings, SECRET_KEYS, conn, q_all, q_one, q_exec, tier_sql
 from .llm import CONTENT_TYPES, ping as ping_deepseek, suggest_topic_merges, expand_keywords, expand_adjacent
 from . import imagegen
@@ -64,6 +64,7 @@ def overview():
         "init_pw_file": INIT_PW_FILE.exists(),
         "backup": backup.status(),
         "services": health.status(),
+        "sync_alerts": qianfan.sync_alerts(),
     }
 
 

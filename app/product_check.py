@@ -9,7 +9,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
 
-from . import llm, products
+from . import llm, logx, products
 from .db import q_all
 
 # 像是写给 AI 的指令(从别处复制来的、没删干净)
@@ -134,8 +134,8 @@ def _image_warnings(seq: list, exclude_pid: int) -> list[dict]:
             with Image.open(io.BytesIO(b)) as im:
                 if min(im.size) < LOW_RES:
                     out.append({"level": "tip", "where": "图片", "msg": f"第 {i} 张图分辨率偏低({im.size[0]}×{im.size[1]}),包装上的字生图时容易糊,建议用原图"})
-    except Exception:
-        pass
+    except Exception as e:
+        logx.warn("产品图分辨率检查", e, trace=False)
     return out
 
 

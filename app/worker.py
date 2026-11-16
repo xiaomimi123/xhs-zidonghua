@@ -8,7 +8,7 @@ import time
 from itertools import combinations
 from concurrent.futures import ThreadPoolExecutor
 from . import thumbs
-from . import ptype, llm, imagegen, compliance, stats, review, mirror, lengthcap, products, cards, covers, titlelab
+from . import logx, ptype, llm, imagegen, compliance, stats, review, mirror, lengthcap, products, cards, covers, titlelab
 from .db import conn, row_to_dict, get_settings
 
 _lock = threading.Lock()
@@ -190,8 +190,8 @@ def _match_ptype(project, pb, refs, d, out, tail, kb, banned) -> dict:
             hint = f"上一版被判成了「{got}」,但这篇要写成「{kind}」。严格按上面的帖子类型要求重写,类型特征要写足。"
             out = llm.write_note(project, pb["data"], refs, d["angle"], f"{d['extra']} {hint}{tail}".strip(), kb, banned)
             got = ptype.check(out.get("title", ""), out.get("content", "")) or got
-    except Exception:
-        pass
+    except Exception as e:
+        logx.warn("帖子类型复检", e, trace=False)
     _exec("UPDATE drafts SET ptype_got=? WHERE id=?", got, d["id"])
     return out
 

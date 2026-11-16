@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
-from . import imagegen, mirror, products
+from . import imagegen, logx, mirror, products
 from .auth import CURRENT, require_collector, require_user
 from .scope import check as own, my_id, owner_sql
 from .db import DATA, conn, get_settings, q_all, q_exec, q_one
@@ -715,8 +715,8 @@ def _gen_loop():
                 t = threading.Thread(target=process_gen_job, args=(jid,), daemon=True)
                 _gen_threads.add(t)
                 t.start()
-        except Exception:
-            pass
+        except Exception as e:
+            logx.warn("Live 生图调度", e)
         time.sleep(3)
 
 

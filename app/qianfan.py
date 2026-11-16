@@ -140,6 +140,27 @@ def shops() -> list[dict]:
     return [{**r, "online": bool(r["online"]), "last_sync": synced.get(r["shop_id"], ""), "pending": pending.get(r["shop_id"], 0)} for r in rows]
 
 
+def sync_alerts() -> list[dict]:
+    """店铺的采集端掉线 / 数据太久没更新时给管理端的提醒(每个店铺最多一条,掉线优先)。
+    掉线 = 超过 OFFLINE_H 小时没来领过这个店铺的任务;没更新 = 最近一次数据距今超过同步间隔的 2 倍(至少 STALE_MIN_H 小时)。"""
+    cfg = get_settings()
+    if cfg.get("qf_enabled") == "0":
+        return []   # 同步关掉了就不提醒
+    hours = float(cfg.get("qf_account_hours") or 24)
+    stale_h = max(STALE_MIN_H, 2 * hours)
+    out = []
+    for r in q_all("SELECT shop_id, name, (julianday('now') - julianday(last_seen)) * 24 AS off_h FROM qf_shops"):
+        last = (q_one("SELECT (julianday('now') - julianday(MAX(snap_at))) * 24 AS h FROM qf_snapshots WHERE shop_id=?", r["shop_id"]) or {}).get("h")
+        name = r["name"] or r["shop_id"]
+        if r["off_h"] is not None and r["off_h"] > OFFLINE_H:
+            out.append({"shop": name, "kind": "offline", "hours": int(r["off_h"]),
+                        "msg": f"店铺「{name}」的采集端已经 {int(r['off_h'])} 小时没有连上工作台:检查那台电脑是否开机、千帆是否还在登录。"})
+        elif last is not None and last > stale_h:
+            out.append({"shop": name, "kind": "stale", "hours": int(last),
+                        "msg": f"店铺「{name}」的数据已经 {int(last)} 小时没有更新(同步间隔 {hours:g} 小时):检查千帆登录是否过期。"})
+    return out
+
+
 def _shop_names() -> dict[str, str]:
     return {r["shop_id"]: r["name"] for r in shops()}
 
@@ -291,7 +312,9 @@ def series(limit: int = 90, account_id: str | None = None) -> list[dict]:
     return [{"at": r["snap_at"], **((r["data"] or {}).get("account") or {}), "shop_id": r["shop_id"]} for r in reversed(rows)]
 
 
-TZ_OFFSET_H = 8   # 快照时间是 UTC,按北京时间算「哪一天」
+TZ_OFFSET_H = 8
+OFFLINE_H = 3      # 店铺的采集端超过这么多小时没来过:提醒
+STALE_MIN_H = 12   # 数据多久没更新才提醒(至少这么多小时,同步间隔的 2 倍更长就用 2 倍)   # 快照时间是 UTC,按北京时间算「哪一天」
 
 
 def fans_trend(days: int = 30, shop: str = "") -> list[dict]:

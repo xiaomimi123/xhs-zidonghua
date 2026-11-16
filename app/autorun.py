@@ -8,7 +8,7 @@ from collections import Counter
 import threading
 import time
 
-from . import llm, notes as nt, products, ptype, worker
+from . import llm, logx, notes as nt, products, ptype, worker
 from .db import conn, get_settings, q_all, q_exec, q_one
 
 ACTIVE = ("profiling", "collecting", "tagging", "analyzing", "writing", "retrying")
@@ -302,8 +302,8 @@ def _profile(run_id: int):
         prof = {"error": str(e)[:120]}
         try:  # 看图失败:只凭产品名判断品类和搜索词。直接拿产品名(往往是品牌名)去搜,小红书上几乎搜不到笔记
             prof = {**llm.describe_by_name(prod["name"], tracks), "vision_error": prof["error"]}
-        except Exception:
-            pass
+        except Exception as e2:
+            logx.warn("产品按名字识别", e2, trace=False)
     products.save_profile(prod["id"], prof)
     track = project["track"] or prof.get("track") or prof.get("category") or prod["name"]
     s = get_settings()
@@ -475,13 +475,13 @@ def tick():
     try:
         from . import qianfan
         qianfan.schedule()
-    except Exception:
-        pass
+    except Exception as e:
+        logx.warn("千帆定时同步调度", e)
     try:
         from . import loop
         loop.auto_tick()
-    except Exception:
-        pass
+    except Exception as e:
+        logx.warn("复盘自动评分", e)
     for run in q_all(f"SELECT * FROM autoruns WHERE status IN ({','.join('?' * len(ACTIVE))})", *ACTIVE):
         try:
             advance(run)
@@ -494,8 +494,8 @@ def _loop():
         time.sleep(TICK)
         try:
             tick()
-        except Exception:
-            pass
+        except Exception as e:
+            logx.warn("一键批量监督线程", e)
 
 
 def start():

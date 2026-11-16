@@ -8,6 +8,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import logx
 from .db import DATA
 
 DIR = DATA / "thumbs"
@@ -56,8 +57,8 @@ def warm(src: Path, widths=(360,)):
     try:
         for w in widths:
             thumb_for(Path(src), w)
-    except Exception:
-        pass
+    except Exception as e:
+        logx.warn("缩略图生成", e, trace=False)
 
 
 def warm_dirs(dirs, widths=(360,), pause: float = 0.02):
