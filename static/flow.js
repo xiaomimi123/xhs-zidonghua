@@ -874,10 +874,15 @@ function linkDialog(did, draft, onDone) {
 // 「数据复盘」一个入口,里面切换:复盘(稿子表现、爆款)和数据看板(千帆账号数据),切换条放在页头右侧
 const dataSwitch = cur => `<div class="seg" role="tablist" aria-label="数据复盘">${[["loop", "复盘"], ["data", "数据看板"]].map(([k, n]) => `<button role="tab" aria-selected="${k === cur}" class="${k === cur ? "on" : ""}" data-dk="${k}">${n}</button>`).join("")}</div>`;
 document.addEventListener("click", e => { const b = e.target.closest("[data-dk]"); if (b && !b.classList.contains("on")) go(b.dataset.dk); });
-async function fLoop() {
+async function fLoop(useCache) {   // useCache:切换步骤 / 对比维度时数据没变,直接用上次取到的,不再向服务器要(服务器算一次要零点几秒)
   $("#pa").innerHTML = dataSwitch("loop");
-  const pg = await api(`/api/loop/page?tier=${LP.tier}&page=${LP.page}&reg=${LP.reg}&regpage=${LP.regPage}&size=${LP_SIZE}&noacc=${LP.noacc ? 1 : 0}`);   // 一次请求,各列表按页取
-  const accts = await fetchAccts();   // 批量指定发布账号的下拉
+  let pg, accts;
+  if (useCache && LP.cache) ({ pg, accts } = LP.cache);
+  else {
+    pg = await api(`/api/loop/page?tier=${LP.tier}&page=${LP.page}&reg=${LP.reg}&regpage=${LP.regPage}&size=${LP_SIZE}&noacc=${LP.noacc ? 1 : 0}`);   // 一次请求,各列表按页取
+    accts = await fetchAccts();   // 批量指定发布账号的下拉
+    LP.cache = { pg, accts };
+  }
   if (LP.noacc && !pg.reg.noacc) { LP.noacc = false; return fLoop(); }   // 都指定完了,回到完整列表
   LP.page = pg.rows.page; LP.regPage = pg.reg.page;   // 数据变少时服务端会把页码拉回有效范围
   const ov = pg.overview, dr = { data_at: pg.data_at }, c = pg.cfg, rows = pg.rows.items, wins = pg.winners, regList = pg.reg.items;
@@ -916,8 +921,8 @@ async function fLoop() {
   };
   let lib = null;
   $("#main").onclick = async e => {
-    const st = e.target.closest("[data-step]"); if (st) { LP.step = st.dataset.step; try { localStorage.lpStep = LP.step; } catch { } return fLoop(); }
-    const cm = e.target.closest("[data-cmp]"); if (cm) { LP.cmp = cm.dataset.cmp; return fLoop(); }
+    const st = e.target.closest("[data-step]"); if (st) { LP.step = st.dataset.step; try { localStorage.lpStep = LP.step; } catch { } return fLoop(true); }
+    const cm = e.target.closest("[data-cmp]"); if (cm) { LP.cmp = cm.dataset.cmp; return fLoop(true); }
     const lt = e.target.closest("[data-lt]"); if (lt) { LP.tier = lt.dataset.lt; LP.page = 1; return fLoop(); }
     if (e.target.closest("[data-winall]")) { LP.winAll = !LP.winAll; return fLoop(); }
     const gp = e.target.closest("[data-lpg]"); if (gp) { if (gp.disabled) return; LP.page = +gp.dataset.lpg; return fLoop(); }

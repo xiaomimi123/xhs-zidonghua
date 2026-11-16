@@ -367,6 +367,13 @@ def _m012_kind(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
 
 
+def _m022_draft_indexes(c):
+    """复盘页提速:稿子的正文、审稿结果存在同一行里很大,评估时只要标题 / 账号 / 发布状态这些列,却要把整张表读一遍(线上库在挂载盘上,约 0.3 秒一次,每个请求两次)。
+    建两个覆盖索引(查询所需的列都在索引里,不用读正文),配合评估查询不再 ORDER BY。"""
+    c.execute("CREATE INDEX IF NOT EXISTS ix_drafts_match ON drafts(title, account_id, qf_note_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_drafts_loop ON drafts(title, angle, account_id, account_name, project_id, published, published_at, qf_note_id, status, auto_ok, created, images, cover_card, ptype, feat, pub_edit)")
+
+
 def _m021_title_struct(c):
     """标题结构分类结果(大模型按结构给每个标题打类型和特征,只存一次):title_key = 去掉标点表情后的标题,同一个标题只分类一次。"""
     c.execute("CREATE TABLE IF NOT EXISTS title_struct(title_key TEXT PRIMARY KEY, title TEXT, struct TEXT, dims TEXT DEFAULT '{}', at TEXT DEFAULT CURRENT_TIMESTAMP)")
@@ -470,6 +477,7 @@ MIGRATIONS = [
     (19, "pub_edit", _m019_pub_edit),
     (20, "buyer_voice", _m020_buyer_voice),
     (21, "title_struct", _m021_title_struct),
+    (22, "draft_indexes", _m022_draft_indexes),
     # (2, "说明", _m002_xxx),
 ]
 

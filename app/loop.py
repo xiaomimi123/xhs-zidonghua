@@ -173,7 +173,8 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
     spawned = {r["spawn_from"]: r["n"] for r in q_all("SELECT spawn_from, COUNT(*) AS n FROM projects WHERE spawn_from IS NOT NULL GROUP BY spawn_from")}
     drafts = q_all("""SELECT d.id, d.title, d.angle, d.account_id, d.account_name, d.project_id, d.published, d.published_at, d.qf_note_id, d.status, d.auto_ok, d.created, d.images, d.cover_card, d.ptype,
         p.track, p.created_by, p.owner_id, p.spawn_from, COALESCE(p.generation, 0) AS generation, d.feat, d.pub_edit
-        FROM drafts d LEFT JOIN projects p ON p.id=d.project_id WHERE d.title!='' ORDER BY d.id DESC""")
+        FROM drafts d LEFT JOIN projects p ON p.id=d.project_id WHERE d.title!=''""")   # 不写 ORDER BY:有排序时数据库会放弃覆盖索引、顺序扫整张表(读正文,慢),在程序里排
+    drafts.sort(key=lambda d: -d["id"])
     need = [d["id"] for d in drafts if (d["published"] or perf.get(d["id"])) and not d["feat"]]   # 已发布但还没存快照的:补存(只取这几篇的正文,不拖慢整个列表)
     if need and register:
         from . import autorun

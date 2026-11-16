@@ -51,3 +51,15 @@ def run(rep, env):
               got == {"winner", "good", "normal", "weak", "observing"} and len(api_user._loop_rows(ev2, "")) == 7 and {r["tier"] for r in api_user._loop_rows(ev2, "weak")} == {"weak"})
     ov = loop.overview(loop.evaluate(register=False))
     rep.check("复盘总览带四步数据", "steps" in ov and {"pub", "data", "result", "next", "compare"} <= set(ov["steps"]))
+
+    # ---- 提速:覆盖索引 + 评估查询不 ORDER BY(有 ORDER BY 数据库会放弃索引、顺序扫整张表读正文)----
+    from app import db
+    idx = {r["name"] for r in db.q_all("SELECT name FROM sqlite_master WHERE type='index'")}
+    rep.check("复盘提速:建了两个覆盖索引(配对查询和评估主查询所需的列都在索引里,不用读稿子正文)", {"ix_drafts_match", "ix_drafts_loop"} <= idx)
+    plan = lambda q: " ".join(str(list(r.values())[-1]) for r in db.q_all("EXPLAIN QUERY PLAN " + q))
+    p1 = plan("SELECT id, title, account_id, qf_note_id FROM drafts WHERE title!=''")
+    p2 = plan("SELECT d.id, d.title, d.angle, d.account_id, d.account_name, d.project_id, d.published, d.published_at, d.qf_note_id, d.status, d.auto_ok, d.created, d.images, d.cover_card, d.ptype, "
+              "p.track, p.created_by, p.owner_id, p.spawn_from, COALESCE(p.generation, 0) AS generation, d.feat, d.pub_edit FROM drafts d LEFT JOIN projects p ON p.id=d.project_id WHERE d.title!=''")
+    rep.check("两个查询的执行计划都走覆盖索引(没有走整表扫描)", "COVERING INDEX ix_drafts_match" in p1 and "COVERING INDEX ix_drafts_loop" in p2, f"{p1} | {p2}")
+    ids = [r["id"] for r in loop.evaluate(register=False)["rows"]]
+    rep.check("评估结果仍按稿子编号从新到旧(排序挪到了程序里,结果和以前一致)", ids == sorted(ids, reverse=True) and len(ids) > 0)
