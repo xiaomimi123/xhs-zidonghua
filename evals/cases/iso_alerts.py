@@ -37,3 +37,15 @@ def run(rep, env):
     db.save_settings({"qf_enabled": "1"})
     db.q_exec("DELETE FROM qf_shops WHERE shop_id LIKE 'al_%'")
     db.q_exec("DELETE FROM qf_snapshots WHERE shop_id LIKE 'al_%'")
+
+    # ---- 成品库不能有数量上限(以前写死只取最新 500 篇,页面上的总数和各筛选的数量都不对) ----
+    from app import api_user
+    pid = db.q_exec("INSERT INTO projects(track,keywords) VALUES('美食','[\"成品库上限测试\"]')").lastrowid
+    with db.conn() as c:
+        c.executemany("INSERT INTO drafts(project_id,title,status) VALUES(?,?,'done')", [(pid, f"上限测试稿{i}") for i in range(520)])
+    try:
+        got = api_user._library(pid=pid, brief=True)
+        rep.check("成品库:一个任务里有 520 篇成品时全部返回(不再只取最新 500 篇)", len(got) == 520 and got[0]["id"] > got[-1]["id"], str(len(got)))
+    finally:
+        db.q_exec("DELETE FROM drafts WHERE project_id=?", pid)
+        db.q_exec("DELETE FROM projects WHERE id=?", pid)

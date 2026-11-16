@@ -447,7 +447,7 @@ def _library(pid: int = 0, did: int = 0, brief: bool = False) -> list[dict]:
     if did:
         where += " AND d.id=?"; args.append(did)
     rows = q_all("SELECT d.*, p.track, p.keywords, p.product_id FROM drafts d JOIN projects p ON p.id=d.project_id "
-                 "WHERE d.title!='' AND d.status NOT IN ('queued','writing','reviewing','drawing')" + where + " ORDER BY d.id DESC LIMIT 500", *args)
+                 "WHERE d.title!='' AND d.status NOT IN ('queued','writing','reviewing','drawing')" + where + " ORDER BY d.id DESC", *args)
     names = {r["id"]: r["name"] for r in q_all("SELECT id, name FROM products")}
     items, data_at = qianfan.notes_all()
     perf = qianfan.match_drafts(items)   # 只算一次(evaluate 里也要用,原来各算一遍)

@@ -422,7 +422,7 @@ const pvFull = async d => { if (d.content !== undefined) return d; try { Object.
 async function fOpen(id, list) {
   await fetchAccts();
   let i = list.findIndex(d => d.id === id);
-  if (i < 0) {   // 列表里没有这篇(成品库列表只带最新的 500 篇,复盘里能点到更早的稿子):单独取这一篇打开
+  if (i < 0) {   // 列表里没有这篇(成品库列表带全部成品;复盘里点到的稿子不在列表里时(比如刚生成的)):单独取这一篇打开
     try { list = [await api(`/api/library/${id}`)]; i = 0; } catch (err) { return toast(err.message || "这篇稿子打不开", 1); }
   }
   FL.pv = { list, i, img: 0, dirty: false, more: false, opener: document.activeElement };
