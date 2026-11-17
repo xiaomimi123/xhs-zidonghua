@@ -332,7 +332,7 @@ def inner_prompts(raw, k: int, track: str, did: int, title: str, prod: dict | No
         if t:
             out.append(f"{t},{NO_TEXT}")
     while len(out) < k:
-        out.append(f"{title}的主体特写,{scene(track, did, len(out) + 1, prod)},{NO_TEXT}")
+        out.append(f"{(prod or {}).get('name') or track or '产品'}的主体特写,{scene(track, did, len(out) + 1, prod)},{NO_TEXT}")   # 不再用稿子标题当画面描述
     return out[:k]
 
 

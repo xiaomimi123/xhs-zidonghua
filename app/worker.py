@@ -144,7 +144,8 @@ def _run_text(did):
         pblock = products.block(prod) + image_block(n_img)
         if prod and prod.get("forbid"):
             banned += f"\n- 作者禁用:{prod['forbid']}"
-        rule = ("\n\n" + ptype.RULES[pb["kind"]]) if pb.get("kind") in ptype.RULES else ""   # 按帖子类型写
+        kind0 = pb.get("kind") if pb.get("kind") in ptype.RULES else ("产品软文" if prod else "")   # 拆解卡没有类型(凑不出分类退回按主题分组)时,有产品的任务按产品软文写,免得没有任何类型要求
+        rule = ("\n\n" + ptype.RULES[kind0]) if kind0 else ""   # 按帖子类型写
         trule = titlelab.rule_for(did, get_settings().get("title_hint") == "1", int(float(get_settings().get("loop_min_days") or 3)))   # 标题写法提示(对照组 / 关闭 / 没有明显规律时为空)
         rule += trule
         out = llm.write_note(project, pb["data"], refs, d["angle"], d["extra"] + pblock + rule, kb, banned)

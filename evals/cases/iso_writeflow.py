@@ -97,3 +97,43 @@ def run(rep, env):
     rep.check("产品资料块:AI 看图 / 推断的外观、包装上的字、场景、搭配都标了「AI」并说明拿不准的不要写进正文;作者提供的(卖点、价格)不标;开头不再说「以下是作者提供的真实产品资料」",
               "外观(AI 看图推断,仅供参考)" in blk and "包装上的字(AI 看图识别,可能认错,不确定的不要写)" in blk and "可以带出产品的场景(AI 推断,仅供参考)" in blk
               and "搭配和吃法(AI 推断" in blk and "- 卖点(作者提供):原料为锡兰肉桂" in blk and "拿不准的不要写进正文" in blk and "以下是作者提供的真实产品资料" not in blk, blk[:300])
+
+    # ---- 规则冲突清理 ----
+    print("\n[写稿框架:规则冲突清理]")
+    from app import covers
+    rep.check("美食知识库:「必写用量、火候、时间」只对教程要求,软文 / 测评 / 商业硬文按各自类型要求(不再和软文的「禁止具体用量」冲突)",
+              "教程类必写用量、火候、时间" in kb.TRACK_KB["美食"] and "必写用量、火候、时间;" not in kb.TRACK_KB["美食"] and "不堆用量和步骤" in kb.TRACK_KB["美食"])
+    db.q_exec("UPDATE tracks SET knowledge=? WHERE name='美食'", "- 标题常用:时间 + 菜名\n- " + kb.OLD_FOOD_LINE + "\n- 管理员加的")
+    with db.conn() as c:
+        kb.seed(c)
+    kn = db.q_one("SELECT knowledge FROM tracks WHERE name='美食'")["knowledge"]
+    rep.check("线上已存的美食知识库启动时也换成新说法,管理员加的内容不动;重复执行不变", kb.NEW_FOOD_LINE in kn and kb.OLD_FOOD_LINE not in kn and "管理员加的" in kn)
+    with db.conn() as c:
+        kb.seed(c)
+    rep.check("美食知识库迁移重复执行结果不变", db.q_one("SELECT knowledge FROM tracks WHERE name='美食'")["knowledge"] == kn)
+    rep.check("产品资料块:「不要写成硬广」不适用于商业硬文;商业硬文类型要求写明产品是主角、优先于「自然植入」、产品信息占三分之一以上",
+              "除非帖子类型是商业硬文" in blk and "优先于「产品自然植入、不要写成硬广」" in ptype.RULES["商业硬文"] and "产品信息要占正文三分之一以上" in ptype.RULES["商业硬文"])
+    pr0 = covers.inner_prompts([], 2, "美食", 1, "标题ABC稿子标题", {"name": "测试肉桂粉"})
+    pr1 = covers.inner_prompts([], 1, "美食", 1, "标题ABC稿子标题", None)
+    rep.check("配图提示词兜底:模型少给提示词时,用产品名(没有产品用赛道)当画面主体,不再把稿子标题当画面描述",
+              len(pr0) == 2 and all("测试肉桂粉的主体特写" in x and "标题ABC" not in x for x in pr0) and "美食的主体特写" in pr1[0] and "标题ABC" not in pr1[0], str(pr0[:1]))
+    # 拆解卡没有类型(凑不出分类时):有产品的任务按产品软文写,没有产品的不加类型要求
+    from app.notes import save_notes
+    db.save_settings({"auto_review": "0", "auto_fix": "0"})
+    save_notes([{"note_id": "WK1", "title": "咖啡怎么冲", "content": "冻干咖啡冲泡方法 " * 5, "likes": 1}], project_id=None)
+    nid = db.q_one("SELECT id FROM notes WHERE uid='WK1'")["id"]
+    prod_id = db.q_exec("INSERT INTO products(name,images) VALUES('测试咖啡','[]')").lastrowid
+    seen_extra = []
+    o_w = llm.write_note
+    llm.write_note = lambda project, pbd, refs, angle, extra="", kb="", banned="": seen_extra.append(extra) or {"title": "t", "content": "c", "alt_titles": [], "tags": ["a"], "image_prompts": []}
+    try:
+        for with_prod in (True, False):
+            pj2 = db.q_exec("INSERT INTO projects(track,keywords,direction,product_id) VALUES('美食','[]','',?)", prod_id if with_prod else None).lastrowid
+            pb2 = db.q_exec("INSERT INTO playbooks(project_id,name,note_ids,data,status,kind) VALUES(?,?,?,?,'done','')", pj2, "无类型", json.dumps([nid]), json.dumps({})).lastrowid
+            d2 = db.q_exec("INSERT INTO drafts(project_id,playbook_id,angle,extra,status,with_images) VALUES(?,?,?,?,'queued',0)", pj2, pb2, "主题:咖啡", "").lastrowid
+            worker._run_text(d2)
+    finally:
+        llm.write_note = o_w
+    rep.check("拆解卡没有类型:有产品的任务带「产品软文」类型要求,没有产品的任务不加",
+              len(seen_extra) == 2 and "【帖子类型:产品软文】" in seen_extra[0] and "【帖子类型:" not in seen_extra[1], str([e[-60:] for e in seen_extra]))
+
