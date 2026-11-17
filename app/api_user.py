@@ -538,7 +538,7 @@ def change_cover(did: int):
 @router.post("/api/drafts/{did}/published")
 def set_published(did: int, p: PubIn):
     _one("SELECT id FROM drafts WHERE id=?", did)
-    q_exec("UPDATE drafts SET published=?, published_at=CASE WHEN ? THEN datetime('now') ELSE '' END WHERE id=?", int(p.on), int(p.on), did)
+    q_exec("UPDATE drafts SET published=?, published_at=? WHERE id=?", int(p.on), time.strftime("%Y-%m-%d") if p.on else "", did)   # 和登记接口一样记本地日期(以前是 UTC 带时分秒,北京时间早上 8 点前会差一天)
     return {"ok": True, "published": p.on}
 
 

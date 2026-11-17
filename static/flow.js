@@ -506,8 +506,11 @@ function bindPv(m) {
       try { await api(`/api/drafts/${d.id}/link`, "POST", { note_id: "" }); toast("已取消对应"); await pvRefresh(d); } catch (err) { toast(err.message, 1); }
       return;
     }
-    if (e.target.closest("[data-ppub]")) {
-      try { await api(`/api/drafts/${d.id}/published`, "POST", { on: !d.published }); d.published = !d.published; v.dirty = true; toast(d.published ? "已标记为已发布" : "已取消标记"); drawPv(); } catch (err) { toast(err.message, 1); }
+    if (e.target.closest("[data-ppub]")) {   // 底部按钮和「发布登记」面板是同一件事:走同一套流程,不再有「标了发布但没选日期、没绑定笔记」的捷径
+      try {
+        if (d.published) { await api("/api/drafts/publish", "POST", { ids: [d.id], on: false }); toast("已取消发布标记"); await pvRefresh(d); }
+        else { await api("/api/drafts/publish", "POST", { ids: [d.id], on: true, published_at: $("#pvday")?.value || todayStr() }); toast("已登记发布"); await pvRefresh(d); bindDialog([d.id], () => pvRefresh(d)); }
+      } catch (err) { toast(err.message, 1); }
       return;
     }
     if (e.target.closest("[data-pcover]")) {

@@ -137,3 +137,19 @@ def run(rep, env):
     rep.check("拆解卡没有类型:有产品的任务带「产品软文」类型要求,没有产品的任务不加",
               len(seen_extra) == 2 and "【帖子类型:产品软文】" in seen_extra[0] and "【帖子类型:" not in seen_extra[1], str([e[-60:] for e in seen_extra]))
 
+    # ---- 发布登记:老接口(底部按钮以前用的)记的日期要和登记接口一致 ----
+    print("\n[发布登记]")
+    import re as _re, time as _t
+    from app import api_user
+    pj3 = db.q_exec("INSERT INTO projects(track,keywords,direction) VALUES('美食','[]','')").lastrowid
+    d3 = db.q_exec("INSERT INTO drafts(project_id,title,content,status) VALUES(?,?,?,'ready')", pj3, "发布测试", "正文").lastrowid
+    api_user.set_published(d3, api_user.PubIn(on=True))
+    row = db.q_one("SELECT published, published_at FROM drafts WHERE id=?", d3)
+    rep.check("老的标记发布接口:记本地日期「年-月-日」(以前是 UTC 带时分秒,北京时间早上 8 点前会差一天),和登记接口格式一致",
+              row["published"] == 1 and _re.match(r"^\d{4}-\d{2}-\d{2}$", row["published_at"]) and row["published_at"] == _t.strftime("%Y-%m-%d"), str(row))
+    api_user.set_published(d3, api_user.PubIn(on=False))
+    row = db.q_one("SELECT published, published_at FROM drafts WHERE id=?", d3)
+    rep.check("取消后发布日期清空", row["published"] == 0 and row["published_at"] == "")
+    api_user.publish_batch(api_user.PublishBatch(ids=[d3], on=True, published_at="2026-11-10"))
+    rep.check("登记接口按选的日期记", db.q_one("SELECT published_at FROM drafts WHERE id=?", d3)["published_at"] == "2026-11-10")
+
