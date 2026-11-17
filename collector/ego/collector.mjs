@@ -150,6 +150,7 @@ const handlers = {
   // 笔记管理 → 商品笔记 + 普通笔记(浏览/点赞/收藏/评论/分享),按 note_id 去重,并标上所属账号
   async notes() {
     const byId = new Map();
+    let noCoverLogged = false;   // 这一次同步里,第一篇找不到封面时记一次字段名(每次同步各记一次)
     const add = (n) => {
       if (!n.note_id || !n.note_title || byId.has(n.note_id)) return;
       const it = { note_id: n.note_id, title: n.note_title, views: n.browse_num, likes: n.like_num, collects: n.collect_num, comments: n.comment_num, shares: n.share_num };
@@ -157,8 +158,8 @@ const handlers = {
       // 封面图地址:工作台用它算封面指纹,把发布时改了标题 / 正文的笔记对回稿子。商品笔记的字段是 note_image,普通笔记的字段名多试几个
       const cover = pickCover(n);
       if (cover) it.cover = cover;
-      else if (!globalThis.__noCoverLogged) {   // 没找到封面:把这篇笔记的字段名和看起来像图片的值记进采集端日志(run*.log),方便补字段名
-        globalThis.__noCoverLogged = true;
+      else if (!noCoverLogged) {   // 没找到封面:把这篇笔记的字段名和看起来像图片的值记进采集端日志(run*.log),方便补字段名
+        noCoverLogged = true;
         const imgish = Object.entries(n).filter(([k, v]) => /image|img|cover|pic|thumb|photo/i.test(k) || (typeof v === "string" && /^https?:.*(xhscdn|xiaohongshu|sns-img|\.jpg|\.png|\.webp)/i.test(v)));
         log("笔记没有找到封面字段。字段:", Object.keys(n).join(","), "| 像图片的值:", JSON.stringify(imgish).slice(0, 400));
       }
