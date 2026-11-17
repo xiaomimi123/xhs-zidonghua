@@ -57,3 +57,24 @@ def run(rep, env):
     rep.check("选题冲突重写:第一次和重写的要求里都带着帖子类型(【帖子类型:产品软文】),不再丢掉",
               len(extras) == 2 and all("【帖子类型:产品软文】" in e for e in extras) and "腐乳" in extras[1], str([e[-80:] for e in extras]))
     rep.check("重写后重新判一次类型:ptype_got 记的是最终这一版,标题是重写后的", r["title"] == "咖啡的三种冲法" and r["ptype_got"] == "产品软文", str(r))
+
+
+    # ---- 类型复检:按结构判,不把商家口吻直接当商业硬文 ----
+    print("\n[写稿框架:类型复检]")
+    seen = {}
+    o_chat = llm.chat
+    llm.chat = lambda system, user, temperature=1.0: seen.update(system=system, user=user) or {"kind": "教程", "why": "有步骤"}
+    try:
+        k1 = ptype.check("肉桂拿铁怎么做", "材料:咖啡2g、牛奶200ml\n1. 冲咖啡\n2. 打奶泡")
+        llm.chat = lambda system, user, temperature=1.0: {"kind": "乱写的类型"}
+        k2 = ptype.check("t", "c")
+        llm.chat = lambda system, user, temperature=1.0: {}
+        k3 = ptype.check("t", "c")
+    finally:
+        llm.chat = o_chat
+    rep.check("复检:返回模型判的类型;类型不在列表里 / 没返回都当判不出(空串)", k1 == "教程" and k2 == "" and k3 == "")
+    rep.check("复检用的是「我们自己写的稿子」的标准(不看口吻、只看结构),不是采集笔记那套;把规则线索(价格购买词 / 步骤用量词 / 评价词)一起给模型",
+              seen["system"] is ptype.OWN_SYSTEM and "不要因为出现「我们家」就判商业硬文" not in ptype.KIND_SYSTEM and "口吻不是判断依据" in ptype.OWN_SYSTEM
+              and "线索:价格购买词" in seen["user"] and "步骤用量词" in seen["user"], seen["user"][-60:])
+    rep.check("复检标准里五个类型都有判断规则,并写明判断步骤(先评价结构、再步骤用量、再产品信息占比)", all(k in ptype.OWN_SYSTEM for k in ("- 教程", "- 测评", "- 商业硬文", "- 产品软文", "- 其他")) and "判断步骤" in ptype.OWN_SYSTEM)
+    rep.check("采集笔记的分类标准没动(商家口吻仍算商业硬文,用于参考笔记分类)", "商业硬文补充:商家 / 品牌账号推广自家产品" in ptype.KIND_SYSTEM)

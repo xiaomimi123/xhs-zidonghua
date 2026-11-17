@@ -188,7 +188,7 @@ def _match_ptype(project, pb, refs, d, out, tail, kb, banned) -> dict:
     got = ""
     try:
         got = ptype.check(out.get("title", ""), out.get("content", ""))
-        if got and got != kind and not (kind == "产品软文" and got == "商业硬文"):   # 商家口吻的软文(不装买家)会被判成商业硬文,这是对的,不再逼它改回买家口吻
+        if got and got != kind:   # 复检用的是按结构判的标准(ptype.OWN_SYSTEM),不再因为商家口吻把软文判成硬文,所以不一致就是真的偏了
             hint = f"上一版被判成了「{got}」,但这篇要写成「{kind}」。严格按上面的帖子类型要求重写,类型特征要写足。"
             out = llm.write_note(project, pb["data"], refs, d["angle"], f"{d['extra']} {hint}{tail}".strip(), kb, banned)
             got = ptype.check(out.get("title", ""), out.get("content", "")) or got

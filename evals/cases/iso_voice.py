@@ -49,21 +49,22 @@ def run(rep, env):
     rep.check("提示词模板仍能正常格式化(新增的文字里没有会冲突的花括号)", fmt_ok)
     rep.check("类型要求:软文 / 测评不再要求买家第一人称,明确不能装成买家", "不能装成买家" in ptype.RULES["产品软文"] and "亲测" in ptype.RULES["测评"] and "商家口吻" in ptype.RULES["测评"])
 
-    # 软文被判成商业硬文是对的(商家口吻),不再逼着改回买家口吻
+    # 类型复检按结构判(ptype.OWN_SYSTEM),不再把商家口吻直接算商业硬文:判得和要求不一致就是真的偏了,重写一次;一致不重写
     pj = db.q_exec("INSERT INTO projects(track,keywords,direction) VALUES('美食','[]','')").lastrowid
     did = db.q_exec("INSERT INTO drafts(project_id,title,content,status) VALUES(?,?,?,'ready')", pj, "t", "c").lastrowid
     calls = []
     o_check, o_write = ptype.check, llm.write_note
-    ptype.check = lambda title, content: "商业硬文"
     llm.write_note = lambda *a, **k: calls.append(1) or {"title": "x", "content": "y"}
     try:
-        out = worker._match_ptype({}, {"kind": "产品软文", "data": {}}, [], {"id": did, "extra": "", "angle": ""}, {"title": "t", "content": "c"}, "", "", "")
-        n_soft = len(calls)
-        ptype.check = lambda title, content: "教程"
+        ptype.check = lambda title, content: "产品软文"
         worker._match_ptype({}, {"kind": "产品软文", "data": {}}, [], {"id": did, "extra": "", "angle": ""}, {"title": "t", "content": "c"}, "", "", "")
+        n_same = len(calls)
+        ptype.check = lambda title, content: "商业硬文" if not calls else "产品软文"
+        worker._match_ptype({}, {"kind": "产品软文", "data": {}}, [], {"id": did, "extra": "", "angle": ""}, {"title": "t", "content": "c"}, "", "", "")
+        n_hard = len(calls)
     finally:
         ptype.check, llm.write_note = o_check, o_write
-    rep.check("类型校验:产品软文被判成商业硬文不重写(商家口吻的软文就该是这样);判成教程仍然重写", n_soft == 0 and len(calls) == 1, str((n_soft, calls)))
+    rep.check("类型校验:判得和要求一致不重写;软文被判成商业硬文(写成了产品详情)重写一次", n_same == 0 and n_hard == 1, str((n_same, n_hard)))
 
     # ---- 给已有稿子补扫(迁移)----
     pj2 = db.q_exec("INSERT INTO projects(track,keywords,direction) VALUES('美食','[]','')").lastrowid
