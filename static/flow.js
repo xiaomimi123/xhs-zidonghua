@@ -580,8 +580,11 @@ async function fNoteBase() {
   const MULTI = ["track", "topic", "kind", "ai_type", "tier"];   // 这几项可以多选(值是数组);其余是单个值
   MULTI.forEach(k => { if (!Array.isArray(f[k])) f[k] = f[k] ? [f[k]] : []; });
   const fq = (extra = "") => [...MULTI.map(k => `${k}=${encodeURIComponent(MS.join(f[k]))}`), `q=${encodeURIComponent(f.q)}`, `sort=${f.sort}`].join("&") + extra;
-  // 联动筛选:每个下拉框的选项和数量按其他已选条件(含搜索词)统计
-  const fa = await api(`/api/notebase/facets?${fq()}`);
+  // 联动筛选:每个下拉框的选项和数量按其他已选条件(含搜索词)统计。筛选项和第一页结果同时请求、同时画出来:
+  // 以前是先等筛选项、清空结果区、再等结果,每勾一次中间会闪一下空白;连着快速勾选时,只认最后一次的结果
+  const seq = NB.seq = (NB.seq || 0) + 1, page0 = NB.page || 1;
+  const [fa, first] = await Promise.all([api(`/api/notebase/facets?${fq()}`), api(`/api/notebase?${fq()}&offset=${(page0 - 1) * NB_SIZE}&limit=${NB_SIZE}`)]);
+  if (seq !== NB.seq) return;
   const filtered = !!f.q || MULTI.some(k => f[k].length);
   const hadFocus = document.activeElement?.id === "nbq";
   $("#main").onclick = null;
@@ -595,12 +598,8 @@ async function fNoteBase() {
     <input id="nbq" placeholder="搜索标题 / 正文 / 作者 / 标签" value="${esc(f.q)}" style="flex:1;min-width:160px">
     ${filtered ? `<button class="btn ghost sm" id="nbreset">清除筛选</button>` : ""}</div>
     <div id="nbres"></div>`;
-  if (hadFocus) { const q = $("#nbq"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
-  // 真分页:每页只渲染 NB_SIZE 篇,换页替换内容并回到顶部;筛选 / 搜索变了回到第 1 页
-  const load = async page => {
-    const r = await api(`/api/notebase?${fq()}&offset=${(page - 1) * NB_SIZE}&limit=${NB_SIZE}`);
+  const paint = (r, page) => {
     const pages = Math.max(1, Math.ceil(r.total / NB_SIZE));
-    if (page > pages) return load(pages);   // 筛选后总数变少,当前页已经不存在
     NB.items = r.items; NB.total = r.total; NB.page = page;
     const a = (page - 1) * NB_SIZE + 1, b = a + r.items.length - 1, pg = pager(page, r.total, NB_SIZE);
     $("#nbres").innerHTML = r.items.length
@@ -608,7 +607,15 @@ async function fNoteBase() {
       : filtered ? `<div class="empty"><b>没有符合条件的笔记</b>换个筛选或关键词试试<br><button class="btn gray" id="nbreset2">清除筛选</button></div>`
         : `<div class="empty"><b>笔记库还是空的</b>新建任务后,采集端会按关键词采集笔记,采到的会汇总在这里<br><button class="btn" data-go="new">新建任务</button></div>`;
   };
-  await load(NB.page || 1);
+  if (hadFocus) { const q = $("#nbq"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+  // 真分页:每页只渲染 NB_SIZE 篇,换页替换内容并回到顶部;筛选 / 搜索变了回到第 1 页
+  const load = async page => {
+    const r = await api(`/api/notebase?${fq()}&offset=${(page - 1) * NB_SIZE}&limit=${NB_SIZE}`);
+    const pages = Math.max(1, Math.ceil(r.total / NB_SIZE));
+    if (page > pages) return load(pages);   // 筛选后总数变少,当前页已经不存在
+    paint(r, page);
+  };
+  if (page0 > Math.max(1, Math.ceil(first.total / NB_SIZE))) await load(1); else paint(first, page0);
   MS.bind($("#main"), (k, vals) => { f[k] = vals; NB.page = 1; fNoteBase(); });
   $$("select[data-nb-f]").forEach(el => el.onchange = () => { f[el.dataset.nbF] = el.value; NB.page = 1; fNoteBase(); });
   // 搜索词也参与下拉框里的数量:输入停下来后整条筛选条按新的搜索词重画(输入框保持焦点)

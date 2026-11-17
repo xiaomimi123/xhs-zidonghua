@@ -253,7 +253,11 @@ async function vNotes() {
   NF_MULTI.forEach(k => { if (!Array.isArray(f[k])) f[k] = f[k] ? [f[k]] : []; });
   const fval = k => NF_MULTI.includes(k) ? MS.join(f[k]) : (f[k] ?? "");
   const hadFocus = document.activeElement?.dataset?.nf === "q";
-  const [fa, projects, tracks, fx] = await Promise.all([api(`/api/admin/notes/facets?${["track", "topic", "keyword", "ai_type", "tier", "ai_status", "project_id", "q"].map(k => `${k}=${encodeURIComponent(fval(k))}`).join("&")}`), api("/api/admin/projects"), api("/api/admin/tracks"), api("/api/admin/notes/fields")]);
+  const qs = () => Object.keys(f).map(k => `${k}=${encodeURIComponent(fval(k))}`).join("&");
+  // 筛选项和第一页列表同时请求、同时画出来(以前先画出空表格再等列表,每勾一次闪一下);连着快速操作时只认最后一次
+  const seq = state.nseq = (state.nseq || 0) + 1;
+  const [fa, projects, tracks, fx, firstList] = await Promise.all([api(`/api/admin/notes/facets?${["track", "topic", "keyword", "ai_type", "tier", "ai_status", "project_id", "q"].map(k => `${k}=${encodeURIComponent(fval(k))}`).join("&")}`), api("/api/admin/projects"), api("/api/admin/tracks"), api("/api/admin/notes/fields"), api(`/api/admin/notes?${qs()}&offset=${state.np * PAGE}&limit=${PAGE}`)]);
+  if (seq !== state.nseq) return;
   const opt = (list, cur, label, name = k => k || "(空)") => `<option value="">${label}</option>` + list.map(x => `<option value="${esc(x.k)}" ${x.k === cur ? "selected" : ""}>${esc(name(x.k))}(${x.n})</option>`).join("");
   const trackNames = [...new Set([...tracks.map(t => t.name), ...fa.tracks.map(t => t.k).filter(Boolean)])];
   const aiN = Object.fromEntries(fa.ai.map(x => [x.k, x.n]));
@@ -291,13 +295,12 @@ async function vNotes() {
       <th class="num">赞 / 藏 / 评</th><th>来源</th><th>入库</th><th></th></tr></thead><tbody id="tb"></tbody></table></div>
       <div class="pager"><span class="sub" id="pinfo"></span><span><button class="btn gray sm" id="prev">上一页</button> <button class="btn gray sm" id="next">下一页</button></span></div></section>`;
   let total = 0, file = null, items = [];
-  const qs = () => Object.keys(f).map(k => `${k}=${encodeURIComponent(fval(k))}`).join("&");
   const selInfo = () => {
     $("#dels").disabled = $("#retag").disabled = !state.nsel.size;
     $("#pinfo").textContent = `共 ${total} 篇 · 第 ${state.np + 1} / ${Math.max(1, Math.ceil(total / PAGE))} 页${state.nsel.size ? ` · 已选 ${state.nsel.size}` : ""}`;
   };
-  const draw = async () => {
-    const r = await api(`/api/admin/notes?${qs()}&offset=${state.np * PAGE}&limit=${PAGE}`);
+  const draw = async (pre) => {
+    const r = pre || await api(`/api/admin/notes?${qs()}&offset=${state.np * PAGE}&limit=${PAGE}`);
     total = r.total; items = r.items;
     $("#tb").innerHTML = items.map(n => `<tr><td><input type="checkbox" data-id="${n.id}" ${state.nsel.has(n.id) ? "checked" : ""}></td>
       <td>${n.cover ? `<img class="thumb" data-view="${n.id}" style="cursor:pointer" src="${esc(n.cover)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.style.visibility='hidden'">` : `<div class="thumb" data-view="${n.id}" style="cursor:pointer"></div>`}</td>
@@ -314,7 +317,7 @@ async function vNotes() {
       || `<tr><td colspan="10" class="sub" style="text-align:center;padding:40px">没有符合条件的笔记</td></tr>`;
     $("#prev").disabled = state.np <= 0; $("#next").disabled = state.np >= Math.ceil(total / PAGE) - 1; $("#ckall").checked = false; selInfo();
   };
-  await draw();
+  await draw(firstList);
   $$("[data-nf]").forEach(el => {
     // 搜索词也参与下拉框里的数量:输入停下来后整页按新的搜索词重画(输入框保持焦点)
     if (el.tagName === "INPUT") { let deb; el.oninput = () => { clearTimeout(deb); deb = setTimeout(() => { f.q = el.value.trim(); state.np = 0; vNotes(); }, 350); }; }

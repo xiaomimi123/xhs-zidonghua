@@ -477,31 +477,41 @@ def fill_tracks():
 @router.get("/notes/facets")
 def note_facets(track: str = "", topic: str = "", keyword: str = "", ai_type: str = "", tier: str = "", ai_status: str = "", project_id: int = 0, kind: str = "", kind_sub: str = "", q: str = ""):
     """筛选项和每项的数量。联动筛选:每个下拉框的选项和数量,都按「除它自己以外」已经选了的条件(含搜索词)统计,每一项可多选,
-    这样选了某个类型之后,其他下拉框里的数字就是这个类型里的数量,不会列出点进去是 0 篇的选项;已选的值始终留在列表里(数量为 0 也留)。"""
-    cur = {"track": track, "topic": topic, "keyword": keyword, "ai_type": ai_type, "tier": tier, "ai_status": ai_status, "project_id": project_id, "kind": kind, "kind_sub": kind_sub, "q": q.strip()[:60]}
+    这样选了某个类型之后,其他下拉框里的数字就是这个类型里的数量,不会列出点进去是 0 篇的选项;已选的值始终留在列表里(数量为 0 也留)。
+    只扫一遍(带搜索词 / 项目时先按它们筛,再把每篇的几个分类列读出来,在内存里按各项条件分别统计):以前每个下拉框一条查询、每条都读整张表。"""
+    sel = {"track": _vals(track), "topic": _vals(topic), "keyword": _vals(keyword), "ai_type": _vals(ai_type), "tier": _vals(tier),
+           "ai_status": _vals(ai_status), "kind": _vals(kind), "kind_sub": _vals(kind_sub)}
+    w, args = _note_filter(project_id=project_id, q=q.strip()[:60])   # 搜索词和项目对所有下拉框都一样,直接在查询里筛
+    with conn() as c:
+        rows = c.execute(f"SELECT n.track, n.topic, n.keyword, n.ai_type, n.ai_status, n.kind, n.kind_status, n.kind_sub, {tier_sql()} AS tier FROM notes n WHERE {w}", args).fetchall()
+        no_track = c.execute("SELECT COUNT(*) FROM notes WHERE track='' OR track IS NULL").fetchone()[0]
+        plain = lambda col: [{"k": r[0], "n": r[1]} for r in c.execute(f"SELECT {col}, COUNT(*) n FROM notes GROUP BY {col} ORDER BY n DESC")]
+        kind_status, mirror = plain("kind_status"), plain("mirror_status")
+    keys = list(sel)
+    # 每篇对每一项「选中了没有」:一项都没选 = 都算选中。下拉框 d 的统计 = 其余各项都选中的那些篇
+    ok = [{k: (not sel[k]) or (r[k] or "") in sel[k] for k in keys} for r in rows]
 
-    def grp(col, key, base=""):
-        w, args = _note_filter(**{k: v for k, v in cur.items() if k != key})
-        rows = [{"k": r["k"], "n": r["n"]} for r in q_all(
-            f"SELECT {col} k, COUNT(*) n FROM notes n WHERE {w}{' AND ' + base if base else ''} GROUP BY k ORDER BY n DESC", *args)]
-        for v in _vals(cur.get(key)):   # 已选的值始终留在列表里
-            if not any(r["k"] == v for r in rows):
-                rows.append({"k": v, "n": 0})
-        return rows
-
-    def plain(col, where="1=1", *a):
-        return [{"k": r["k"], "n": r["n"]} for r in q_all(f"SELECT {col} k, COUNT(*) n FROM notes n WHERE {where} GROUP BY k ORDER BY n DESC", *a)]
+    def grp(key, cond=lambda r: True):
+        cnt: dict = {}
+        for r, o in zip(rows, ok):
+            if all(o[k] for k in keys if k != key) and cond(r):
+                cnt[r[key] or ""] = cnt.get(r[key] or "", 0) + 1
+        out = [{"k": k, "n": n} for k, n in sorted(cnt.items(), key=lambda x: -x[1])]
+        for v in sel[key]:   # 已选的值始终留在列表里
+            if not any(x["k"] == v for x in out):
+                out.append({"k": v, "n": 0})
+        return out
     return {
-        "tracks": grp("n.track", "track"),
-        "no_track": q_one("SELECT COUNT(*) n FROM notes WHERE track='' OR track IS NULL")["n"],
-        "topics": grp("n.topic", "topic", "n.topic!=''"),
-        "keywords": grp("n.keyword", "keyword")[:100],
-        "types": grp("n.ai_type", "ai_type", "n.ai_status='done'"),
-        "kinds": grp("n.kind", "kind", "n.kind_status='done'"),
-        "kind_status": plain("n.kind_status"),
-        "tiers": grp(tier_sql(), "tier"),
-        "ai": grp("n.ai_status", "ai_status"),
-        "mirror": plain("n.mirror_status"),
+        "tracks": grp("track"),
+        "no_track": no_track,
+        "topics": grp("topic", lambda r: r["topic"] != ""),
+        "keywords": grp("keyword")[:100],
+        "types": grp("ai_type", lambda r: r["ai_status"] == "done"),
+        "kinds": grp("kind", lambda r: r["kind_status"] == "done"),
+        "kind_status": kind_status,
+        "tiers": grp("tier"),
+        "ai": grp("ai_status"),
+        "mirror": mirror,
         "content_types": CONTENT_TYPES,
     }
 

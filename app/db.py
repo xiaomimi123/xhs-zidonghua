@@ -138,8 +138,9 @@ CREATE INDEX IF NOT EXISTS ix_pn_note ON project_notes(note_id);
 
 def tier_sql(a: str = "n") -> str:
     """数据分级不落库,按当前阈值实时计算,改阈值立即生效。"""
-    s = get_settings()
-    v, h = int(s["tier_viral"] or 10000), int(s["tier_hot"] or 1000)
+    with conn() as c:
+        s = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM settings WHERE key IN ('tier_viral','tier_hot')")}
+    v, h = int(s.get("tier_viral") or DEFAULT_SETTINGS["tier_viral"] or 10000), int(s.get("tier_hot") or DEFAULT_SETTINGS["tier_hot"] or 1000)
     x = f"({a}.likes+{a}.collects+{a}.comments)"
     return f"CASE WHEN {x}>={v} THEN 'viral' WHEN {x}>={h} THEN 'hot' ELSE 'normal' END"
 
@@ -369,6 +370,12 @@ def _m012_kind(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
 
 
+def _m023_note_facet_index(c):
+    """笔记库筛选提速:筛选项的统计只要赛道 / 主题 / 类型 / 状态这些列,笔记行里的正文、图片、原始数据很大,统计一次要把整张表读一遍
+    (线上库在挂载盘上,带筛选条件时一次查询约 0.1 秒)。建覆盖索引,统计只读索引,不读大字段。"""
+    c.execute("CREATE INDEX IF NOT EXISTS ix_notes_facets ON notes(track, topic, keyword, ai_type, ai_status, kind, kind_status, kind_sub, mirror_status, likes, collects, comments)")
+
+
 def _m022_draft_indexes(c):
     """复盘页提速:稿子的正文、审稿结果存在同一行里很大,评估时只要标题 / 账号 / 发布状态这些列,却要把整张表读一遍(线上库在挂载盘上,约 0.3 秒一次,每个请求两次)。
     建两个覆盖索引(查询所需的列都在索引里,不用读正文),配合评估查询不再 ORDER BY。"""
@@ -480,6 +487,7 @@ MIGRATIONS = [
     (20, "buyer_voice", _m020_buyer_voice),
     (21, "title_struct", _m021_title_struct),
     (22, "draft_indexes", _m022_draft_indexes),
+    (23, "note_facet_index", _m023_note_facet_index),
     # (2, "说明", _m002_xxx),
 ]
 
