@@ -918,8 +918,8 @@ select.sm,.card-h select{min-height:30px;padding:4px 28px 4px 9px;font-size:13px
   .tbl td.tt{max-width:220px}
   .flush>.card-h{padding:12px 14px}
   .flush>.card-h .sub{margin-left:0;width:100%}
-  .nb-bar{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-  .nb-bar select{width:100%}
+  .nb-bar{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}   /* minmax(0,…):名称太长时在按钮里省略,不把这一列撑宽 */
+  .nb-bar select,.nb-bar select[data-nb-f=sort]{width:100%}
   .nb-bar input,.nb-bar #nbreset{grid-column:1/-1}
   .fl-runs{grid-template-columns:minmax(0,1fr)}
 }
@@ -1465,11 +1465,12 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 
 /* 多选下拉(笔记库筛选) */
 .ms{position:relative;display:inline-block}
-.ms-b{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line-2);background:var(--panel);border-radius:var(--r-sm);padding:8px 10px;cursor:pointer;white-space:nowrap;max-width:100%}
+.ms-b{display:inline-flex;align-items:center;justify-content:space-between;gap:8px;width:9.5em;max-width:100%;box-sizing:border-box;border:1px solid var(--line-2);background:var(--panel);border-radius:var(--r-sm);padding:8px 10px;cursor:pointer;white-space:nowrap}
+.ms-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;text-align:left}
 .ms-b.on{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-wash)}
 .ms-b i{width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg) translateY(-2px);opacity:.6;flex:none}
 .ms-b:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.ms-p{position:absolute;z-index:30;top:calc(100% + 4px);left:0;min-width:180px;max-width:300px;max-height:320px;overflow:auto;background:var(--panel);border:1px solid var(--line-2);border-radius:var(--r-sm);box-shadow:0 8px 24px rgba(0,0,0,.12);padding:6px}
+.ms-p{position:absolute;z-index:30;top:calc(100% + 4px);left:0;min-width:max(100%,180px);max-width:300px;max-height:320px;overflow:auto;background:var(--panel);border:1px solid var(--line-2);border-radius:var(--r-sm);box-shadow:0 8px 24px rgba(0,0,0,.12);padding:6px}
 .ms-p[hidden]{display:none}
 .ms-o{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer}
 .ms-o:hover{background:var(--soft)}
@@ -1480,6 +1481,8 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 .ms-empty{padding:8px;color:var(--sub)}
 .ms-clear{width:100%;margin-top:4px;border:0;border-top:1px solid var(--line);background:none;padding:8px;color:var(--accent-ink);cursor:pointer;text-align:center}
 .nb-bar .ms-b,.tbar .ms-b{margin-left:0}
+.nb-bar select[data-nb-f=sort]{width:9.5em}   /* 和多选按钮一样宽,一排按钮整齐 */
+.nb-bar .ms-b,.nb-bar select[data-nb-f=sort],.tbar .ms-b{height:36px;padding-top:0;padding-bottom:0;line-height:1}   /* 同一排的按钮和排序框一样高 */
 @media(max-width:720px){
   .nb-bar .ms,.nb-bar .ms-b{width:100%}
   .nb-bar .ms-b{justify-content:space-between}

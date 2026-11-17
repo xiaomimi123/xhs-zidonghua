@@ -14,7 +14,7 @@ const MS = {
     const e = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     const on = cur.length > 0, open = MS.open === key;
     return `<div class="ms" data-ms="${e(key)}">
-      <button type="button" class="ms-b${on ? " on" : ""}" aria-haspopup="true" aria-expanded="${open}" aria-label="${e(noun)}筛选">${MS.label(label, noun, cur, name)}<i aria-hidden="true"></i></button>
+      <button type="button" class="ms-b${on ? " on" : ""}" aria-haspopup="true" aria-expanded="${open}" aria-label="${e(noun)}筛选" title="${cur.length ? cur.map(v => e(name(v))).join("、") : e(label)}"><span class="ms-t">${MS.label(label, noun, cur, name)}</span><i aria-hidden="true"></i></button>
       <div class="ms-p" role="group" aria-label="${e(noun)}"${open ? "" : " hidden"}>
         ${list.length ? list.map(x => `<label class="ms-o${x.n ? "" : " zero"}"><input type="checkbox" value="${e(x.k)}"${cur.includes(x.k) ? " checked" : ""}><span>${e(name(x.k))}</span><em>${x.n}</em></label>`).join("") : `<div class="ms-empty">没有可选项</div>`}
         ${on ? `<button type="button" class="ms-clear">清除${e(noun)}筛选</button>` : ""}
