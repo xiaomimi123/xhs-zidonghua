@@ -177,19 +177,19 @@ def block(p: dict | None) -> str:
         return ""
     prof = p.get("profile") or {}
     rows = [("产品名", p["name"]), ("品类", p.get("category") or prof.get("category")), ("卖点(作者提供)", p.get("selling_points")),
-            ("价格", p.get("price")), ("适合人群", p.get("audience")), ("外观(从产品图识别)", prof.get("appearance")),
-            ("包装上的字", prof.get("package_text")), ("可以带出产品的场景", "、".join(prof.get("scenes") or []))]
+            ("价格", p.get("price")), ("适合人群", p.get("audience")), ("外观(AI 看图推断,仅供参考)", prof.get("appearance")),
+            ("包装上的字(AI 看图识别,可能认错,不确定的不要写)", prof.get("package_text")), ("可以带出产品的场景(AI 推断,仅供参考)", "、".join(prof.get("scenes") or []))]
     spec = get_spec(p)
     if spec:
         pairs = "、".join(f"{x['name']}({PAIR_FREQ_TEXT.get(x['freq'], '偶尔')})" for x in spec.get("pairings") or [])
-        rows += [("产品真实大小(画面里要和手、杯子、碗等保持这个比例)", size_text(p, spec)), ("拍摄规格·真实的搭配和吃法(括号是出现频率)", pairs), ("拍摄规格·画面里不要出现", "、".join(spec.get("avoid") or [])),
+        rows += [("产品真实大小(画面里要和手、杯子、碗等保持这个比例)", size_text(p, spec)), ("拍摄规格·搭配和吃法(AI 推断,括号是出现频率,只用来配图,正文里不要当成作者的说法写)", pairs), ("拍摄规格·画面里不要出现", "、".join(spec.get("avoid") or [])),
                  ("拍摄规格·冷热", {"hot": "热饮,杯口可以有一点热气,别的东西不要冒热气", "cold": "冷食,画面里不要有热气蒸汽", "room": "常温食品,画面里不要有热气蒸汽"}.get(spec.get("serve") or "")),
                  ("拍摄规格·提示", spec.get("shoot_note"))]
     if not spec and p.get("size_note"):   # 没有拍摄规格(没配 Key 等)时,用户自己填的大小也要带上
         rows.append(("产品真实大小(画面里要和手、杯子、碗等保持这个比例)", p["size_note"]))
     lines = [f"- {k}:{v}" for k, v in rows if v]
     forbid = f"\n- 不能出现的说法:{p['forbid']}" if p.get("forbid") else ""
-    return ("\n\n【产品资料】以下是作者提供的真实产品资料,可以直接写进笔记;不要超出这些资料编造功效、成分、销量、价格。\n"
+    return ("\n\n【产品资料】没有标注「AI」的(产品名、卖点、价格、适合人群)是作者提供的真实资料,可以直接写进笔记;标了「AI 推断 / AI 看图」的只是参考,可能不准,拿不准的不要写进正文;不要超出这些资料编造功效、成分、销量、价格。\n"
             + "\n".join(lines) + forbid +
             "\n要求:产品要自然植入——先讲读者关心的场景或问题,再带出产品,不要写成硬广;购买渠道只能说本平台内;"
             "配图提示词里用「图中的产品」指代它,只写场景和构图,不要自己描述产品外观(以参考图为准)。"

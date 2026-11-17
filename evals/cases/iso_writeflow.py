@@ -11,7 +11,7 @@ def run(rep, env):
     ws, nf = llm.WRITE_SYSTEM, llm.NO_FABRICATION
     rep.check("身份规则优先于拆解卡的语气 / 钩子和知识库;写稿提示词说明拆解卡的语气、钩子只学结构,身份一律商家 / 中立口吻",
               "优先于「拆解卡」里的语气和开头钩子" in nf and "知识库里关于「第一人称」的任何说法" in nf and "只学它的结构和节奏" in ws and "身份一律按下面的身份规则改成商家 / 中立口吻" in ws)
-    rep.check("提示词里不再有「喝完胃里暖暖的」「对我来说」这类第一人称体验的示例(和禁止买家口吻互相矛盾)", "喝完胃里暖暖的" not in nf and "对我来说" not in nf and "不写自己或别人亲身喝了之后的变化" in nf)
+    rep.check("提示词里不再有「喝完胃里暖暖的」「对我来说」这类第一人称体验的示例(和禁止买家口吻互相矛盾)", "喝完胃里暖暖的" not in nf and "对我来说" not in nf and "身体变化" in nf)
     rep.check("审稿提示词不再说「作者的使用感受可以写,不算问题」(和「买家口吻是 high 问题」矛盾)", "作者的使用感受" not in llm.REVIEW_SYSTEM and "使用感受只能按身份规则" in llm.REVIEW_SYSTEM)
     rep.check("拆解提示词:tone 要写成商家 / 中立口吻,不写买家身份;hooks 只写结构,示例里不出现「我买了 / 我喝了」", "适合商家 / 品牌账号的口吻" in llm.ANALYZE_SYSTEM and "示例里不要出现「我买了 / 我喝了 / 我用了」" in llm.ANALYZE_SYSTEM)
     rep.check("产品软文类型要求:不再写「用起来的感受、个人看法」(和禁止「我的感受」矛盾)", "用起来的感受" not in ptype.RULES["产品软文"] and "个人看法" not in ptype.RULES["产品软文"] and "我们为什么做成这样" in ptype.RULES["产品软文"])
@@ -78,3 +78,22 @@ def run(rep, env):
               and "线索:价格购买词" in seen["user"] and "步骤用量词" in seen["user"], seen["user"][-60:])
     rep.check("复检标准里五个类型都有判断规则,并写明判断步骤(先评价结构、再步骤用量、再产品信息占比)", all(k in ptype.OWN_SYSTEM for k in ("- 教程", "- 测评", "- 商业硬文", "- 产品软文", "- 其他")) and "判断步骤" in ptype.OWN_SYSTEM)
     rep.check("采集笔记的分类标准没动(商家口吻仍算商业硬文,用于参考笔记分类)", "商业硬文补充:商家 / 品牌账号推广自家产品" in ptype.KIND_SYSTEM)
+
+    # ---- 功效和产品资料:AI 推断的内容不再冒充作者提供的真实资料 ----
+    print("\n[写稿框架:功效和产品资料]")
+    from app import products
+    rep.check("功效:作者资料里有的按原话写,没有的不自己加(列出抗炎 / 调理肠胃 / 祛痘…),不写喝完之后的身体变化;不再说功效是「爆款关键」",
+              "作者资料(卖点、产品资料)里写了的作用,按原话写" in nf and "资料里没写的,不要自己写具体功效" in nf and "身体变化" in nf and "这是爆款笔记吸引人的关键" not in nf)
+    rep.check("知识库通用规则里「可以在合理范围内写功效和使用感受」换成「功效只写作者资料里提供的」(新装和线上已存的都换)",
+              "可以在合理范围内写功效和使用感受" not in kb.KB_COMMON and "功效只写作者资料里提供的" in kb.KB_COMMON)
+    db.save_settings({"kb_common": "# 通用\n- 不站外导流;可以在合理范围内写功效和使用感受。\n- 管理员加的"})
+    with db.conn() as c:
+        kb.seed(c)
+    v = db.get_settings()["kb_common"]
+    rep.check("线上已存的通用规则启动时也换成新说法,管理员加的内容不动", "功效只写作者资料里提供的" in v and "可以在合理范围内写功效" not in v and "管理员加的" in v, v)
+    spec = {"kind": "drink", "serve": "hot", "pairings": [{"name": "热红酒", "freq": "high"}], "avoid": [], "shoot_note": "", "size": "AI 估:罐高 9cm"}
+    blk = products.block({"id": 0, "name": "测试肉桂粉", "selling_points": "原料为锡兰肉桂", "price": "39.8", "audience": "爱喝拿铁的人", "category": "肉桂粉",
+                          "profile": {"appearance": "红色铁盒", "package_text": "有机认证", "scenes": ["健身房"], "shoot": spec}, "size_note": ""})
+    rep.check("产品资料块:AI 看图 / 推断的外观、包装上的字、场景、搭配都标了「AI」并说明拿不准的不要写进正文;作者提供的(卖点、价格)不标;开头不再说「以下是作者提供的真实产品资料」",
+              "外观(AI 看图推断,仅供参考)" in blk and "包装上的字(AI 看图识别,可能认错,不确定的不要写)" in blk and "可以带出产品的场景(AI 推断,仅供参考)" in blk
+              and "搭配和吃法(AI 推断" in blk and "- 卖点(作者提供):原料为锡兰肉桂" in blk and "拿不准的不要写进正文" in blk and "以下是作者提供的真实产品资料" not in blk, blk[:300])

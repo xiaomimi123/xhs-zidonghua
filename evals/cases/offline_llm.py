@@ -124,7 +124,7 @@ def run(rep):
     rep.check("关键词推荐:去掉原词/重复/过短", [i["word"] for i in k9["suggestions"]] == ["手冲咖啡教程", "在家做咖啡"] and k9["broad"], str(k9))
     fb9 = llm9.fallback_keywords("美食", "腐乳")
     rep.check("关键词推荐:AI 不可用时有兜底", "腐乳做法" in [i["word"] for i in fb9["suggestions"]])
-    rep.check("提示词:允许第一人称体验和合理功效,不编造价格/数据", "第一人称" in llm9.NO_FABRICATION and "合理范围" in llm9.NO_FABRICATION and "价格" in llm9.NO_FABRICATION and "本平台内" in llm9.NO_FABRICATION and "治疗、治愈、根治" in llm9.NO_FABRICATION)
+    rep.check("提示词:身份按商家 / 中立口吻,功效只写作者资料里有的,不编造价格/数据", "第一人称" in llm9.NO_FABRICATION and "作者资料" in llm9.NO_FABRICATION and "价格" in llm9.NO_FABRICATION and "本平台内" in llm9.NO_FABRICATION and "治疗、治愈、根治" in llm9.NO_FABRICATION)
 
     print("\n[字数软约束]")
     from app import lengthcap as lc, worker as w10, llm as llm10
