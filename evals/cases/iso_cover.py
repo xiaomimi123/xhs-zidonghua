@@ -148,3 +148,11 @@ def run(rep, env):
         imagegen.IMG_DIR, coverfp.kick = o_dir, o_kick
         db.q_exec("DELETE FROM drafts WHERE project_id=?", pj)
         db.q_exec("DELETE FROM cover_fp")
+
+    # ---- 页面:封面一致的标签用独立的样式名(.lp-cv 早就是稿子封面缩略图的样式名,重名会把缩略图撑成一个大椭圆) ----
+    flow = Path("static/flow.js").read_text(encoding="utf-8")
+    css = Path("static/style.css").read_text(encoding="utf-8")
+    rep.check("页面:封面一致标签用 lp-cvtag(不和稿子缩略图的 lp-cv 重名);对上的提示写明「按封面对上」;候选提示语会说明封面一致排最前",
+              'class="lp-cvtag"' in flow and 'class="lp-cv">封面一致' not in flow and ".lp-cvtag{" in css and ".lp-cv{flex:none;width:56px;height:74px" in css and ".lp-cv{flex:none;white-space:nowrap" not in css
+              and "按封面对上(笔记标题和稿子不一样)" in flow and "封面一致的笔记排在最前面" in flow)
+
