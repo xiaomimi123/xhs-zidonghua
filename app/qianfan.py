@@ -7,6 +7,7 @@ import json
 import threading
 import time
 
+from . import logx
 from .db import conn, get_settings, q_all, q_exec, q_one
 from .notes import _grams, num
 
@@ -235,6 +236,11 @@ def ingest(body: dict) -> dict:
         q_exec("UPDATE crawl_tasks SET status='done', error='', note_count=?, finished_at=datetime('now') WHERE id=? AND type='qianfan'", n, tid)
     if kind == "notes" and not body.get("sample"):
         start_tagging()   # 新笔记自动在后台归类,选题分析里直接能看
+        try:
+            from . import coverfp
+            coverfp.kick(force=True)   # 新同步的笔记带了封面地址:后台下载并算封面指纹,用来把改了标题的笔记对回稿子
+        except Exception as e:
+            logx.warn("封面指纹", e)
     return {"ok": True, "stored": n, "snapshot": snap}
 
 
@@ -388,7 +394,7 @@ def _day_gap(a: str, b: str):
         return None
 
 
-def closest_notes(title: str, account_id: str, items: list[dict], taken: set, day: str = "", n: int = 3) -> list[dict]:
+def closest_notes(title: str, account_id: str, items: list[dict], taken: set, day: str = "", n: int = 3, cover_d: dict | None = None) -> list[dict]:
     """标了发布但没对上的稿子,给最可能的几篇笔记:同账号的、发布日期和登记日期接近的、标题像的排前面。
     发布时改了标题 / 换了封面,系统读不到正文和封面,只能靠这些线索给人挑,或让人直接粘贴笔记链接。"""
     gd = _grams(_norm_title(title))
@@ -402,11 +408,15 @@ def closest_notes(title: str, account_id: str, items: list[dict], taken: set, da
         same = bool(account_id and it.get("account_id") == account_id)
         gap = _day_gap(day, it.get("published_at") or "") if day else None
         near = gap is not None and gap <= 1
-        if not (sim >= 0.3 or (same and near)):
+        cd = (cover_d or {}).get(nid)   # 封面和这篇稿子的封面的距离(封面指纹算好了才有)
+        if not (sim >= 0.3 or (same and near) or cd is not None):
             continue
         score = 2 * sim + (1.0 if same else 0) + (0.5 if near else 0.2 if gap is not None and gap <= 3 else 0)
+        if cd is not None:
+            score += 10 if cd <= 0.04 else 1.5   # 封面一致:排最前面
         out.append((score, {"note_id": nid, "title": it["title"], "sim": round(sim, 2), "same_account": same, "published_at": it.get("published_at") or "",
-                            "account_name": it.get("account_name") or "", "views": it.get("views"), "day_gap": gap}))
+                            "account_name": it.get("account_name") or "", "views": it.get("views"), "day_gap": gap,
+                            "cover_same": bool(cd is not None and cd <= 0.04), "cover_d": cd}))
     out.sort(key=lambda x: -x[0])
     return [o[1] for o in out[:n]]
 
@@ -425,7 +435,7 @@ def account_name(account_id: str) -> str | None:
 def match_drafts(items: list[dict]) -> dict[int, dict]:
     """笔记表现和我们生成的稿子对上号:标题去掉表情标点后一样,或 3 字片段重合 ≥ 80%。返回 {草稿 id: 表现数据}。
     稿子指定了发布账号、笔记也带账号时,只在同一个账号里对,避免别的账号的同标题笔记串号。"""
-    drafts = q_all("SELECT id, title, account_id, qf_note_id FROM drafts WHERE title!=''")
+    drafts = q_all("SELECT id, title, account_id, qf_note_id, images, created FROM drafts WHERE title!=''")
     by_note = {str(it.get("note_id")): it for it in items if it.get("note_id")}
     out, taken = {}, set()
     for d in drafts:   # 手动对上的优先,不再按标题猜
@@ -467,6 +477,18 @@ def match_drafts(items: list[dict]) -> dict[int, dict]:
                 did = best[1] if best[0] >= 0.8 else 0
         if did:
             out[did] = it
+    # 第三步:标题对不上的(发布时改了标题 / 正文),再用封面对:封面指纹足够像、明显优于第二名,才自动对上
+    try:
+        from . import coverfp
+        used = {str(v.get("note_id")) for v in out.values()}
+        rest_notes = [it for it in items if it.get("cover") and str(it.get("note_id") or "") not in used and str(it.get("note_id") or "") not in taken]
+        rest_drafts = [d for d in drafts if d["id"] not in out]
+        if rest_notes and rest_drafts:
+            out.update(coverfp.match(rest_notes, rest_drafts))
+            if any(it.get("cover") for it in rest_notes):
+                coverfp.kick()   # 还有没算好指纹的,后台补(页面不等)
+    except Exception as e:
+        logx.warn("按封面对号", e)
     return out
 
 

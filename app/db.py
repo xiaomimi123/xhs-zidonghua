@@ -370,6 +370,11 @@ def _m012_kind(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
 
 
+def _m024_cover_fp(c):
+    """封面指纹(稿子封面 / 千帆笔记封面各算一个,用来把发布后改了标题的笔记对回稿子):kind = draft(key 是封面文件名)/ note(key 是笔记 ID)。"""
+    c.execute("CREATE TABLE IF NOT EXISTS cover_fp(kind TEXT, key TEXT, dh TEXT DEFAULT '', vec BLOB, src TEXT DEFAULT '', err TEXT DEFAULT '', at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(kind, key))")
+
+
 def _m023_note_facet_index(c):
     """笔记库筛选提速:筛选项的统计只要赛道 / 主题 / 类型 / 状态这些列,笔记行里的正文、图片、原始数据很大,统计一次要把整张表读一遍
     (线上库在挂载盘上,带筛选条件时一次查询约 0.1 秒)。建覆盖索引,统计只读索引,不读大字段。"""
@@ -488,6 +493,7 @@ MIGRATIONS = [
     (21, "title_struct", _m021_title_struct),
     (22, "draft_indexes", _m022_draft_indexes),
     (23, "note_facet_index", _m023_note_facet_index),
+    (24, "cover_fp", _m024_cover_fp),
     # (2, "说明", _m002_xxx),
 ]
 

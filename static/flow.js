@@ -433,7 +433,7 @@ function closePv() { const dirty = FL.pv?.dirty, op = FL.pv?.opener; FL.pv = nul
 const todayStr = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 function pubPanel(d) {
   if (!d.published) return `<div class="pv-pub"><b>发布登记</b><span class="sub">发到小红书后在这里登记,复盘页才会统计它的数据</span><div class="pv-pr"><label class="sub">发布日期 <input type="date" id="pvday" value="${todayStr()}" max="${todayStr()}" style="width:auto"></label><button class="btn sm" data-ppubd>登记已发布</button></div></div>`;
-  return `<div class="pv-pub"><b>发布登记</b><span class="sub">已登记发布${d.published_at ? ` · ${esc(d.published_at)}` : ""}${d.linked ? " · 已手动对上千帆笔记" : d.perf ? " · 已自动对上千帆笔记" : ""}</span>
+  return `<div class="pv-pub"><b>发布登记</b><span class="sub">已登记发布${d.published_at ? ` · ${esc(d.published_at)}` : ""}${d.linked ? " · 已手动对上千帆笔记" : d.perf ? (d.perf.matched_by === "cover" ? " · 已按封面自动对上千帆笔记" : " · 已自动对上千帆笔记") : ""}</span>
     <div class="pv-pr">${d.perf ? "" : `<button class="btn gray sm" data-plink>对上千帆笔记</button>`}${d.linked ? `<button class="btn ghost sm" data-punlink>取消对应</button>` : ""}<label class="sub">发布日期 <input type="date" id="pvday" value="${esc(d.published_at || todayStr())}" max="${todayStr()}" style="width:auto"></label><button class="btn gray sm" data-ppubd>修改日期</button></div></div>`;
 }
 const pvRefresh = async d => { const fresh = await api(`/api/library/${d.id}`).catch(() => null); if (fresh) Object.assign(d, fresh); FL.pv && (FL.pv.dirty = true); if (FL.pv) drawPv(); };
@@ -744,7 +744,7 @@ function lpBindBanner(b) {
 const lpBind = r => {
   const cs = r.cands || [];
   const hint = r.linked ? `<span class="sub lp-h2">已记下笔记链接,等千帆数据同步后自动对上</span>`
-    : cs.length ? `<span class="sub lp-h2">可能是这几篇,点一下就绑定:</span><span class="lp-pills">${cs.map(c => `<button class="lp-pill" data-quick="${r.id}:${esc(c.note_id)}" title="${esc(c.title)} · 相似 ${Math.round(c.sim * 100)}%${c.same_account ? " · 同账号" : ""}"><b>${esc(c.title.slice(0, 20))}</b><small>${esc(String(c.published_at).slice(5))}${c.views != null ? ` · 阅读 ${c.views}` : ""}${c.same_account ? "" : ` · ${esc(c.account_name || "别的账号")}`}</small></button>`).join("")}</span>`
+    : cs.length ? `<span class="sub lp-h2">${cs.some(c => c.cover_same) ? "封面一致的笔记排在最前面,点一下就绑定:" : "可能是这几篇,点一下就绑定:"}</span><span class="lp-pills">${cs.map(c => `<button class="lp-pill" data-quick="${r.id}:${esc(c.note_id)}" title="${esc(c.title)} · 相似 ${Math.round(c.sim * 100)}%${c.same_account ? " · 同账号" : ""}${c.cover_same ? " · 封面一致" : ""}">${c.cover_same ? `<i class="lp-cv">封面一致</i>` : ""}<b>${esc(c.title.slice(0, 20))}</b><small>${esc(String(c.published_at).slice(5))}${c.views != null ? ` · 阅读 ${c.views}` : ""}${c.same_account ? "" : ` · ${esc(c.account_name || "别的账号")}`}</small></button>`).join("")}</span>`
       : `<span class="sub lp-h2">千帆里还没有相近的笔记${r.days != null ? `(标记发布 ${r.days} 天)` : ""}:可能还没发,或数据还没同步。已经发了的,粘贴笔记链接也能绑定</span>`;
   return `${hint}<span class="lp-paste"><input data-url placeholder="粘贴小红书笔记链接" aria-label="笔记链接"><button class="btn sm" data-bind="${r.id}">绑定</button></span>
     <span class="lp-ed"><label><input type="checkbox" data-ed="cover"> 改了封面</label><label><input type="checkbox" data-ed="body"> 改了正文</label></span>`;
@@ -873,7 +873,7 @@ function linkDialog(did, draft, onDone) {
   const close = () => m.remove();
   const load = async () => {
     const r = await api(`/api/loop/notes?draft_id=${did}&q=${encodeURIComponent($("#lq").value.trim())}`).catch(() => ({ items: [] }));
-    $("#lcl").innerHTML = r.items.length ? r.items.map(n => `<button class="lp-c" data-nid="${esc(n.note_id)}"><b>${esc(n.title)}</b><span class="sub">${esc(n.account_name || "")}${n.published_at ? " · " + esc(n.published_at) : ""} · 阅读 ${fmtN(n.views)} · 赞藏评 ${fmtN((n.likes || 0) + (n.collects || 0) + (n.comments || 0))}${n.sim >= 0.4 ? " · 标题相近" : ""}${n.same_account ? " · 同账号" : ""}</span></button>`).join("")
+    $("#lcl").innerHTML = r.items.length ? r.items.map(n => `<button class="lp-c" data-nid="${esc(n.note_id)}"><b>${esc(n.title)}</b><span class="sub">${esc(n.account_name || "")}${n.published_at ? " · " + esc(n.published_at) : ""} · 阅读 ${fmtN(n.views)} · 赞藏评 ${fmtN((n.likes || 0) + (n.collects || 0) + (n.comments || 0))}${n.cover_same ? " · 封面一致" : ""}${n.sim >= 0.4 ? " · 标题相近" : ""}${n.same_account ? " · 同账号" : ""}</span></button>`).join("")
       : `<div class="empty" style="border:0">没有可对的笔记。可能千帆数据还没同步,或都已经对上了稿子。</div>`;
   };
   let t; $("#lq").oninput = () => { clearTimeout(t); t = setTimeout(load, 300); };

@@ -1488,3 +1488,4 @@ body.busy #main{opacity:.55;transition:opacity .15s}
   .nb-bar .ms-b{justify-content:space-between}
   .ms-p{max-width:none;right:0}
 }
+.lp-cv{display:inline-block;font-style:normal;font-size:11px;line-height:1;padding:3px 6px;margin-right:6px;border-radius:999px;background:var(--accent-wash);color:var(--accent-ink);border:1px solid var(--accent);vertical-align:middle}

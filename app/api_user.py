@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from . import llm, worker, exporter, imagegen, compliance, mirror, lengthcap, autorun, products, qianfan, loop, thumbs, ptype, version, product_check
+from . import llm, worker, exporter, imagegen, compliance, mirror, lengthcap, autorun, products, qianfan, loop, thumbs, ptype, version, product_check, coverfp
 from .auth import (require_user, user_ok, is_admin, check_pw, hash_pw, make_token, make_staff_token, current_staff, staff_mode, login_required,
                    throttle, CURRENT, SESSION_DAYS)
 from .api_collector import collector_summary
@@ -452,7 +452,7 @@ def _library(pid: int = 0, did: int = 0, brief: bool = False) -> list[dict]:
     items, data_at = qianfan.notes_all()
     perf = qianfan.match_drafts(items)   # 只算一次(evaluate 里也要用,原来各算一遍)
     tiers = {r["id"]: r for r in loop.evaluate(register=False, pre=(items, data_at, perf))["rows"]}
-    perf_keys = ("views", "likes", "collects", "comments", "shares", "new_fans", "published_at", "account_id", "account_name", "note_id")
+    perf_keys = ("views", "likes", "collects", "comments", "shares", "new_fans", "published_at", "account_id", "account_name", "note_id", "matched_by")
     out = [{"id": d["id"], "pid": d["project_id"],
              "run": names.get(d["product_id"]) or f"{d['track']} · {(d['keywords'] or [''])[0]}".strip(" ·"),
              "title": d["title"], "alt_titles": d["alt_titles"], "content": d["content"], "tags": d["tags"],
@@ -849,7 +849,8 @@ def loop_notes(draft_id: int = 0, q: str = ""):
     taken = {str(v.get("note_id")) for v in qianfan.match_drafts(items).values()}
     if draft_id:
         own("draft", draft_id)
-    d = q_one("SELECT title, account_id FROM drafts WHERE id=?", draft_id) if draft_id else None
+    d = q_one("SELECT title, account_id, images FROM drafts WHERE id=?", draft_id) if draft_id else None
+    cdist = coverfp.note_cover_dists(d["images"], items, d["account_id"]) if d else {}   # 封面和这篇稿子的封面像的笔记
     key = qianfan._norm_title(q)
     gd = qianfan._grams(qianfan._norm_title(d["title"])) if d else set()
     out = []
@@ -864,8 +865,9 @@ def loop_notes(draft_id: int = 0, q: str = ""):
         sim = len(gd & g) / len(gd | g) if gd and g else 0
         same = bool(d and d["account_id"] and it.get("account_id") == d["account_id"])
         out.append({"note_id": nid, "title": it["title"], "published_at": it.get("published_at") or "", "account_name": it.get("account_name") or "",
-                    "views": it.get("views"), "likes": it.get("likes"), "collects": it.get("collects"), "comments": it.get("comments"), "sim": round(sim, 2), "same_account": same})
-    out.sort(key=lambda x: (x["same_account"], x["sim"], x["published_at"]), reverse=True)
+                    "views": it.get("views"), "likes": it.get("likes"), "collects": it.get("collects"), "comments": it.get("comments"), "sim": round(sim, 2), "same_account": same,
+                    "cover_same": cdist.get(nid, 9) <= 0.04, "cover_d": cdist.get(nid)})
+    out.sort(key=lambda x: (x["cover_same"], x["cover_d"] is not None, -(x["cover_d"] or 0), x["same_account"], x["sim"], x["published_at"]), reverse=True)
     return {"items": out[:40]}
 
 
@@ -888,7 +890,9 @@ def bind_cands(ids: str = ""):
         out.append({"id": i, "title": r["title"], "account_name": r["account_name"] or "", "published_at": r["published_at"] or "",
                     "cover": next((x for x in (r["images"] or []) if x), ""), "linked": bool(r["qf_note_id"]) and not hit,
                     "matched": ({"title": hit.get("title") or "", "views": hit.get("views")} if hit else None),
-                    "cands": [] if hit else qianfan.closest_notes(r["title"], r["account_id"], items, taken, r["published_at"] or "")})
+                    "matched_by": (hit or {}).get("matched_by", ""),
+                    "cands": [] if hit else qianfan.closest_notes(r["title"], r["account_id"], items, taken, r["published_at"] or "", 3,
+                                                                  coverfp.note_cover_dists(r["images"], items, r["account_id"]))})
     return {"items": out}
 
 

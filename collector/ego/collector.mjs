@@ -131,6 +131,10 @@ const handlers = {
       if (!n.note_id || !n.note_title || byId.has(n.note_id)) return;
       const it = { note_id: n.note_id, title: n.note_title, views: n.browse_num, likes: n.like_num, collects: n.collect_num, comments: n.comment_num, shares: n.share_num };
       if (n.publish_time) it.published_at = new Date(n.publish_time + 8 * 3600e3).toISOString().slice(0, 10);   // 毫秒时间戳,按北京时间取日期
+      // 封面图地址:工作台用它算封面指纹,把发布时改了标题 / 正文的笔记对回稿子。商品笔记的字段是 note_image,普通笔记的字段名多试几个
+      const cover = n.note_image || n.cover || n.cover_url || n.note_cover || n.image_url || n.image || "";
+      if (typeof cover === "string" && cover.startsWith("http")) it.cover = cover;
+      else if (!globalThis.__noCoverLogged) { globalThis.__noCoverLogged = true; console.log("笔记没有找到封面字段,字段有:", Object.keys(n).join(",")); }
       byId.set(n.note_id, it);
     };
     const pull = async (get, key) => {
