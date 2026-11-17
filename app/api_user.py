@@ -881,6 +881,7 @@ def bind_cands(ids: str = ""):
     perf = qianfan.match_drafts(items)
     taken = {str(v.get("note_id")) for v in perf.values()}
     rows = {r["id"]: r for r in autorun._in_chunks("SELECT id, title, account_id, account_name, published_at, images, qf_note_id FROM drafts WHERE id IN ({})", want)}
+    nfp = coverfp.note_fps(items)   # 笔记的封面指纹只读一次,这批稿子共用
     out = []
     for i in want:
         r = rows.get(i)
@@ -892,7 +893,7 @@ def bind_cands(ids: str = ""):
                     "matched": ({"title": hit.get("title") or "", "views": hit.get("views")} if hit else None),
                     "matched_by": (hit or {}).get("matched_by", ""),
                     "cands": [] if hit else qianfan.closest_notes(r["title"], r["account_id"], items, taken, r["published_at"] or "", 3,
-                                                                  coverfp.note_cover_dists(r["images"], items, r["account_id"]))})
+                                                                  coverfp.note_cover_dists(r["images"], items, r["account_id"], nfp))})
     return {"items": out}
 
 

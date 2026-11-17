@@ -156,3 +156,43 @@ def run(rep, env):
               'class="lp-cvtag"' in flow and 'class="lp-cv">封面一致' not in flow and ".lp-cvtag{" in css and ".lp-cv{flex:none;width:56px;height:74px" in css and ".lp-cv{flex:none;white-space:nowrap" not in css
               and "按封面对上(笔记标题和稿子不一样)" in flow and "封面一致的笔记排在最前面" in flow)
 
+
+    # ---- 对号结果缓存:输入没变直接用上次的(页面每次打开都会对号,不缓存每次多花约 0.4 秒);输入变了要重算 ----
+    print("\n[封面对号缓存]")
+    o_kick = coverfp.kick
+    coverfp.kick = lambda *a, **k: False
+    pj5 = db.q_exec("INSERT INTO projects(track,keywords,direction) VALUES('美食','[]','')").lastrowid
+    try:
+        card_a, card_b = _card(31), _card(32)
+        da = db.q_exec("INSERT INTO drafts(project_id,title,content,status,images) VALUES(?,?,?,'ready',?)", pj5, "缓存测试稿", "正文", json.dumps(["cache_a.png"])).lastrowid
+        coverfp.put("draft", "cache_a.png", ch.fingerprint(card_a))
+        coverfp.put("note", "CA", ch.fingerprint(_publish(card_a)), "x")
+        today = __import__("time").strftime("%Y-%m-%d")
+        note_a = {"note_id": "CA", "title": "不一样的标题", "cover": "http://ci.example/CA", "account_id": "", "published_at": today, "views": 3}
+        dr = [{"id": da, **db.q_one("SELECT images, account_id, created FROM drafts WHERE id=?", da)}]
+        calls = []
+        o_match = coverfp._match
+        coverfp._match = lambda n, d: calls.append(1) or o_match(n, d)
+        try:
+            r1 = coverfp.match([note_a], dr)
+            r2 = coverfp.match([note_a], dr)
+            same_calls = len(calls)
+            r2[da]["views"] = 999   # 改返回值不能污染缓存
+            r3 = coverfp.match([note_a], dr)
+            coverfp.put("note", "CB", ch.fingerprint(_publish(card_b)), "x")   # 指纹表变了:要重算
+            coverfp.match([note_a], dr)
+            after_fp = len(calls)
+            coverfp.match([{**note_a, "published_at": "2020-01-01"}], dr)   # 笔记的发布日期变了:要重算(并且因为比稿子早太多,不再对上)
+            r5 = coverfp.match([{**note_a, "published_at": "2020-01-01"}], dr)
+        finally:
+            coverfp._match = o_match
+        rep.check("对号缓存:输入没变第二次不重算且结果一样;改了返回值不污染缓存;指纹表变了 / 笔记日期变了会重算(日期太早就不再对上)",
+                  r1.get(da, {}).get("note_id") == "CA" and same_calls == 1 and r3[da]["views"] == 3 and r2 is not r1 and after_fp == 2 and len(calls) == 3 and r5 == {}, str((same_calls, after_fp, len(calls), r5)))
+        # 绑定窗口:笔记指纹读一次共用,结果和不传一样
+        itm = [note_a]
+        nfp = coverfp.note_fps(itm)
+        rep.check("绑定窗口:笔记指纹一次读出来共用(note_fps),传不传结果一样", coverfp.note_cover_dists(["cache_a.png"], itm, "", nfp) == coverfp.note_cover_dists(["cache_a.png"], itm, "") and "CA" in nfp)
+    finally:
+        coverfp.kick = o_kick
+        db.q_exec("DELETE FROM drafts WHERE project_id=?", pj5)
+        db.q_exec("DELETE FROM cover_fp")

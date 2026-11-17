@@ -139,9 +139,31 @@ def _later_ok(note_day: str, draft_created: str) -> bool:
         return True
 
 
+_cache = {"key": None, "out": {}}
+
+
+def _fp_version():
+    """指纹表有没有变:条数 + 最大行号(每次写入 INSERT OR REPLACE 都会生成新的行号,所以任何变化都能发现)。
+    以前用 SUM(LENGTH(vec)) 要把几千个指纹大字段全读一遍,单这一句就 270 毫秒。"""
+    with conn() as c:
+        return tuple(c.execute("SELECT COUNT(*), MAX(rowid) FROM cover_fp").fetchone())
+
+
 def match(notes: list[dict], drafts: list[dict]) -> dict[int, dict]:
     """notes:还没对上稿子的千帆笔记;drafts:还没对上笔记的稿子(带 id / images / account_id / created)。返回 {稿子 id: 笔记}。
-    条件:封面足够像(coverhash.SAME)、明显优于第二名、账号不冲突、发布时间合理;一篇稿子只对一条笔记、一条笔记只对一篇稿子。"""
+    条件:封面足够像(coverhash.SAME)、明显优于第二名、账号不冲突、发布时间合理;一篇稿子只对一条笔记、一条笔记只对一篇稿子。
+    结果按输入缓存(笔记、稿子封面、账号、日期和指纹表都没变就直接返回上次的):页面每次打开都会对号,不缓存要多花约 0.4 秒。"""
+    key = (_fp_version(),
+           tuple(sorted((str(n.get("note_id")), n.get("cover") or "", n.get("account_id") or "", n.get("published_at") or "") for n in notes if n.get("cover"))),
+           tuple(sorted((d["id"], cover_file(d.get("images")), d.get("account_id") or "", _day(d.get("created"))) for d in drafts)))
+    if _cache["key"] == key:
+        return {k: dict(v) for k, v in _cache["out"].items()}
+    out = _match(notes, drafts)
+    _cache.update(key=key, out=out)
+    return {k: dict(v) for k, v in out.items()}
+
+
+def _match(notes: list[dict], drafts: list[dict]) -> dict[int, dict]:
     nfp = get("note", [str(n.get("note_id")) for n in notes if n.get("cover")])
     if not nfp:
         return {}
@@ -182,7 +204,12 @@ def match(notes: list[dict], drafts: list[dict]) -> dict[int, dict]:
     return out
 
 
-def note_cover_dists(draft_images, items: list[dict], account_id: str = "") -> dict[str, float]:
+def note_fps(items: list[dict]) -> dict:
+    """这批笔记的封面指纹(一次读出来,绑定窗口里很多篇稿子共用)。"""
+    return get("note", [str(n.get("note_id")) for n in items if n.get("cover")])
+
+
+def note_cover_dists(draft_images, items: list[dict], account_id: str = "", nfp: dict | None = None) -> dict[str, float]:
     """一篇稿子的封面和各条笔记封面的距离 {note_id: 距离},只要不超过 coverhash.LOOSE 的。手动绑定窗口用。"""
     f = cover_file(draft_images)
     dfp = get("draft", [f]) if f else {}
@@ -196,7 +223,7 @@ def note_cover_dists(draft_images, items: list[dict], account_id: str = "") -> d
         if not dfp:
             return {}
     dh, vec = dfp[f]
-    nfp = get("note", [str(n.get("note_id")) for n in items if n.get("cover")])
+    nfp = nfp if nfp is not None else note_fps(items)
     out = {}
     for n in items:
         fp = nfp.get(str(n.get("note_id")))
