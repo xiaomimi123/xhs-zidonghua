@@ -154,7 +154,9 @@ def _run_text(did):
         if bad:  # 把不相关的词写进了同一篇:带着反馈重写一次
             hint = (f"上一版把「{bad[0][0]}」和「{bad[0][1]}」写在了同一篇里,参考笔记里没有这种搭配,现实中也不合常理。"
                     "这篇只写角度里点明的那一个主题,另一个不要出现,重新写。")
-            out = llm.write_note(project, pb["data"], refs, d["angle"], f"{d['extra']} {hint}{pblock}{trule}".strip(), kb, banned)
+            # 重写也要带上帖子类型要求(rule 里有类型规则和标题提示):以前只带了标题提示,重写出来的稿子会丢掉类型要求,也可能变回买家腔
+            out = llm.write_note(project, pb["data"], refs, d["angle"], f"{d['extra']} {hint}{pblock}{rule}".strip(), kb, banned)
+            out = _match_ptype(project, pb, refs, d, out, pblock + rule, kb, banned)   # 重写后再判一次类型,ptype_got 记的是最终这一版
         combo = forced_pairs(project["keywords"], f"{out.get('title', '')}{out.get('content', '')}", rt)
     except Exception as e:
         _exec("UPDATE drafts SET status='error', error=? WHERE id=?", f"写文案失败:{e}", did)
