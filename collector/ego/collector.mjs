@@ -122,6 +122,29 @@ async function identifyShop() {
   if (!shop.id) throw new QfError("读不到店铺信息");
 }
 
+
+// 笔记的封面图地址:先试已知字段(商品笔记接口是 note_image),再找字段名带 image / cover / pic / thumb 的(商品图 item_image 不算);值可以是链接、数组、或带 url 的对象
+function pickCover(n) {
+  const url = (v) => {
+    if (typeof v === "string") return /^https?:\/\//.test(v) ? v : "";
+    if (Array.isArray(v)) return v.map(url).find(Boolean) || "";
+    if (v && typeof v === "object") return url(v.url || v.url_default || v.cover_url || v.link || "");
+    return "";
+  };
+  for (const k of ["note_image", "cover", "cover_url", "note_cover", "note_cover_url", "image_url", "image", "images", "thumbnail", "img_url"]) {
+    const u = url(n[k]);
+    if (u) return u;
+  }
+  for (const [k, v] of Object.entries(n)) {
+    if (/item_|goods|sku|avatar|user/i.test(k)) continue;
+    if (/image|img|cover|pic|thumb|photo/i.test(k)) {
+      const u = url(v);
+      if (u) return u;
+    }
+  }
+  return "";
+}
+
 // ---------- 各类任务 ----------
 const handlers = {
   // 笔记管理 → 商品笔记 + 普通笔记(浏览/点赞/收藏/评论/分享),按 note_id 去重,并标上所属账号
@@ -132,9 +155,13 @@ const handlers = {
       const it = { note_id: n.note_id, title: n.note_title, views: n.browse_num, likes: n.like_num, collects: n.collect_num, comments: n.comment_num, shares: n.share_num };
       if (n.publish_time) it.published_at = new Date(n.publish_time + 8 * 3600e3).toISOString().slice(0, 10);   // 毫秒时间戳,按北京时间取日期
       // 封面图地址:工作台用它算封面指纹,把发布时改了标题 / 正文的笔记对回稿子。商品笔记的字段是 note_image,普通笔记的字段名多试几个
-      const cover = n.note_image || n.cover || n.cover_url || n.note_cover || n.image_url || n.image || "";
-      if (typeof cover === "string" && cover.startsWith("http")) it.cover = cover;
-      else if (!globalThis.__noCoverLogged) { globalThis.__noCoverLogged = true; console.log("笔记没有找到封面字段,字段有:", Object.keys(n).join(",")); }
+      const cover = pickCover(n);
+      if (cover) it.cover = cover;
+      else if (!globalThis.__noCoverLogged) {   // 没找到封面:把这篇笔记的字段名和看起来像图片的值记进采集端日志(run*.log),方便补字段名
+        globalThis.__noCoverLogged = true;
+        const imgish = Object.entries(n).filter(([k, v]) => /image|img|cover|pic|thumb|photo/i.test(k) || (typeof v === "string" && /^https?:.*(xhscdn|xiaohongshu|sns-img|\.jpg|\.png|\.webp)/i.test(v)));
+        log("笔记没有找到封面字段。字段:", Object.keys(n).join(","), "| 像图片的值:", JSON.stringify(imgish).slice(0, 400));
+      }
       byId.set(n.note_id, it);
     };
     const pull = async (get, key) => {
