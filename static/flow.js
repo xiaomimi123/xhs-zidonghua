@@ -860,10 +860,11 @@ function lpStepBar(S, ov) {
   return `<div class="lp-stepbar" role="tablist" aria-label="复盘步骤">${LP_STEPS.map(([k, n]) => { const [big, l2, [l3, c3]] = cards[k]; return `<button class="lp-sc ${LP.step === k ? "on" : ""}" data-step="${k}" role="tab" aria-selected="${LP.step === k}"><span class="lp-sn">${n}</span><b>${big}</b><span class="lp-s2">${l2}</span>${l3 ? `<span class="lp-s3 ${c3}">${esc(l3)}</span>` : ""}</button>`; }).join("")}</div>`;
 }
 function lpStepPublish(S, ov, regBlock) {
-  const mx = Math.max(1, ...S.pub.days.map(d => d.n));
-  // 实心 = 千帆里已经找到的笔记(按笔记真实发布日期);浅色斜纹 = 员工标了已发布、千帆里还没找到(按标记的日期,不一定真发了)
-  const bars = `<div class="lp-bars" role="img" aria-label="近 7 天每天发布数">${S.pub.days.map(d => { const ok = d.n - d.claimed; return `<div class="lp-bar"><b>${d.n}</b><div class="lp-bt" title="${ok} 篇已在千帆里找到${d.claimed ? `,${d.claimed} 篇只是标了发布、千帆里还没找到` : ""}">${ok > 0 || !d.n ? `<i style="height:${Math.round(ok / mx * 100)}%"></i>` : ""}${d.claimed ? `<i class="cl" style="height:${Math.round(d.claimed / mx * 100)}%"></i>` : ""}</div><span>${d.day}</span></div>`; }).join("")}</div>
-    <div class="lp-legend"><span><i></i>千帆里已找到的笔记</span><span><i class="cl"></i>只标了发布、千帆里还没找到</span></div>`;
+  const mx = Math.max(1, ...S.pub.days.flatMap(d => [d.n - d.claimed, d.claimed]));
+  // 每天两根并排的柱子,同一个刻度:红色 = 千帆里已经找到的笔记(按笔记真实发布日期);灰色 = 员工标了已发布、千帆里还没找到(按标记的日期,不一定真发了)
+  const bar = (n, cls) => `<div class="lp-b1"><i class="${cls}" style="height:${n ? Math.max(3, Math.round(n / mx * 100)) : 0}%"><b class="${n ? "" : "z"}">${n}</b></i></div>`;
+  const bars = `<div class="lp-bars" role="img" aria-label="近 7 天每天发布数:千帆里已找到的和只标了发布的">${S.pub.days.map(d => `<div class="lp-bar" title="${d.day}:${d.n - d.claimed} 篇已在千帆里找到,${d.claimed} 篇只是标了发布、千帆里还没找到"><div class="lp-pair">${bar(d.n - d.claimed, "f")}${bar(d.claimed, "p")}</div><span>${d.day}</span></div>`).join("")}</div>
+    <div class="lp-legend"><span><i class="f"></i>千帆里已找到的笔记</span><span><i class="p"></i>只标了发布、千帆里还没找到</span></div>`;
   // 账号对账:默认只露一行摘要,点开看每个账号;只列有问题的,对得上的合成一行
   const rec = S.recon || [], bad = rec.filter(a => a.kind === "bad"), warn = rec.filter(a => a.kind === "warn"), wait = rec.filter(a => a.kind === "wait"), good = rec.filter(a => a.kind === "ok");
   const lost = bad.reduce((n, a) => n + (a.short || 0), 0);
@@ -873,7 +874,7 @@ function lpStepPublish(S, ov, regBlock) {
     ${LP.reconOpen ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>账号</th><th class="num">千帆里发了</th><th class="num">对上稿子</th><th class="num">标了没对上</th><th>判断</th><th></th></tr></thead><tbody>${recRows}</tbody></table></div>${good.length ? `<p class="sub" style="margin:6px 0 0">另有 ${good.length} 个账号对得上:${good.map(a => esc(a.name)).join("、")}</p>` : ""}<p class="sub" style="margin:6px 0 0">近 7 天,按账号对:千帆里实际发的笔记,对照员工标了发布却没对上的稿子。账号自己发的笔记也算在「千帆里发了」里,所以数量对得上只是「可能」;标记满 ${S.recon_days || 3} 天、这个账号还是没有任何没认领的新笔记的,系统会自动标成「没发出去」(可在「已处理」里恢复)。</p>` : ""}</div>`;
   const ad = ov.adherence || [], bt = Object.fromEntries(((ov.bind_todo || {}).people || []).map(p => [p.name, p]));
   const people = ad.length > 1 ? `<section class="card flush" style="margin-top:12px"><div class="card-h" style="padding:12px 14px"><b>各人发布情况</b><span class="sub">没绑定笔记的稿子,数据追踪不到</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>发布人</th><th class="num">已发布</th><th class="num">已绑定</th><th class="num">没绑定</th><th class="num">绑定率</th></tr></thead><tbody>${ad.map(a => `<tr><td>${esc(a.name)}</td><td class="num">${a.published}</td><td class="num">${a.linked}</td><td class="num">${(bt[a.name] || {}).n ?? a.published - a.linked}</td><td class="num">${a.link_rate == null ? "—" : Math.round(a.link_rate * 100) + "%"}</td></tr>`).join("")}</tbody></table></div></section>` : "";
-  return `<section class="card"><div class="card-h"><b>近 7 天发布</b><span class="sub">本周 ${S.pub.week} 篇,${lpWk(S.pub.week, S.pub.last_week)}${S.pub.claimed ? `;其中 ${S.pub.claimed} 篇只是标了发布、千帆里还没找到(浅色部分)` : ""}</span></div>${bars}${recBlock}</section>${people}${regBlock}`;
+  return `<section class="card"><div class="card-h"><b>近 7 天发布</b><span class="sub">本周 ${S.pub.week} 篇,${lpWk(S.pub.week, S.pub.last_week)}${S.pub.claimed ? `;其中 ${S.pub.claimed} 篇只是标了发布、千帆里还没找到(灰色柱)` : ""}</span></div>${bars}${recBlock}</section>${people}${regBlock}`;
 }
 function lpStepData(S, ov) {
   const d = S.data, bt = ov.bind_todo || { total: 0, old: 0 };

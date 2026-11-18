@@ -1381,17 +1381,10 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 .lp-s3{font-size:12px;color:var(--sub)}
 .lp-s3.warn{color:var(--warn)}.lp-s3.ok{color:var(--ok)}
 @media (max-width:760px){.lp-stepbar{grid-template-columns:repeat(2,minmax(0,1fr))}}
-.lp-bars{display:flex;gap:10px;align-items:flex-end;height:120px;padding:6px 4px 0}
+.lp-bars{display:flex;gap:10px;align-items:flex-end;height:150px;padding:20px 4px 0}
 .lp-bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%;min-width:0}
-.lp-bar b{font-size:12px;font-weight:500}
-.lp-bt{flex:1;width:100%;display:flex;flex-direction:column-reverse;justify-content:flex-start;background:var(--soft);border-radius:6px;overflow:hidden}
-.lp-bt i{display:block;width:100%;background:var(--accent);min-height:2px}
-.lp-bt i:last-child{border-radius:6px 6px 0 0}   /* 叠起来的柱子只有最上面一段有圆角 */
-.lp-bt i.cl{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--accent) 34%,var(--soft)) 0 4px,color-mix(in srgb,var(--accent) 14%,var(--soft)) 4px 8px);min-height:0}   /* 标了发布、千帆里还没找到 */
 .lp-legend{display:flex;gap:16px;justify-content:center;margin:8px 0 2px;font-size:11px;color:var(--sub)}
 .lp-legend span{display:inline-flex;align-items:center;gap:5px}
-.lp-legend i{display:inline-block;width:12px;height:10px;border-radius:2px;background:var(--accent)}
-.lp-legend i.cl{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--accent) 34%,var(--soft)) 0 3px,color-mix(in srgb,var(--accent) 14%,var(--soft)) 3px 6px)}
 .lp-bar span{font-size:11px;color:var(--faint)}
 .lp-shop{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
 .lp-shop:first-of-type{border-top:0}
@@ -1515,3 +1508,15 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 .lp-rsum i{font-style:normal;font-size:12px;color:var(--faint);flex:none}
 .lp-rbad{color:var(--accent-ink);font-weight:500}
 .lp-rec .tbl-wrap{margin-top:8px}
+.lp-pair{flex:1;width:84%;display:flex;gap:4px;align-items:flex-end;justify-content:center;min-height:0}
+.lp-b1{flex:1;height:100%;display:flex;align-items:flex-end}
+.lp-b1 i{position:relative;display:block;width:100%;border-radius:4px 4px 2px 2px;min-height:0}
+.lp-b1 i.f{background:var(--accent)}
+.lp-b1 i.p{background:color-mix(in srgb,var(--faint) 45%,var(--soft))}
+.lp-b1 b{position:absolute;left:50%;bottom:100%;transform:translateX(-50%);margin-bottom:3px;font-size:12px;font-weight:400;color:var(--ink);white-space:nowrap}
+.lp-b1 i.p b{color:var(--sub)}
+.lp-b1 b.z{color:var(--faint)}   /* 近 7 天发布柱状图:每天两根并排,红 = 千帆里已找到,灰 = 只标了发布 */
+.lp-legend i{display:inline-block;width:10px;height:10px;border-radius:2px}
+.lp-legend i.f{background:var(--accent)}
+.lp-legend i.p{background:color-mix(in srgb,var(--faint) 45%,var(--soft))}
+

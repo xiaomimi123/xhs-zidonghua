@@ -151,9 +151,9 @@ def run(rep, env):
     ov_s = loop.review_steps(loop.evaluate(register=False))
     rep.check("近 7 天发布:每天分开算「千帆里已找到」和「只是标了、还没找到」(claimed);复盘数据里带账号对账(recon)", all("claimed" in d_ and d_["claimed"] <= d_["n"] for d_ in ov_s["pub"]["days"]) and "claimed" in ov_s["pub"] and isinstance(ov_s["recon"], list))
     db.q_exec("DELETE FROM qf_snapshots WHERE shop_id='pstest2'")
-    rep.check("页面:账号对账并进「近 7 天发布」卡(默认只一行摘要,点开看明细,只列有问题的账号,对得上的合成一行),有「去核对」;柱状图有图例,叠起来的柱子只有最上面一段有圆角",
+    rep.check("页面:账号对账并进「近 7 天发布」卡(默认只一行摘要,点开看明细,只列有问题的账号,对得上的合成一行),有「去核对」;柱状图每天两根并排(已找到 / 只标了发布)、同一刻度、有图例",
               "data-recon" in flow and "data-gocheck" in flow and "data-rracc-clear" in flow and "lp-legend" in flow and "另有 ${good.length} 个账号对得上" in flow
-              and ".lp-bt i:last-child" in Path("static/style.css").read_text(encoding="utf-8") and "lp-rsum" in flow)
+              and ".lp-pair" in Path("static/style.css").read_text(encoding="utf-8") and "lp-b1" in flow and "lp-bt" not in flow and "lp-rsum" in flow)
     rep.check("页面:预览里标记发布只有底部一个按钮(面板里不再放「登记已发布」),全站统一叫「标记 / 已发布」,不再出现「登记已发布 / 发布登记」",
               "登记已发布" not in flow and "发布登记" not in flow and "data-ppub>" in flow and flow.count("data-ppub>") == 1 and "没标记发布的" in flow and "发布标记" in flow)
     rep.check("页面:新建任务的发布账号选填(可以不指定,发布时再选);标记已发布前必须有发布账号(预览和批量);复盘「发布标记」默认看「没对上」,「没标记发布的」排在最后",
