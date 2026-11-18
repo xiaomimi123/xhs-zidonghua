@@ -64,10 +64,6 @@ async function fNew() {
   const [list, runs, hot, accts] = await Promise.all([api("/api/products").catch(() => []), api("/api/runs?limit=40").catch(() => []),
     api(`/api/qianfan/hot?track=${encodeURIComponent(FL.track || "")}`).catch(() => ({})), fetchAccts()]);
   if (FL.account && !accts.some(a => a.account_id === FL.account)) FL.account = "";
-  if (!FL.account && accts.length && !FL.accountTouched) {   // 默认带上次用的账号(没有就留空,开始生成时要求选一个)
-    let last = ""; try { last = localStorage.getItem("xhs_last_acct") || ""; } catch {}
-    if (accts.some(a => a.account_id === last)) FL.account = last;
-  }
   const plan = FL.account ? (FL.plan[FL.account] ||= await api(`/api/qianfan/account_plan?account_id=${encodeURIComponent(FL.account)}`).catch(() => null)) : null;
   if (plan && FL.angAcc !== FL.account) { FL.angles = new Set(plan.recommended); FL.angAcc = FL.account; }   // 换了账号就按这个账号的推荐重新选
   if (!FL.account) { FL.angles = new Set(); FL.angAcc = ""; }
@@ -114,7 +110,7 @@ async function fNew() {
       ${FL.account ? `<div id="fakw">${accKwHtml(FL.accKw[FL.account])}</div>` : ""}
       ${(hot.keywords || []).length || (hot.topics || []).length ? `<span class="fl-lbl">最近的热词 · 点一下加进关键词</span><div class="fl-chips">${[...(hot.keywords || []).slice(0, 8), ...(hot.topics || []).slice(0, 6)].map(w => `<button class="chip" data-fhot="${esc(w)}">${esc(w)}</button>`).join("")}</div>` : ""}`}
     ${accts.length ? `<h3 class="fl-sh fl-sec"><i>2</i>发到哪个账号 <small>建议选</small></h3>` : ""}
-    ${accts.length ? `<span class="fl-lbl">打算发到哪个账号 · 必选:写稿风格、发布后对数据、按账号分析都要靠它</span><div class="fl-chips" id="faccs">${accts.map(a => `<button class="chip ${FL.account === a.account_id ? "on" : ""}" data-facc="${esc(a.account_id)}" title="${esc(a.shop_name || "")}">${esc(a.name)}${new Set(accts.map(x => x.shop_name)).size > 1 && a.shop_name && a.shop_name.replace(/的店$/, "") !== a.name ? `<span class="sub"> · ${esc(a.shop_name.replace(/的店$/, ""))}</span>` : ""}</button>`).join("")}</div>` : ""}
+    ${accts.length ? `<span class="fl-lbl">打算发到哪个账号 · 选填:选了会按这个账号表现好的标题和选题来写;不确定发哪个号可以先不选,发布时再选</span><div class="fl-chips" id="faccs"><button class="chip ${FL.account ? "" : "on"}" data-facc="">不指定</button>${accts.map(a => `<button class="chip ${FL.account === a.account_id ? "on" : ""}" data-facc="${esc(a.account_id)}" title="${esc(a.shop_name || "")}">${esc(a.name)}${new Set(accts.map(x => x.shop_name)).size > 1 && a.shop_name && a.shop_name.replace(/的店$/, "") !== a.name ? `<span class="sub"> · ${esc(a.shop_name.replace(/的店$/, ""))}</span>` : ""}</button>`).join("")}</div>` : ""}
     ${plan ? angleBlock(plan) : ""}
     <h3 class="fl-sh fl-sec"><i>${accts.length ? 3 : 2}</i>生成几篇</h3>
     <div class="fl-num">
@@ -156,7 +152,7 @@ async function fNew() {
     }
     const rm = t.closest("[data-frm]"); if (rm) { keep(); P.files.splice(+rm.dataset.frm, 1); return fNew(); }
     const ag = t.closest("[data-fang]"); if (ag) { keep(); const n = ag.dataset.fang; FL.angles.has(n) ? FL.angles.delete(n) : FL.angles.add(n); return fNew(); }
-    const ac = t.closest("[data-facc]"); if (ac) { keep(); FL.account = ac.dataset.facc; FL.accountTouched = true; try { localStorage.setItem("xhs_last_acct", FL.account); } catch {} return fNew(); }
+    const ac = t.closest("[data-facc]"); if (ac) { keep(); FL.account = ac.dataset.facc; return fNew(); }
     const tr = t.closest("[data-ftrack]"); if (tr) { keep(); FL.track = tr.dataset.ftrack; return fNew(); }
     const c = t.closest("[data-fcnt]"); if (c) { keep(); FL.count = Math.max(1, Math.min(50, FL.count + +c.dataset.fcnt)); return fNew(); }
     const st = t.closest("[data-fset]"); if (st) { keep(); FL.count = +st.dataset.fset; return fNew(); }
@@ -221,7 +217,6 @@ async function fNew() {
       if (!FL.track) return err("先选一个赛道");
       body = { ...body, track: FL.track, keywords: FL.kw.split(/[,，、\n]+/).map(s => s.trim()).filter(Boolean) };
     }
-    if (accts.length && !FL.account) { err("先选打算发到哪个账号(上面的账号按钮)"); $("#faccs")?.scrollIntoView({ block: "center" }); return; }
     if (prod && !picked) {   // 新产品:先检查素材(传错图、混进别的产品、文案像指令…),有问题让用户选继续还是回去改
       $("#fstart").disabled = true; $("#fstart").textContent = "检查素材中…";
       const go_ = await checkProduct({ name: P.name, images: P.files, selling_points: P.sp, audience: P.aud, forbid: P.forbid });

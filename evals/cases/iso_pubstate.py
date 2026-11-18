@@ -105,7 +105,7 @@ def run(rep, env):
               and "千帆里还没找到:请核对" in flow and "data-pstate-clear" in flow)
     rep.check("页面:预览里标记发布只有底部一个按钮(面板里不再放「登记已发布」),全站统一叫「标记 / 已发布」,不再出现「登记已发布 / 发布登记」",
               "登记已发布" not in flow and "发布登记" not in flow and "data-ppub>" in flow and flow.count("data-ppub>") == 1 and "没标记发布的" in flow and "发布标记" in flow)
-    rep.check("页面:新建任务的发布账号必选(没有「不指定」,没选不让开始,默认带上次用的);标记已发布前必须有发布账号(预览和批量);复盘「发布标记」默认看「没对上」,「没标记发布的」排在最后",
-              "data-facc=\"\">不指定" not in flow and "先选打算发到哪个账号" in flow and "xhs_last_acct" in flow and "function needAcct" in flow and "没指定发布账号" in flow
+    rep.check("页面:新建任务的发布账号选填(可以不指定,发布时再选);标记已发布前必须有发布账号(预览和批量);复盘「发布标记」默认看「没对上」,「没标记发布的」排在最后",
+              "data-facc=\"\">不指定" in flow and "先选打算发到哪个账号" not in flow and "xhs_last_acct" not in flow and "function needAcct" in flow and "没指定发布账号" in flow
               and 'reg: "nodata"' in flow and flow.index('data-rtab="nodata"') < flow.index('data-rtab="done"') < flow.index('data-rtab="todo"'))
     db.q_exec("DELETE FROM drafts WHERE project_id=?", pj)
