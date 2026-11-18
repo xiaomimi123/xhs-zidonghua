@@ -217,7 +217,7 @@ async function fNew() {
       if (!FL.track) return err("先选一个赛道");
       body = { ...body, track: FL.track, keywords: FL.kw.split(/[,，、\n]+/).map(s => s.trim()).filter(Boolean) };
     }
-    if (accts.length && !FL.account && !confirm("还没选发布账号。\n\n不选的话,稿子发布后只能按标题对数据,两个号发了同标题的笔记会串;复盘里也归不进任何账号的统计。\n(之后可以在「数据复盘 → 发布登记」里批量补上)\n\n仍然不指定账号,继续生成?")) return;
+    if (accts.length && !FL.account && !confirm("还没选发布账号。\n\n不选的话,稿子发布后只能按标题对数据,两个号发了同标题的笔记会串;复盘里也归不进任何账号的统计。\n(之后可以在「数据复盘 → 发布标记」里批量补上)\n\n仍然不指定账号,继续生成?")) return;
     if (prod && !picked) {   // 新产品:先检查素材(传错图、混进别的产品、文案像指令…),有问题让用户选继续还是回去改
       $("#fstart").disabled = true; $("#fstart").textContent = "检查素材中…";
       const go_ = await checkProduct({ name: P.name, images: P.files, selling_points: P.sp, audience: P.aud, forbid: P.forbid });
@@ -429,12 +429,12 @@ async function fOpen(id, list) {
   document.body.classList.add("fl-lock"); await pvFull(list[FL.pv.i]); if (FL.pv) drawPv();
 }
 function closePv() { const dirty = FL.pv?.dirty, op = FL.pv?.opener; FL.pv = null; $(".fl-pv")?.remove(); document.body.classList.remove("fl-lock"); if (dirty) render(); else if (op && op.isConnected) op.focus({ preventScroll: true }); }
-// 成品预览里的发布登记:选发布日期登记;已登记但没对上千帆数据时,可以手动对上;对上的可以取消
+// 成品预览里的发布状态:选发布日期;已标记发布但没对上千帆数据时,可以手动对上;对上的可以取消
 const todayStr = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 function pubPanel(d) {
-  if (d.pub_state) return `<div class="pv-pub"><b>发布登记</b><span class="sub"><span class="lp-st ${d.pub_state}">${d.pub_state === "removed" ? "被平台删除" : "没发出去"}</span>${d.pub_state_note ? ` · ${esc(d.pub_state_note)}` : ""}。这篇不再提醒绑定,也不进复盘统计。</span><div class="pv-pr"><button class="btn gray sm" data-pstate-clear>恢复</button></div></div>`;
-  if (!d.published) return `<div class="pv-pub"><b>发布登记</b><span class="sub">发到小红书后在这里登记,复盘页才会统计它的数据</span><div class="pv-pr"><label class="sub">发布日期 <input type="date" id="pvday" value="${todayStr()}" max="${todayStr()}" style="width:auto"></label><button class="btn sm" data-ppubd>登记已发布</button></div></div>`;
-  return `<div class="pv-pub"><b>发布登记</b><span class="sub">已登记发布${d.published_at ? ` · ${esc(d.published_at)}` : ""}${d.linked ? " · 已手动对上千帆笔记" : d.perf ? (d.perf.matched_by === "cover" ? " · 已按封面自动对上千帆笔记" : " · 已自动对上千帆笔记") : ""}</span>
+  if (d.pub_state) return `<div class="pv-pub"><b>发布状态</b><span class="sub"><span class="lp-st ${d.pub_state}">${d.pub_state === "removed" ? "被平台删除" : "没发出去"}</span>${d.pub_state_note ? ` · ${esc(d.pub_state_note)}` : ""}。这篇不再提醒绑定,也不进复盘统计。</span><div class="pv-pr"><button class="btn gray sm" data-pstate-clear>恢复</button></div></div>`;
+  if (!d.published) return `<div class="pv-pub"><b>发布状态</b><span class="sub">还没发布。发到小红书后点下方「标记已发布」,复盘页才会统计它的数据</span><div class="pv-pr"><label class="sub">发布日期 <input type="date" id="pvday" value="${todayStr()}" max="${todayStr()}" style="width:auto"></label></div></div>`;
+  return `<div class="pv-pub"><b>发布状态</b><span class="sub">已发布${d.published_at ? ` · ${esc(d.published_at)}` : ""}${d.linked ? " · 已手动对上千帆笔记" : d.perf ? (d.perf.matched_by === "cover" ? " · 已按封面自动对上千帆笔记" : " · 已自动对上千帆笔记") : ""}</span>
     <div class="pv-pr">${d.perf ? "" : `<button class="btn gray sm" data-plink>对上千帆笔记</button>`}${d.linked ? `<button class="btn ghost sm" data-punlink>取消对应</button>` : ""}<label class="sub">发布日期 <input type="date" id="pvday" value="${esc(d.published_at || todayStr())}" max="${todayStr()}" style="width:auto"></label><button class="btn gray sm" data-ppubd>修改日期</button></div></div>`;
 }
 const pvRefresh = async d => { const fresh = await api(`/api/library/${d.id}`).catch(() => null); if (fresh) Object.assign(d, fresh); FL.pv && (FL.pv.dirty = true); if (FL.pv) drawPv(); };
@@ -503,7 +503,7 @@ function bindPv(m) {
       return;
     }
     if (e.target.closest("[data-ppubd]")) {
-      try { await api("/api/drafts/publish", "POST", { ids: [d.id], on: true, published_at: $("#pvday").value }); toast("已登记发布"); await pvRefresh(d); bindDialog([d.id], () => pvRefresh(d)); } catch (err) { toast(err.message, 1); }
+      try { await api("/api/drafts/publish", "POST", { ids: [d.id], on: true, published_at: $("#pvday").value }); toast("已标记发布"); await pvRefresh(d); bindDialog([d.id], () => pvRefresh(d)); } catch (err) { toast(err.message, 1); }
       return;
     }
     if (e.target.closest("[data-plink]")) return linkDialog(d.id, d, () => pvRefresh(d));
@@ -511,10 +511,10 @@ function bindPv(m) {
       try { await api(`/api/drafts/${d.id}/link`, "POST", { note_id: "" }); toast("已取消对应"); await pvRefresh(d); } catch (err) { toast(err.message, 1); }
       return;
     }
-    if (e.target.closest("[data-ppub]")) {   // 底部按钮和「发布登记」面板是同一件事:走同一套流程,不再有「标了发布但没选日期、没绑定笔记」的捷径
+    if (e.target.closest("[data-ppub]")) {   // 预览里标记发布只有底部这一个按钮(日期取面板里的日期);点了之后接着弹绑定笔记,没有「标了发布但没选日期、没绑定笔记」的捷径
       try {
         if (d.published) { await api("/api/drafts/publish", "POST", { ids: [d.id], on: false }); toast("已取消发布标记"); await pvRefresh(d); }
-        else { await api("/api/drafts/publish", "POST", { ids: [d.id], on: true, published_at: $("#pvday")?.value || todayStr() }); toast("已登记发布"); await pvRefresh(d); bindDialog([d.id], () => pvRefresh(d)); }
+        else { await api("/api/drafts/publish", "POST", { ids: [d.id], on: true, published_at: $("#pvday")?.value || todayStr() }); toast("已标记发布"); await pvRefresh(d); bindDialog([d.id], () => pvRefresh(d)); }
       } catch (err) { toast(err.message, 1); }
       return;
     }
@@ -931,21 +931,21 @@ async function fLoop(useCache) {   // useCache:切换步骤 / 对比维度时数
   const ov = pg.overview, dr = { data_at: pg.data_at }, c = pg.cfg, rows = pg.rows.items, wins = pg.winners, regList = pg.reg.items;
   const nTodo = ov.tiers.unpublished ?? 0, nNodata = ov.tiers.nodata ?? 0, nWin = ov.tiers.winner ?? 0;
   const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-  // 发布登记:紧凑的笔记卡片(左边封面、右边标题和账号),一屏能放下一批;待登记的整张卡片可点选
+  // 发布标记:紧凑的笔记卡片(左边封面、右边标题和账号),一屏能放下一批;待标记的整张卡片可点选
   const regCv = r => `<span class="lp-cv">${r.cover ? `<img src="${esc(thumb("/images/" + r.cover, 240))}" alt="" loading="lazy" decoding="async">` : `<i>${esc((r.title || "").slice(0, 4))}</i>`}</span>`;
-  const ageTxt = r => r.days == null ? "" : r.days <= 0 ? " · 今天登记" : ` · 登记 ${r.days} 天了`;
+  const ageTxt = r => r.days == null ? "" : r.days <= 0 ? " · 今天标记" : ` · 标记 ${r.days} 天了`;
   const stateTag = r => r.pub_state === "removed" ? `<span class="lp-st removed">被平台删除</span>` : `<span class="lp-st unsent">没发出去</span>`;
   const regRow = r => LP.reg === "todo"
     ? `<label class="lp-rc ${LP.sel.has(r.id) ? "on" : ""}" data-id="${r.id}"><input type="checkbox" data-rsel="${r.id}" ${LP.sel.has(r.id) ? "checked" : ""} aria-label="选择这篇">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${esc(r.account_name || "未指定账号")}</span></span></label>`
     : LP.reg === "done"
       ? `<div class="lp-rc nd" data-id="${r.id}">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${stateTag(r)} ${esc(r.account_name || "未指定账号")}${r.ptype && r.ptype !== "(未标注)" ? ` · ${esc(r.ptype)}` : ""}${r.state_at ? ` · ${esc(r.state_at)}` : ""}</span>${r.state_note ? `<span class="sub">原因:${esc(r.state_note)}</span>` : ""}${r.hits && r.hits.length ? `<span class="sub">这篇命中过的风险词:${r.hits.map(esc).join("、")}</span>` : ""}<span class="lp-ca"><button class="btn gray sm" data-restore="${r.id}" title="标错了:恢复成正常状态">恢复</button></span></span></div>`
-      : `<div class="lp-rc nd${r.stale ? " stale" : ""}" data-id="${r.id}">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${esc(r.account_name || "未指定账号")} · 标了已发布${r.published_at ? `(${esc(String(r.published_at).slice(0, 10))})` : ""}${ageTxt(r)}</span>${r.stale ? `<span class="lp-warn">已经 ${r.days} 天了千帆里还没找到:请核对是真的发出去了(粘贴链接绑上),还是已被平台删除 / 其实没发。</span>` : ""}${lpBind(r)}<span class="lp-ca"><button class="btn gray sm" data-link="${r.id}">搜索更多笔记</button><button class="btn ghost sm" data-unsent="${r.id}" title="其实没发出去 / 不发了:不再催登记">没发出去</button><button class="btn ghost sm" data-removed="${r.id}" title="发出去了但被平台删除:记下原因,当违规样本">被平台删除</button><button class="btn ghost sm" data-unpub="${r.id}" title="先放回待登记,以后再发">取消标记</button></span></span></div>`;
-  const regBlock = `<section class="card" style="margin-top:12px"><div class="card-h"><b>发布登记</b><span class="sub">发布后系统会按标题自动对上千帆数据;这里处理还没登记的和对不上的</span></div>
-    <div class="fl-chips" style="margin-bottom:10px"><button class="chip ${LP.reg === "todo" ? "on" : ""}" data-rtab="todo">待登记发布 ${nTodo}</button><button class="chip ${LP.reg === "nodata" ? "on" : ""}" data-rtab="nodata">标了发布但没对上数据 ${nNodata}${pg.reg.stale ? ` <small class="lp-stale">${pg.reg.stale} 篇超 ${pg.reg.stale_days} 天</small>` : ""}</button><button class="chip ${LP.reg === "done" ? "on" : ""}" data-rtab="done" title="核对后标成「被平台删除 / 没发出去」的稿子">已处理 ${pg.reg.done || 0}</button>${pg.reg.noacc || LP.noacc ? `<button class="chip ${LP.noacc ? "on" : ""}" data-rnoacc title="没指定发布账号的稿子,对号时没有账号保护,也归不进任何账号的统计">只看没指定账号 ${pg.reg.noacc}</button>` : ""}</div>
+      : `<div class="lp-rc nd${r.stale ? " stale" : ""}" data-id="${r.id}">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${esc(r.account_name || "未指定账号")} · 标了已发布${r.published_at ? `(${esc(String(r.published_at).slice(0, 10))})` : ""}${ageTxt(r)}</span>${r.stale ? `<span class="lp-warn">已经 ${r.days} 天了千帆里还没找到:请核对是真的发出去了(粘贴链接绑上),还是已被平台删除 / 其实没发。</span>` : ""}${lpBind(r)}<span class="lp-ca"><button class="btn gray sm" data-link="${r.id}">搜索更多笔记</button><button class="btn ghost sm" data-unsent="${r.id}" title="其实没发出去 / 不发了:不再催标记">没发出去</button><button class="btn ghost sm" data-removed="${r.id}" title="发出去了但被平台删除:记下原因,当违规样本">被平台删除</button><button class="btn ghost sm" data-unpub="${r.id}" title="先放回待标记,以后再发">取消标记</button></span></span></div>`;
+  const regBlock = `<section class="card" style="margin-top:12px"><div class="card-h"><b>发布标记</b><span class="sub">发布后系统会按标题自动对上千帆数据;这里处理还没标记的和对不上的</span></div>
+    <div class="fl-chips" style="margin-bottom:10px"><button class="chip ${LP.reg === "todo" ? "on" : ""}" data-rtab="todo">待标记发布 ${nTodo}</button><button class="chip ${LP.reg === "nodata" ? "on" : ""}" data-rtab="nodata">标了发布但没对上数据 ${nNodata}${pg.reg.stale ? ` <small class="lp-stale">${pg.reg.stale} 篇超 ${pg.reg.stale_days} 天</small>` : ""}</button><button class="chip ${LP.reg === "done" ? "on" : ""}" data-rtab="done" title="核对后标成「被平台删除 / 没发出去」的稿子">已处理 ${pg.reg.done || 0}</button>${pg.reg.noacc || LP.noacc ? `<button class="chip ${LP.noacc ? "on" : ""}" data-rnoacc title="没指定发布账号的稿子,对号时没有账号保护,也归不进任何账号的统计">只看没指定账号 ${pg.reg.noacc}</button>` : ""}</div>
     ${regList.length ? `${LP.reg === "todo" ? `<div class="lp-rbar"><button class="btn gray sm" data-rall>${regList.length && regList.every(r => LP.sel.has(r.id)) ? "取消全选" : `全选本页 ${regList.length} 篇`}</button><span class="sub">已选 <b>${LP.sel.size}</b> 篇</span><label class="sub" style="margin-left:auto">发布日期 <input type="date" id="rday" value="${today}" max="${today}" style="width:auto"></label><button class="btn sm" data-rpub ${LP.sel.size ? "" : "disabled"}>标记已发布</button></div>
       ${accts.length ? `<div class="lp-rbar" style="margin-top:-2px"><span class="sub">给选中的稿子指定发布账号</span><select id="racc" aria-label="发布账号">${accts.map(a => `<option value="${esc(a.account_id)}">${esc(a.name)}</option>`).join("")}</select><button class="btn gray sm" data-racc ${LP.sel.size ? "" : "disabled"}>指定账号</button></div>` : ""}` : `<p class="sub" style="margin:0 0 8px">${LP.reg === "done" ? "这些是核对后标成「被平台删除 / 没发出去」的稿子:不再提醒绑定,也不进复盘统计。被删的会留着原因和命中过的风险词,当违规样本。标错了点「恢复」。" : "一般是发布时改过标题 / 封面,或千帆数据还没同步(当天发的要等一两天)。最久的排最前,超过几天的会提示核对:点候选一键绑定,或粘贴笔记链接;确实没发出去、或被平台删了的,点对应的按钮标出来。"}</p>`}
     <div class="lp-rcs ${LP.reg === "nodata" ? "nd" : ""}">${regList.map(regRow).join("")}</div>${pager(LP.regPage, pg.reg.total, LP_SIZE, "rpg")}`
-      : `<div class="empty" style="border:0;padding:18px">${LP.reg === "todo" ? "所有稿子都登记过了" : LP.reg === "done" ? "还没有处理过的稿子" : "没有对不上的稿子"}</div>`}</section>`;
+      : `<div class="empty" style="border:0;padding:18px">${LP.reg === "todo" ? "所有稿子都标记过了" : LP.reg === "done" ? "还没有处理过的稿子" : "没有对不上的稿子"}</div>`}</section>`;
   const S = ov.steps, se = ov.spawn_effect;
   const names = { withdata: "全部有数据的", winner: "爆款", good: "表现好", normal: "一般", weak: "偏低", observing: "数据还在涨" };
   const tierCnt = k => k === "withdata" ? ["winner", "good", "normal", "weak", "observing"].reduce((t, x) => t + (ov.tiers[x] ?? 0), 0) : (ov.tiers[k] ?? 0);
@@ -990,12 +990,12 @@ async function fLoop(useCache) {   // useCache:切换步骤 / 对比维度时数
       try { const r = await api("/api/drafts/set_account", "POST", { ids: [...LP.sel], account_id: aid }); toast(`已把 ${r.n} 篇指定发布到「${nm}」`); LP.sel.clear(); return fLoop(); } catch (err) { return toast(err.message, 1); }
     }
     if (e.target.closest("[data-rpub]")) {
-      try { const r = await api("/api/drafts/publish", "POST", { ids: [...LP.sel], on: true, published_at: $("#rday").value }); toast(`已登记 ${r.n} 篇为已发布`); const ids = [...LP.sel]; LP.sel.clear(); await fLoop(); return bindDialog(ids); } catch (err) { return toast(err.message, 1); }
+      try { const r = await api("/api/drafts/publish", "POST", { ids: [...LP.sel], on: true, published_at: $("#rday").value }); toast(`已标记 ${r.n} 篇为已发布`); const ids = [...LP.sel]; LP.sel.clear(); await fLoop(); return bindDialog(ids); } catch (err) { return toast(err.message, 1); }
     }
     const up = e.target.closest("[data-unpub]");
     if (up) { try { await api("/api/drafts/publish", "POST", { ids: [+up.dataset.unpub], on: false }); toast("已取消发布标记"); return fLoop(); } catch (err) { return toast(err.message, 1); } }
     const us = e.target.closest("[data-unsent]");
-    if (us) { try { await api("/api/drafts/state", "POST", { ids: [+us.dataset.unsent], state: "unsent" }); toast("已标记:没发出去,不再催登记"); return fLoop(); } catch (err) { return toast(err.message, 1); } }
+    if (us) { try { await api("/api/drafts/state", "POST", { ids: [+us.dataset.unsent], state: "unsent" }); toast("已标记:没发出去,不再催标记"); return fLoop(); } catch (err) { return toast(err.message, 1); } }
     const rm = e.target.closest("[data-removed]"); if (rm) return stateDialog(regList.find(r => r.id === +rm.dataset.removed));
     const rstr = e.target.closest("[data-restore]");
     if (rstr) { try { await api("/api/drafts/state", "POST", { ids: [+rstr.dataset.restore], state: "" }); toast("已恢复"); return fLoop(); } catch (err) { return toast(err.message, 1); } }

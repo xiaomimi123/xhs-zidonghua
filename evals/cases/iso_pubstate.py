@@ -103,4 +103,6 @@ def run(rep, env):
     rep.check("页面:复盘「发布登记」有「已处理」一栏;没对上的显示登记天数和核对提示,带「没发出去 / 被平台删除 / 取消标记」三个按钮;被删弹窗有原因选项;预览里有恢复",
               'data-rtab="done"' in flow and "data-unsent" in flow and "data-removed" in flow and "data-restore" in flow and "function stateDialog" in flow and "STATE_REASONS" in flow
               and "千帆里还没找到:请核对" in flow and "data-pstate-clear" in flow)
+    rep.check("页面:预览里标记发布只有底部一个按钮(面板里不再放「登记已发布」),全站统一叫「标记 / 已发布」,不再出现「登记已发布 / 发布登记」",
+              "登记已发布" not in flow and "发布登记" not in flow and "data-ppub>" in flow and flow.count("data-ppub>") == 1 and "待标记发布" in flow and "发布标记" in flow)
     db.q_exec("DELETE FROM drafts WHERE project_id=?", pj)
