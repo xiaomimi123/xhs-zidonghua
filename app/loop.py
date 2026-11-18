@@ -119,18 +119,19 @@ def reconcile(ev: dict) -> list[dict]:
         flo = (_date(lo) - datetime.timedelta(days=BACK_DAYS)).isoformat()
         a["F"] = sum(1 for d, _ in free.get(aid, []) if d >= flo)
         u, f = a["U"], a["F"]
+        a["short"] = 0   # 至少有几篇没发出去(标了没对上的 − 没认领的笔记,没有没认领的笔记就是全部)
         if not u:
-            a["verdict"], a["kind"] = "对得上", "ok"
+            a["verdict"], a["kind"], a["brief"] = "对得上", "ok", "对得上"
         elif aid not in synced:
-            a["verdict"], a["kind"] = "千帆数据不够新,暂不判断", "wait"
+            a["verdict"], a["kind"], a["brief"] = "千帆数据不够新,暂不判断", "wait", "数据不够新,暂不判断"
         elif f == 0 and (a["min_age"] or 0) < CLOSE_DAYS:
-            a["verdict"], a["kind"] = f"标了 {u} 篇,千帆里还没有对应的新笔记(标记不满 {CLOSE_DAYS} 天,再等等)", "wait"
+            a["verdict"], a["kind"], a["brief"] = f"标了 {u} 篇,千帆里还没有对应的新笔记(标记不满 {CLOSE_DAYS} 天,再等等)", "wait", "标记不满 3 天,再等等"
         elif f == 0:
-            a["verdict"], a["kind"] = f"标了 {u} 篇,千帆里没有任何没认领的新笔记:多半没发出去(系统会自动标成「没发出去」)", "bad"
+            a["verdict"], a["kind"], a["short"], a["brief"] = f"标了 {u} 篇,千帆里没有任何没认领的新笔记:多半没发出去(系统会自动标成「没发出去」)", "bad", u, f"多半没发出去({u} 篇)"
         elif f < u:
-            a["verdict"], a["kind"] = f"标了 {u} 篇没对上,只有 {f} 篇没认领的笔记:至少 {u - f} 篇没发出去", "bad"
+            a["verdict"], a["kind"], a["short"], a["brief"] = f"标了 {u} 篇没对上,只有 {f} 篇没认领的笔记:至少 {u - f} 篇没发出去", "bad", u - f, f"至少 {u - f} 篇没发出去"
         else:
-            a["verdict"], a["kind"] = f"有 {f} 篇没认领的笔记(标了 {u} 篇没对上):可能是改了标题 / 封面发的,去「没对上」里核对", "warn"
+            a["verdict"], a["kind"], a["brief"] = f"有 {f} 篇没认领的笔记(标了 {u} 篇没对上):可能是改了标题 / 封面发的,去「没对上」里核对", "warn", "可能改了标题 / 封面发的"
         out.append(a)
     out.sort(key=lambda a: (-a["U"], -a["N"]))
     return [a for a in out if a["U"] or a["N"]]

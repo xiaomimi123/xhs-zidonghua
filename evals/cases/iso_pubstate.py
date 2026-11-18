@@ -127,6 +127,12 @@ def run(rep, env):
               rec_["acct_ps"]["kind"] == "bad" and "至少" in rec_["acct_ps"]["verdict"] and rec_["acct_ps"]["F"] == 2 and rec_["acct_ps"]["U"] >= 3
               and rec_["acct_ps3"]["kind"] == "warn" and rec_["acct_ps3"]["U"] == 1 and rec_["acct_ps3"]["F"] == 2 and rec_["acct_ps3"]["N"] == 2
               and rec_["acct_ps2"]["kind"] == "bad" and rec_["acct_ps2"]["U"] == 1 and rec_["acct_ps2"]["F"] == 0 and rec_["acct_ps2"]["N"] == 0, str((rec_.get("acct_ps"), rec_.get("acct_ps2"), rec_.get("acct_ps3"))))
+    rep.check("对账带简短判断(brief)和「至少几篇没发出去」(short):多半没发 = 全部,标得比没认领的多 = 差额,可能改版 = 0",
+              rec_["acct_ps2"]["short"] == 1 and rec_["acct_ps"]["short"] == rec_["acct_ps"]["U"] - rec_["acct_ps"]["F"] and rec_["acct_ps3"]["short"] == 0
+              and all(a_.get("brief") for a_ in rec_.values()), str({k: (v["short"], v["brief"]) for k, v in rec_.items()}))
+    pg_r = u.get("/api/loop/page?reg=nodata&size=100&racc=acct_ps3").json()["reg"]
+    pg_all = u.get("/api/loop/page?reg=nodata&size=100").json()["reg"]
+    rep.check("账号对账「去核对」:没对上列表可以只看某个账号(racc),不带则看全部", pg_r["items"] and all(x["account_id"] == "acct_ps3" for x in pg_r["items"]) and pg_all["total"] > pg_r["total"], str((pg_r["total"], pg_all["total"])))
     loop.evaluate(register=True)
     st = lambda i: db.q_one("SELECT published, published_at, pub_state, pub_state_note FROM drafts WHERE id=?", i)
     s_old, s_new, s_na, s_bk, s_cd, s_b = st(x_old), st(x_new), st(x_noacc), st(x_back), st(x_cand), st(x_b)
@@ -145,6 +151,9 @@ def run(rep, env):
     ov_s = loop.review_steps(loop.evaluate(register=False))
     rep.check("近 7 天发布:每天分开算「千帆里已找到」和「只是标了、还没找到」(claimed);复盘数据里带账号对账(recon)", all("claimed" in d_ and d_["claimed"] <= d_["n"] for d_ in ov_s["pub"]["days"]) and "claimed" in ov_s["pub"] and isinstance(ov_s["recon"], list))
     db.q_exec("DELETE FROM qf_snapshots WHERE shop_id='pstest2'")
+    rep.check("页面:账号对账并进「近 7 天发布」卡(默认只一行摘要,点开看明细,只列有问题的账号,对得上的合成一行),有「去核对」;柱状图有图例,叠起来的柱子只有最上面一段有圆角",
+              "data-recon" in flow and "data-gocheck" in flow and "data-rracc-clear" in flow and "lp-legend" in flow and "另有 ${good.length} 个账号对得上" in flow
+              and ".lp-bt i:last-child" in Path("static/style.css").read_text(encoding="utf-8") and "lp-rsum" in flow)
     rep.check("页面:预览里标记发布只有底部一个按钮(面板里不再放「登记已发布」),全站统一叫「标记 / 已发布」,不再出现「登记已发布 / 发布登记」",
               "登记已发布" not in flow and "发布登记" not in flow and "data-ppub>" in flow and flow.count("data-ppub>") == 1 and "没标记发布的" in flow and "发布标记" in flow)
     rep.check("页面:新建任务的发布账号选填(可以不指定,发布时再选);标记已发布前必须有发布账号(预览和批量);复盘「发布标记」默认看「没对上」,「没标记发布的」排在最后",

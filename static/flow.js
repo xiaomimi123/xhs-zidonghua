@@ -697,7 +697,7 @@ function nbOpen(i) {
 }
 
 // ---------- 复盘:发布 → 数据回流 → 谁爆了 → 继续复刻 ----------
-const LP = { tier: "withdata", reg: "nodata", sel: new Set(), page: 1, regPage: 1, winAll: false, noacc: false, step: "result", cmp: "account" };
+const LP = { tier: "withdata", reg: "nodata", racc: "", reconOpen: false, sel: new Set(), page: 1, regPage: 1, winAll: false, noacc: false, step: "result", cmp: "account" };
 try { LP.step = localStorage.lpStep || "result"; } catch { }
 const LP_WIN = 6;   // 爆款榜默认先列几篇
 const LP_SIZE = 20;   // 复盘页每个列表每页条数
@@ -861,13 +861,19 @@ function lpStepBar(S, ov) {
 }
 function lpStepPublish(S, ov, regBlock) {
   const mx = Math.max(1, ...S.pub.days.map(d => d.n));
-  // 实心 = 千帆里已经找到的笔记(按笔记真实发布日期);浅色 = 员工标了已发布、千帆里还没找到(按标记的日期,不一定真发了)
-  const bars = `<div class="lp-bars" role="img" aria-label="近 7 天每天发布数">${S.pub.days.map(d => `<div class="lp-bar"><b>${d.n}</b><div class="lp-bt" title="${d.n - d.claimed} 篇已在千帆里找到${d.claimed ? `,${d.claimed} 篇只是标了发布、千帆里还没找到` : ""}"><i style="height:${Math.round((d.n - d.claimed) / mx * 100)}%"></i>${d.claimed ? `<i class="cl" style="height:${Math.round(d.claimed / mx * 100)}%"></i>` : ""}</div><span>${d.day}</span></div>`).join("")}</div>`;
+  // 实心 = 千帆里已经找到的笔记(按笔记真实发布日期);浅色斜纹 = 员工标了已发布、千帆里还没找到(按标记的日期,不一定真发了)
+  const bars = `<div class="lp-bars" role="img" aria-label="近 7 天每天发布数">${S.pub.days.map(d => { const ok = d.n - d.claimed; return `<div class="lp-bar"><b>${d.n}</b><div class="lp-bt" title="${ok} 篇已在千帆里找到${d.claimed ? `,${d.claimed} 篇只是标了发布、千帆里还没找到` : ""}">${ok > 0 || !d.n ? `<i style="height:${Math.round(ok / mx * 100)}%"></i>` : ""}${d.claimed ? `<i class="cl" style="height:${Math.round(d.claimed / mx * 100)}%"></i>` : ""}</div><span>${d.day}</span></div>`; }).join("")}</div>
+    <div class="lp-legend"><span><i></i>千帆里已找到的笔记</span><span><i class="cl"></i>只标了发布、千帆里还没找到</span></div>`;
+  // 账号对账:默认只露一行摘要,点开看每个账号;只列有问题的,对得上的合成一行
+  const rec = S.recon || [], bad = rec.filter(a => a.kind === "bad"), warn = rec.filter(a => a.kind === "warn"), wait = rec.filter(a => a.kind === "wait"), good = rec.filter(a => a.kind === "ok");
+  const lost = bad.reduce((n, a) => n + (a.short || 0), 0);
+  const sum = !rec.length ? "" : [bad.length ? `<b class="lp-rbad">${bad.length} 个账号标的比千帆里多(至少 ${lost} 篇没发出去)</b>` : "", warn.length ? `${warn.length} 个账号可能是改了标题 / 封面发的` : "", wait.length ? `${wait.length} 个账号等数据` : "", !bad.length && !warn.length && !wait.length ? "都对得上" : ""].filter(Boolean).join(";");
+  const recRows = rec.filter(a => a.kind !== "ok").map(a => `<tr><td>${esc(a.name)}</td><td class="num">${a.N}</td><td class="num">${a.K}</td><td class="num">${a.U || "-"}</td><td class="lp-rv ${a.kind}" title="${esc(a.verdict)}">${esc(a.brief || a.verdict)}</td><td>${a.kind === "bad" || a.kind === "warn" ? `<button class="btn ghost sm" data-gocheck="${esc(a.account_id)}">去核对</button>` : ""}</td></tr>`).join("");
+  const recBlock = !rec.length ? "" : `<div class="lp-rec"><button class="lp-rsum" data-recon aria-expanded="${LP.reconOpen}"><span>账号对账</span><em>${sum}</em><i>${LP.reconOpen ? "收起 ▴" : "展开 ▾"}</i></button>
+    ${LP.reconOpen ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>账号</th><th class="num">千帆里发了</th><th class="num">对上稿子</th><th class="num">标了没对上</th><th>判断</th><th></th></tr></thead><tbody>${recRows}</tbody></table></div>${good.length ? `<p class="sub" style="margin:6px 0 0">另有 ${good.length} 个账号对得上:${good.map(a => esc(a.name)).join("、")}</p>` : ""}<p class="sub" style="margin:6px 0 0">近 7 天,按账号对:千帆里实际发的笔记,对照员工标了发布却没对上的稿子。账号自己发的笔记也算在「千帆里发了」里,所以数量对得上只是「可能」;标记满 ${S.recon_days || 3} 天、这个账号还是没有任何没认领的新笔记的,系统会自动标成「没发出去」(可在「已处理」里恢复)。</p>` : ""}</div>`;
   const ad = ov.adherence || [], bt = Object.fromEntries(((ov.bind_todo || {}).people || []).map(p => [p.name, p]));
   const people = ad.length > 1 ? `<section class="card flush" style="margin-top:12px"><div class="card-h" style="padding:12px 14px"><b>各人发布情况</b><span class="sub">没绑定笔记的稿子,数据追踪不到</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>发布人</th><th class="num">已发布</th><th class="num">已绑定</th><th class="num">没绑定</th><th class="num">绑定率</th></tr></thead><tbody>${ad.map(a => `<tr><td>${esc(a.name)}</td><td class="num">${a.published}</td><td class="num">${a.linked}</td><td class="num">${(bt[a.name] || {}).n ?? a.published - a.linked}</td><td class="num">${a.link_rate == null ? "—" : Math.round(a.link_rate * 100) + "%"}</td></tr>`).join("")}</tbody></table></div></section>` : "";
-  const rec = S.recon || [];
-  const recBlock = rec.length ? `<section class="card flush" style="margin-top:12px"><div class="card-h" style="padding:12px 14px"><b>账号对账</b><span class="sub">近 7 天:每个账号在千帆里实际发了几篇,对照员工标了几篇没对上</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>账号</th><th class="num">千帆里发了</th><th class="num">对上我们的稿子</th><th class="num">标了没对上</th><th class="num">没认领的笔记</th><th>判断</th></tr></thead><tbody>${rec.map(a => `<tr><td>${esc(a.name)}</td><td class="num">${a.N}</td><td class="num">${a.K}</td><td class="num">${a.U || "-"}</td><td class="num">${a.F}</td><td class="lp-rv ${a.kind}">${esc(a.verdict)}</td></tr>`).join("")}</tbody></table></div><p class="sub" style="margin:8px 14px 12px">「没认领的笔记」里可能有不是系统生成的(账号自己发的),所以数量对得上只是「可能」。标记满 ${S.recon_days || 3} 天、期间千帆同步过、这个账号还是没有任何没认领的新笔记的,系统会自动标成「没发出去」(在「已处理」里可恢复,以后找到了会自动恢复)。</p></section>` : "";
-  return `<section class="card"><div class="card-h"><b>近 7 天发布</b><span class="sub">本周 ${S.pub.week} 篇,${lpWk(S.pub.week, S.pub.last_week)}${S.pub.claimed ? `;其中 ${S.pub.claimed} 篇只是标了发布、千帆里还没找到(浅色部分)` : ""}</span></div>${bars}</section>${recBlock}${people}${regBlock}`;
+  return `<section class="card"><div class="card-h"><b>近 7 天发布</b><span class="sub">本周 ${S.pub.week} 篇,${lpWk(S.pub.week, S.pub.last_week)}${S.pub.claimed ? `;其中 ${S.pub.claimed} 篇只是标了发布、千帆里还没找到(浅色部分)` : ""}</span></div>${bars}${recBlock}</section>${people}${regBlock}`;
 }
 function lpStepData(S, ov) {
   const d = S.data, bt = ov.bind_todo || { total: 0, old: 0 };
@@ -933,7 +939,7 @@ async function fLoop(useCache) {   // useCache:切换步骤 / 对比维度时数
   let pg, accts;
   if (useCache && LP.cache) ({ pg, accts } = LP.cache);
   else {
-    pg = await api(`/api/loop/page?tier=${LP.tier}&page=${LP.page}&reg=${LP.reg}&regpage=${LP.regPage}&size=${LP_SIZE}&noacc=${LP.noacc ? 1 : 0}`);   // 一次请求,各列表按页取
+    pg = await api(`/api/loop/page?tier=${LP.tier}&page=${LP.page}&reg=${LP.reg}&regpage=${LP.regPage}&size=${LP_SIZE}&noacc=${LP.noacc ? 1 : 0}&racc=${encodeURIComponent(LP.racc || "")}`);   // 一次请求,各列表按页取
     accts = await fetchAccts();   // 批量指定发布账号的下拉
     LP.cache = { pg, accts };
   }
@@ -952,7 +958,7 @@ async function fLoop(useCache) {   // useCache:切换步骤 / 对比维度时数
       ? `<div class="lp-rc nd" data-id="${r.id}">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${stateTag(r)} ${esc(r.account_name || "未指定账号")}${r.ptype && r.ptype !== "(未标注)" ? ` · ${esc(r.ptype)}` : ""}${r.state_at ? ` · ${esc(r.state_at)}` : ""}</span>${r.state_note ? `<span class="sub">原因:${esc(r.state_note)}</span>` : ""}${r.hits && r.hits.length ? `<span class="sub">这篇命中过的风险词:${r.hits.map(esc).join("、")}</span>` : ""}<span class="lp-ca"><button class="btn gray sm" data-restore="${r.id}" title="标错了:恢复成正常状态">恢复</button></span></span></div>`
       : `<div class="lp-rc nd${r.stale ? " stale" : ""}" data-id="${r.id}">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${esc(r.account_name || "未指定账号")} · 标了已发布${r.published_at ? `(${esc(String(r.published_at).slice(0, 10))})` : ""}${ageTxt(r)}</span>${r.stale ? `<span class="lp-warn">已经 ${r.days} 天了千帆里还没找到:请核对是真的发出去了(粘贴链接绑上),还是已被平台删除 / 其实没发。</span>` : ""}${lpBind(r)}<span class="lp-ca"><button class="btn gray sm" data-link="${r.id}">搜索更多笔记</button><button class="btn ghost sm" data-unsent="${r.id}" title="其实没发出去 / 不发了:不再催标记">没发出去</button><button class="btn ghost sm" data-removed="${r.id}" title="发出去了但被平台删除:记下原因,当违规样本">被平台删除</button><button class="btn ghost sm" data-unpub="${r.id}" title="先放回待标记,以后再发">取消标记</button></span></span></div>`;
   const regBlock = `<section class="card" style="margin-top:12px"><div class="card-h"><b>发布标记</b><span class="sub">发布后系统会按标题和封面自动对上千帆数据,这里只需要处理对不上的;没标记发布的稿子在最后一栏批量标记</span></div>
-    <div class="fl-chips" style="margin-bottom:10px"><button class="chip ${LP.reg === "nodata" ? "on" : ""}" data-rtab="nodata">标了发布但没对上数据 ${nNodata}${pg.reg.stale ? ` <small class="lp-stale">${pg.reg.stale} 篇超 ${pg.reg.stale_days} 天</small>` : ""}</button><button class="chip ${LP.reg === "done" ? "on" : ""}" data-rtab="done" title="核对后标成「被平台删除 / 没发出去」的稿子">已处理 ${pg.reg.done || 0}</button><button class="chip ${LP.reg === "todo" ? "on" : ""}" data-rtab="todo" title="还没标记发布的稿子:发出去的在这里批量标记已发布">没标记发布的 ${nTodo}</button>${pg.reg.noacc || LP.noacc ? `<button class="chip ${LP.noacc ? "on" : ""}" data-rnoacc title="没指定发布账号的稿子,对号时没有账号保护,也归不进任何账号的统计">只看没指定账号 ${pg.reg.noacc}</button>` : ""}</div>
+    <div class="fl-chips" style="margin-bottom:10px"><button class="chip ${LP.reg === "nodata" ? "on" : ""}" data-rtab="nodata">标了发布但没对上数据 ${nNodata}${pg.reg.stale ? ` <small class="lp-stale">${pg.reg.stale} 篇超 ${pg.reg.stale_days} 天</small>` : ""}</button><button class="chip ${LP.reg === "done" ? "on" : ""}" data-rtab="done" title="核对后标成「被平台删除 / 没发出去」的稿子">已处理 ${pg.reg.done || 0}</button><button class="chip ${LP.reg === "todo" ? "on" : ""}" data-rtab="todo" title="还没标记发布的稿子:发出去的在这里批量标记已发布">没标记发布的 ${nTodo}</button>${LP.racc ? `<button class="chip on" data-rracc-clear title="点一下取消,看所有账号">只看「${esc(LP.raccName || "这个账号")}」 ✕</button>` : ""}${pg.reg.noacc || LP.noacc ? `<button class="chip ${LP.noacc ? "on" : ""}" data-rnoacc title="没指定发布账号的稿子,对号时没有账号保护,也归不进任何账号的统计">只看没指定账号 ${pg.reg.noacc}</button>` : ""}</div>
     ${regList.length ? `${LP.reg === "todo" ? `<div class="lp-rbar"><button class="btn gray sm" data-rall>${regList.length && regList.every(r => LP.sel.has(r.id)) ? "取消全选" : `全选本页 ${regList.length} 篇`}</button><span class="sub">已选 <b>${LP.sel.size}</b> 篇</span><label class="sub" style="margin-left:auto">发布日期 <input type="date" id="rday" value="${today}" max="${today}" style="width:auto"></label><button class="btn sm" data-rpub ${LP.sel.size ? "" : "disabled"}>标记已发布</button></div>
       ${accts.length ? `<div class="lp-rbar" style="margin-top:-2px"><span class="sub">给选中的稿子指定发布账号</span><select id="racc" aria-label="发布账号">${accts.map(a => `<option value="${esc(a.account_id)}">${esc(a.name)}</option>`).join("")}</select><button class="btn gray sm" data-racc ${LP.sel.size ? "" : "disabled"}>指定账号</button></div>` : ""}` : `<p class="sub" style="margin:0 0 8px">${LP.reg === "done" ? "这些是核对后标成「被平台删除 / 没发出去」的稿子:不再提醒绑定,也不进复盘统计。被删的会留着原因和命中过的风险词,当违规样本。标错了点「恢复」。" : "一般是发布时改过标题 / 封面,或千帆数据还没同步(当天发的要等一两天)。最久的排最前,超过几天的会提示核对:点候选一键绑定,或粘贴笔记链接;确实没发出去、或被平台删了的,点对应的按钮标出来。"}</p>`}
     <div class="lp-rcs ${LP.reg === "nodata" ? "nd" : ""}">${regList.map(regRow).join("")}</div>${pager(LP.regPage, pg.reg.total, LP_SIZE, "rpg")}`
@@ -990,6 +996,13 @@ async function fLoop(useCache) {   // useCache:切换步骤 / 对比维度时数
     if (e.target.closest("[data-rall]")) { LP.sel = regList.length && regList.every(r => LP.sel.has(r.id)) ? new Set() : new Set([...LP.sel, ...regList.map(r => r.id)]); return syncSel(); }
     const flags = el => { const c = el.closest(".lp-rc"); return { cover: !!c.querySelector("[data-ed=cover]")?.checked, body: !!c.querySelector("[data-ed=body]")?.checked }; };
     const bindDone = r => { toast(r.pending ? "已记下,千帆数据同步后会自动对上" : "已对上,数据会出现在复盘里"); return fLoop(); };
+    if (e.target.closest("[data-recon]")) { LP.reconOpen = !LP.reconOpen; return fLoop(true); }
+    const gc = e.target.closest("[data-gocheck]");
+    if (gc) {   // 账号对账里点「去核对」:切到「没对上」,只看这个账号的
+      LP.step = "publish"; LP.reg = "nodata"; LP.racc = gc.dataset.gocheck; LP.raccName = (gc.closest("tr")?.firstElementChild?.textContent || "").trim(); LP.regPage = 1; LP.noacc = false; LP.sel.clear();
+      await fLoop(); return $(".lp-rcs")?.scrollIntoView({ block: "start" });
+    }
+    if (e.target.closest("[data-rracc-clear]")) { LP.racc = ""; LP.regPage = 1; return fLoop(); }
     if (e.target.closest("[data-gobind]")) { LP.step = "publish"; LP.reg = "nodata"; LP.regPage = 1; LP.sel.clear(); await fLoop(); return $(".lp-rcs")?.scrollIntoView({ block: "start" }); }
     const qk = e.target.closest("[data-quick]");
     if (qk) { const [did, nid] = qk.dataset.quick.split(":"); try { return bindDone(await api(`/api/drafts/${did}/link`, "POST", { note_id: nid, ...flags(qk) })); } catch (err) { return toast(err.message, 1); } }

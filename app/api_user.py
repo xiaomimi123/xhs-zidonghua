@@ -1023,7 +1023,7 @@ def loop_drafts(tier: str = "", account_id: str = ""):
 
 
 @router.get("/api/loop/page")
-def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1, size: int = 20, wins: int = 12, noacc: int = 0):
+def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1, size: int = 20, wins: int = 12, noacc: int = 0, racc: str = ""):
     """复盘页一次取齐:只算一次对号,各个列表按页切(原来要请求 5 次,每次都重算,稿子多了很慢)。"""
     size = min(max(size, 1), 100)
     ev = _my_eval()
@@ -1042,6 +1042,8 @@ def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1
     n_noacc = sum(1 for r in regs if not r["account_id"])   # 没指定发布账号的有几篇(「只看没指定账号」按钮上显示)
     if noacc:
         regs = [r for r in regs if not r["account_id"]]
+    if racc:   # 账号对账里点「去核对」:只看这个账号的
+        regs = [r for r in regs if r["account_id"] == racc]
     page = min(max(page, 1), max(1, -(-len(rows) // size)))
     regpage = min(max(regpage, 1), max(1, -(-len(regs) // size)))
     reg_items = regs[(regpage - 1) * size:regpage * size]
