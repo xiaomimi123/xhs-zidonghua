@@ -105,19 +105,35 @@ def run(rep, env):
               and "千帆里还没找到:请核对" in flow and "data-pstate-clear" in flow)
     # ---- 系统自动判断:标了发布超过 7 天、千帆同步后还是找不到 → 多半没发出去 ----
     x_old = mk("自动判断测试甲:标了十天找不到", 1, day(10))
-    x_new = mk("自动判断测试乙:标了三天找不到", 1, day(3))
+    x_new = mk("自动判断测试乙:标了两天找不到", 1, day(2))
+    x_cand = mk("自动判断测试戊:标了六天,但这几天账号有没认领的笔记", 1, day(6))
+    x_b = mk("自动判断测试己:另一个账号标了四天", 1, day(4))
+    db.q_exec("UPDATE drafts SET account_id='acct_ps2', account_name='对账号二' WHERE id=?", x_b)
+    x_c3 = mk("自动判断测试庚:第三个账号标了一篇", 1, day(2))
+    db.q_exec("UPDATE drafts SET account_id='acct_ps3', account_name='对账号三' WHERE id=?", x_c3)
     x_noacc = mk("自动判断测试丙:账号没采集", 1, day(10))
     db.q_exec("UPDATE drafts SET account_id='acct_none', account_name='没采集的号' WHERE id=?", x_noacc)
     x_back = mk("自动判断测试丁:十天前标的但笔记其实在", 1, day(10))
     qianfan.ingest({"kind": "notes", "shop_id": "pstest2", "shop_name": "自动判断店", "items": [
         {"note_id": "AU1", "title": "自动判断测试丁:十天前标的但笔记其实在", "views": 30, "likes": 2, "collects": 1, "comments": 0, "published_at": day(9), "account_id": "acct_ps", "account_name": "状态号"},
-        {"note_id": "AU2", "title": "这是这个账号别的笔记和稿子无关", "views": 30, "likes": 2, "collects": 1, "comments": 0, "published_at": day(1), "account_id": "acct_ps", "account_name": "状态号"}]})
+        {"note_id": "AU2", "title": "这是这个账号别的笔记和稿子无关", "views": 30, "likes": 2, "collects": 1, "comments": 0, "published_at": day(1), "account_id": "acct_ps", "account_name": "状态号"},
+        {"note_id": "AU4", "title": "完全不一样的标题,但就在标记那几天发的", "views": 30, "likes": 2, "collects": 1, "comments": 0, "published_at": day(5), "account_id": "acct_ps", "account_name": "状态号"},
+        {"note_id": "AU6", "title": "第三个账号的第一篇笔记", "views": 30, "likes": 2, "collects": 1, "comments": 0, "published_at": day(2), "account_id": "acct_ps3", "account_name": "对账号三"},
+        {"note_id": "AU7", "title": "第三个账号的第二篇笔记", "views": 30, "likes": 2, "collects": 1, "comments": 0, "published_at": day(1), "account_id": "acct_ps3", "account_name": "对账号三"},
+        {"note_id": "AU5", "title": "另一个账号很久以前的笔记", "views": 30, "likes": 2, "collects": 1, "comments": 0, "published_at": day(30), "account_id": "acct_ps2", "account_name": "对账号二"}]})
+    rec_ev = loop.evaluate(register=False)
+    rec_ = {a["account_id"]: a for a in loop.reconcile(rec_ev)}
+    rep.check("账号对账:标了没对上的比没认领的笔记多 → 「至少 N 篇没发出去」(bad);没认领的笔记不少于标了没对上的 → 「可能是改了标题 / 封面发的」(warn);没有任何没认领的笔记且标满 3 天 → 「多半没发出去」(bad);N / K / U / F 数量对得上",
+              rec_["acct_ps"]["kind"] == "bad" and "至少" in rec_["acct_ps"]["verdict"] and rec_["acct_ps"]["F"] == 2 and rec_["acct_ps"]["U"] >= 3
+              and rec_["acct_ps3"]["kind"] == "warn" and rec_["acct_ps3"]["U"] == 1 and rec_["acct_ps3"]["F"] == 2 and rec_["acct_ps3"]["N"] == 2
+              and rec_["acct_ps2"]["kind"] == "bad" and rec_["acct_ps2"]["U"] == 1 and rec_["acct_ps2"]["F"] == 0 and rec_["acct_ps2"]["N"] == 0, str((rec_.get("acct_ps"), rec_.get("acct_ps2"), rec_.get("acct_ps3"))))
     loop.evaluate(register=True)
     st = lambda i: db.q_one("SELECT published, published_at, pub_state, pub_state_note FROM drafts WHERE id=?", i)
-    s_old, s_new, s_na, s_bk = st(x_old), st(x_new), st(x_noacc), st(x_back)
-    rep.check("自动判断:标了 10 天、账号的笔记采集到了、千帆里还是找不到 → 系统标成「没发出去」并写明「系统判断」;标了 3 天的、账号没采集的不动;笔记其实在的按笔记对上(已发布)",
+    s_old, s_new, s_na, s_bk, s_cd, s_b = st(x_old), st(x_new), st(x_noacc), st(x_back), st(x_cand), st(x_b)
+    rep.check("自动判断:标了 10 天、窗口(标记日前 2 天到后 3 天)已过完、账号这几天没有任何没认领的笔记 → 系统标成「没发出去」并写明「系统判断」;标了 2 天的(窗口没过完)、账号没采集的不动;窗口里有没认领笔记的(可能是改了标题发的)不判;笔记其实在的按笔记对上(已发布)",
               s_old["pub_state"] == "unsent" and s_old["published"] == 0 and s_old["pub_state_note"].startswith("系统判断") and s_new["pub_state"] == "" and s_new["published"] == 1
-              and s_na["pub_state"] == "" and s_na["published"] == 1 and s_bk["pub_state"] == "" and s_bk["published"] == 1, str((s_old, s_new, s_na, s_bk)))
+              and s_na["pub_state"] == "" and s_na["published"] == 1 and s_bk["pub_state"] == "" and s_bk["published"] == 1
+              and s_cd["pub_state"] == "" and s_cd["published"] == 1 and s_b["pub_state"] == "unsent", str((s_old, s_new, s_na, s_bk, s_cd, s_b)))
     pgd2 = u.get("/api/loop/page?reg=done&size=100").json()
     dm2 = {x["id"]: x for x in pgd2["reg"]["items"]}
     rep.check("自动判断的稿子出现在「已处理」里,带原因(系统判断),可以恢复", x_old in dm2 and dm2[x_old]["state_note"].startswith("系统判断") and dm2[x_old]["tier"] == "unsent")
@@ -127,7 +143,7 @@ def run(rep, env):
     s_old2 = st(x_old)
     rep.check("以后千帆里找到了这篇:系统判断自动恢复,按笔记登记为已发布(发布日期取笔记的)", s_old2["pub_state"] == "" and s_old2["published"] == 1 and s_old2["published_at"] == day(8), str(s_old2))
     ov_s = loop.review_steps(loop.evaluate(register=False))
-    rep.check("近 7 天发布:每天分开算「千帆里已找到」和「只是标了、还没找到」(claimed)", all("claimed" in d_ and d_["claimed"] <= d_["n"] for d_ in ov_s["pub"]["days"]) and "claimed" in ov_s["pub"])
+    rep.check("近 7 天发布:每天分开算「千帆里已找到」和「只是标了、还没找到」(claimed);复盘数据里带账号对账(recon)", all("claimed" in d_ and d_["claimed"] <= d_["n"] for d_ in ov_s["pub"]["days"]) and "claimed" in ov_s["pub"] and isinstance(ov_s["recon"], list))
     db.q_exec("DELETE FROM qf_snapshots WHERE shop_id='pstest2'")
     rep.check("页面:预览里标记发布只有底部一个按钮(面板里不再放「登记已发布」),全站统一叫「标记 / 已发布」,不再出现「登记已发布 / 发布登记」",
               "登记已发布" not in flow and "发布登记" not in flow and "data-ppub>" in flow and flow.count("data-ppub>") == 1 and "没标记发布的" in flow and "发布标记" in flow)

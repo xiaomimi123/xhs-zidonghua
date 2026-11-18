@@ -28,7 +28,9 @@ def _cover_kind(d: dict) -> str:
 TIERS = {"winner": "爆款", "good": "表现好", "normal": "一般", "weak": "偏低", "observing": "数据还在涨", "nodata": "没绑定笔记", "unpublished": "未发布",
          "removed": "被平台删除", "unsent": "没发出去"}
 INACTIVE = ("removed", "unsent")   # 员工标成「被平台删除 / 没发出去」的稿子:不算「标了发布但没对上」,也不进复盘统计
-AUTO_UNSENT_DAYS = 7                # 标了发布超过这么多天,期间千帆同步过、账号的笔记也采集到了、还是找不到:系统自己判断「多半没发出去」(标成「没发出去」,以后找到了会自动恢复)
+CLOSE_DAYS = 3                      # 对账窗口:标记日往后这么多天内千帆发出的笔记,都可能是这篇(员工常常早点了标记,过几天才真的发)
+BACK_DAYS = 2                       # 也往前看这么多天(晚一两天才补标记)
+RECON_DAYS = 7                      # 账号对账表看最近几天标记的稿子
 AUTO_NOTE = "系统判断"
 STALE_DAYS = 2                      # 标了发布超过这么多天,千帆里还找不到对应的笔记:提示员工核对(是真的发出去了,还是被删了 / 其实没发)
 WITH_DATA = ("winner", "good", "normal", "weak", "observing")   # 已经对上千帆笔记、有数据的
@@ -63,6 +65,75 @@ def _baselines(items: list[dict]) -> dict[str, tuple[str, float]]:
         metric = "eng" if sum(e) / len(e) >= 2 else "views"
         out[a] = (metric, qianfan._trimmed_mean(e if metric == "eng" else [r.get("views") or 0 for r in rows]))
     return out
+
+
+def _date(s: str) -> datetime.date:
+    return datetime.date.fromisoformat(str(s)[:10])
+
+
+def _free_notes(items: list[dict], taken: set) -> dict[str, list[tuple[str, str]]]:
+    """每个账号「没被任何稿子认领」的笔记 [(发布日期, 笔记 id)]:有账号 ID、有标题。账号里本来就有不是系统生成的笔记(自己写的),它们也在这里,
+    所以只能说「有没认领的笔记」,不能说「一定是哪篇」。"""
+    out: dict[str, list] = defaultdict(list)
+    for it in items:
+        nid = str(it.get("note_id") or "")
+        if nid and nid not in taken and it.get("account_id") and it.get("title") and re.match(r"\d{4}-\d{2}-\d{2}", str(it.get("published_at") or "")):
+            out[it["account_id"]].append((str(it["published_at"])[:10], nid))
+    return out
+
+
+def _window_free(free: dict, aid: str, mday: str) -> list[str]:
+    """标记日 mday 的窗口(往前 BACK_DAYS 天、往后 CLOSE_DAYS 天)里,这个账号没认领的笔记。"""
+    try:
+        lo, hi = (_date(mday) - datetime.timedelta(days=BACK_DAYS)).isoformat(), (_date(mday) + datetime.timedelta(days=CLOSE_DAYS)).isoformat()
+    except ValueError:
+        return []
+    return [n for d, n in free.get(aid, []) if lo <= d <= hi]
+
+
+def reconcile(ev: dict) -> list[dict]:
+    """账号对账:最近 RECON_DAYS 天,每个账号 千帆里发了几篇(N)/ 其中对上了我们的稿子(K)/ 标了发布但没对上(U)/ 没被认领的笔记(F);
+    再给一句判断。判断只看「标了没对上」的稿子和「没认领的笔记」的数量:没认领的笔记里可能有不是系统生成的(自己写的),所以数量对得上也只是「可能」。"""
+    today = datetime.date.today()
+    lo = (today - datetime.timedelta(days=RECON_DAYS - 1)).isoformat()
+    taken, items = ev.get("taken") or set(), ev.get("notes") or []
+    synced = _synced_accounts(items, ev.get("data_at") or "")
+    free = _free_notes(items, taken)
+    acc: dict[str, dict] = {}
+    get = lambda aid, name="": acc.setdefault(aid, {"account_id": aid, "name": name, "N": 0, "K": 0, "U": 0, "F": 0, "min_age": None})
+    for it in items:
+        aid, d = it.get("account_id"), str(it.get("published_at") or "")[:10]
+        if aid and lo <= d <= today.isoformat():
+            a = get(aid, it.get("account_name") or "")
+            a["N"] += 1
+            a["K"] += str(it.get("note_id")) in taken
+    for r in ev["rows"]:
+        if r["tier"] == "nodata" and r.get("account_id") and str(r.get("published_at") or "")[:10] >= lo:
+            a = get(r["account_id"], r.get("account_name") or "")
+            a["U"] += 1
+            age = _days_since(r["published_at"])
+            a["min_age"] = age if a["min_age"] is None else min(a["min_age"], age if age is not None else 99)
+    out = []
+    for aid, a in acc.items():
+        a["name"] = a["name"] or qianfan.account_name(aid) or aid[:6]
+        flo = (_date(lo) - datetime.timedelta(days=BACK_DAYS)).isoformat()
+        a["F"] = sum(1 for d, _ in free.get(aid, []) if d >= flo)
+        u, f = a["U"], a["F"]
+        if not u:
+            a["verdict"], a["kind"] = "对得上", "ok"
+        elif aid not in synced:
+            a["verdict"], a["kind"] = "千帆数据不够新,暂不判断", "wait"
+        elif f == 0 and (a["min_age"] or 0) < CLOSE_DAYS:
+            a["verdict"], a["kind"] = f"标了 {u} 篇,千帆里还没有对应的新笔记(标记不满 {CLOSE_DAYS} 天,再等等)", "wait"
+        elif f == 0:
+            a["verdict"], a["kind"] = f"标了 {u} 篇,千帆里没有任何没认领的新笔记:多半没发出去(系统会自动标成「没发出去」)", "bad"
+        elif f < u:
+            a["verdict"], a["kind"] = f"标了 {u} 篇没对上,只有 {f} 篇没认领的笔记:至少 {u - f} 篇没发出去", "bad"
+        else:
+            a["verdict"], a["kind"] = f"有 {f} 篇没认领的笔记(标了 {u} 篇没对上):可能是改了标题 / 封面发的,去「没对上」里核对", "warn"
+        out.append(a)
+    out.sort(key=lambda a: (-a["U"], -a["N"]))
+    return [a for a in out if a["U"] or a["N"]]
 
 
 def _synced_accounts(items: list[dict], at: str) -> dict[str, str]:
@@ -205,13 +276,17 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
                 d["feat"] = fresh[d["id"]]
     rows = []
     synced = _synced_accounts(items, at)
+    taken = {str(v.get("note_id")) for v in perf.values()}
+    free = _free_notes(items, taken)
     for d in drafts:
         it = perf.get(d["id"])
-        if (register and not it and d["published"] and not d.get("pub_state") and d["account_id"] in synced
-                and (_days_since(d["published_at"]) or 0) >= AUTO_UNSENT_DAYS and str(d["published_at"] or "")[:10] < synced[d["account_id"]]):
-            # 员工标了「已发布」,过了好几天、千帆之后也同步过这个账号的笔记,还是找不到:多半没发出去(或被删了)。系统自己标成「没发出去」,不用人一篇篇核对;
+        mday = str(d["published_at"] or "")[:10]
+        if (register and not it and d["published"] and not d.get("pub_state") and d["account_id"] in synced and mday
+                and (_date(synced[d["account_id"]]) - _date(mday)).days >= CLOSE_DAYS and not _window_free(free, d["account_id"], mday)):
+            # 对账:员工标了「已发布」,标记日往后 CLOSE_DAYS 天的窗口已经过完、这期间千帆也同步过这个账号,可是这个账号在窗口里没有一篇「没被任何稿子认领的新笔记」
+            # (标题、封面改了发出去的话,至少会留下一篇没人认领的笔记)→ 这篇多半没发出去(或被删了)。系统自己标成「没发出去」,不用人一篇篇核对;
             # 记下原因,在「已处理」里看得到;以后千帆里找到了这篇会自动恢复(见下面 st and it)
-            note = f"{AUTO_NOTE}:标记发布 {_days_since(d['published_at'])} 天,千帆同步后仍没找到这篇笔记"
+            note = f"{AUTO_NOTE}:标记发布 {_days_since(mday)} 天,这个账号这几天在千帆里没有任何没被认领的新笔记"
             q_exec("UPDATE drafts SET pub_state='unsent', pub_state_note=?, pub_state_at=?, published=0, published_at='' WHERE id=?", note, time.strftime("%Y-%m-%d %H:%M"), d["id"])
             d["pub_state"], d["published"], d["published_at"], d["pub_state_note"] = "unsent", 0, "", note
         if it and register and not d["published"]:
@@ -244,7 +319,7 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
                      "comments": (it or {}).get("comments"), "eng": _eng(it) if it else None,
                      "feat": d["feat"] if isinstance(d["feat"], dict) else None, "edit": edit_info(pe, ts) if it else None,
                      "cover_kind": _cover_kind(d), "cover_name": COVER_KINDS.get(_cover_kind(d), "(旧稿没记录)"), "cover_layout": (d["cover_card"] or {}).get("layout", ""), "ptype": d["ptype"] or "(未标注)"})
-    return {"rows": rows, "cfg": c, "data_at": at, "title_cal": cal, "title_tags": titlelab.tag_map(), "notes": items}
+    return {"rows": rows, "taken": taken, "cfg": c, "data_at": at, "title_cal": cal, "title_tags": titlelab.tag_map(), "notes": items}
 
 
 def _rate(rs: list[dict]) -> dict:
@@ -456,7 +531,7 @@ def review_steps(ev: dict) -> dict:
             if worst["lift"] <= 0.8 and worst["name"] != best["name"] and worst["lift"] * 1.3 <= best["lift"]:
                 advice.append(f"{label}「{worst['name']}」的稿子偏低(×{worst['lift']},{worst['n_mature']} 篇),可以少用或换个写法。")
         advice = advice[:3]
-    return {"pub": {"total": len(pub), "week": sum(x["n"] for x in days), "last_week": last_week, "days": days, "claimed": sum(x["claimed"] for x in days)},
+    return {"pub": {"total": len(pub), "week": sum(x["n"] for x in days), "last_week": last_week, "days": days, "claimed": sum(x["claimed"] for x in days)}, "recon": reconcile(ev),
             "data": {"linked": linked, "published": len(pub), "rate": round(linked / len(pub), 2) if pub else None, "waiting": tiers["observing"], "data_at": ev.get("data_at") or "",
                      "hours": int(float(get_settings().get("qf_account_hours") or 24)), "shops": shops},
             "result": {"good": tiers["winner"] + tiers["good"], "normal": tiers["normal"], "low": tiers["weak"], "observing": tiers["observing"], "n": len(withdata), "n_mature": len(mature)},
