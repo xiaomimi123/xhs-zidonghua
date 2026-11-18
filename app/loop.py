@@ -25,7 +25,10 @@ def _cover_kind(d: dict) -> str:
     return kind_of(cc["layout"]) if cc.get("layout") else ""
 
 
-TIERS = {"winner": "爆款", "good": "表现好", "normal": "一般", "weak": "偏低", "observing": "数据还在涨", "nodata": "没绑定笔记", "unpublished": "未发布"}
+TIERS = {"winner": "爆款", "good": "表现好", "normal": "一般", "weak": "偏低", "observing": "数据还在涨", "nodata": "没绑定笔记", "unpublished": "未发布",
+         "removed": "被平台删除", "unsent": "没发出去"}
+INACTIVE = ("removed", "unsent")   # 员工标成「被平台删除 / 没发出去」的稿子:不算「标了发布但没对上」,也不进复盘统计
+STALE_DAYS = 2                      # 标了发布超过这么多天,千帆里还找不到对应的笔记:提示员工核对(是真的发出去了,还是被删了 / 其实没发)
 WITH_DATA = ("winner", "good", "normal", "weak", "observing")   # 已经对上千帆笔记、有数据的
 _auto_at = 0.0
 
@@ -172,7 +175,7 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
     fac = age_factors(items)
     spawned = {r["spawn_from"]: r["n"] for r in q_all("SELECT spawn_from, COUNT(*) AS n FROM projects WHERE spawn_from IS NOT NULL GROUP BY spawn_from")}
     drafts = q_all("""SELECT d.id, d.title, d.angle, d.account_id, d.account_name, d.project_id, d.published, d.published_at, d.qf_note_id, d.status, d.auto_ok, d.created, d.images, d.cover_card, d.ptype,
-        p.track, p.created_by, p.owner_id, p.spawn_from, COALESCE(p.generation, 0) AS generation, d.feat, d.pub_edit
+        p.track, p.created_by, p.owner_id, p.spawn_from, COALESCE(p.generation, 0) AS generation, d.feat, d.pub_edit, d.pub_state
         FROM drafts d LEFT JOIN projects p ON p.id=d.project_id WHERE d.title!=''""")   # 不写 ORDER BY:有排序时数据库会放弃覆盖索引、顺序扫整张表(读正文,慢),在程序里排
     drafts.sort(key=lambda d: -d["id"])
     need = [d["id"] for d in drafts if (d["published"] or perf.get(d["id"])) and not d["feat"]]   # 已发布但还没存快照的:补存(只取这几篇的正文,不拖慢整个列表)
@@ -190,6 +193,11 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
         if it and register and not d["published"]:
             q_exec("UPDATE drafts SET published=1, published_at=? WHERE id=?", it.get("published_at") or time.strftime("%Y-%m-%d"), d["id"])
             d["published"], d["published_at"] = 1, it.get("published_at") or ""
+        st = d.get("pub_state") or ""
+        if st and it:   # 标成「被删 / 没发」,但千帆里其实找得到这篇笔记:以千帆为准,清掉这个状态
+            if register:
+                q_exec("UPDATE drafts SET pub_state='', pub_state_note='', pub_state_at='' WHERE id=?", d["id"])
+            st = ""
         pe = d["pub_edit"] if isinstance(d["pub_edit"], dict) else {}
         ts = qianfan.title_sim(d["title"], it.get("title") or "") if it else None
         if it and register and pe.get("title_sim") != ts:   # 对上笔记后记下标题改了多少(手动对上时勾选的封面 / 正文改动已经在 pe 里,保留)
@@ -201,10 +209,12 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
             d["account_id"], d["account_name"] = it["account_id"], nm
         acc = it.get("account_id") if it else (d["account_id"] or "")
         tier, lift = classify(it, d, base.get(acc or "") or base.get(""), c, fac)
+        if st:
+            tier, lift = st, None
         rows.append({"id": d["id"], "title": d["title"], "topic": _topic(d["angle"]), "angle": d["angle"], "track": d["track"] or "", "project_id": d["project_id"],
                      "account_id": acc or "", "account_name": (it or {}).get("account_name") or d["account_name"] or "", "created_by": d["created_by"] or "", "owner_id": d["owner_id"],
                      "tier": tier, "tier_name": TIERS[tier], "lift": lift, "generation": d["generation"], "spawn_from": d["spawn_from"], "spawned": spawned.get(d["id"], 0),
-                     "published": bool(d["published"]), "linked": bool(d["qf_note_id"]), "auto_ok": d["auto_ok"], "cover": (d["images"] or [""])[0] if isinstance(d["images"], list) else "",
+                     "published": bool(d["published"]) and not st, "pub_state": st, "linked": bool(d["qf_note_id"]), "auto_ok": d["auto_ok"], "cover": (d["images"] or [""])[0] if isinstance(d["images"], list) else "",
                      "published_at": (it or {}).get("published_at") or d["published_at"] or "", "days": _days_since((it or {}).get("published_at") or d["published_at"] or ""),
                      "views": (it or {}).get("views"), "likes": (it or {}).get("likes"), "collects": (it or {}).get("collects"),
                      "comments": (it or {}).get("comments"), "eng": _eng(it) if it else None,
@@ -391,7 +401,7 @@ def review_steps(ev: dict) -> dict:
     """复盘页「四步」要用的数字:发出去、数据回来、谁好谁差、下一步(爆款数、对比、一句话建议)。"""
     import datetime as _dt
     rows, today = ev["rows"], _dt.date.today()
-    pub = [r for r in rows if r["published"] or r["tier"] not in ("unpublished", "nodata")]
+    pub = [r for r in rows if r["tier"] not in INACTIVE and (r["published"] or r["tier"] not in ("unpublished", "nodata"))]
     day_of = lambda r: str(r.get("published_at") or "")[:10]
     days = []
     for i in range(6, -1, -1):
@@ -476,7 +486,7 @@ def adherence(ev: dict) -> list[dict]:
 def overview(ev: dict | None = None) -> dict:
     ev = ev or evaluate()
     rows = ev["rows"]
-    pub = [r for r in rows if r["published"] or r["tier"] not in ("unpublished", "nodata")]
+    pub = [r for r in rows if r["tier"] not in INACTIVE and (r["published"] or r["tier"] not in ("unpublished", "nodata"))]
     got = [r for r in pub if r["tier"] not in ("unpublished", "nodata")]
     funnel = [("generated", "已生成", len(rows)), ("qualified", "质检合格", sum(1 for r in rows if r["auto_ok"] == 1)), ("published", "已发布", len(pub)),
               ("data", "数据已回流", len(got)), ("mature", "数据够久", sum(1 for r in got if r["tier"] != "observing")), ("winner", "爆款", sum(1 for r in got if r["tier"] == "winner"))]
@@ -499,6 +509,7 @@ def overview(ev: dict | None = None) -> dict:
     gens = {"original": _rate([r for r in got if not r["generation"]]), "spawned": _rate([r for r in got if r["generation"]])}
     return {"funnel": [{"key": k, "name": n, "n": v} for k, n, v in funnel], "tiers": {t: sum(1 for r in rows if r["tier"] == t) for t in TIERS},
             "by_topic": group("topic"), "by_cover": group("cover_name", 1), "by_ptype": group("ptype", 1), "by_account": group("account_name", 1), "learn": learning(ev), "adherence": adherence(ev), "bind_todo": bind_todo(ev), "steps": review_steps(ev), "title_lab": _title_lab(ev), "title_struct": _title_struct(ev), "by_project": by_project, "spawn_effect": gens, "cfg": ev["cfg"], "data_at": ev["data_at"],
+            "stale_nodata": sum(1 for r in rows if r["tier"] == "nodata" and (r.get("days") or 0) >= STALE_DAYS),   # 标了发布超过 STALE_DAYS 天、千帆里还找不到的
             "no_data": not got and not q_one("SELECT 1 AS x FROM qf_snapshots WHERE kind='notes' LIMIT 1")}
 
 

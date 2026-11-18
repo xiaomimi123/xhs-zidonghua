@@ -370,6 +370,18 @@ def _m012_kind(c):
     c.execute("CREATE INDEX IF NOT EXISTS ix_notes_kind ON notes(kind_status, kind)")
 
 
+def _m025_pub_state(c):
+    """稿子的发布状态:空 = 正常;removed = 发出去了但被平台删除 / 下架(多半违规);unsent = 其实没发出去 / 不发了。
+    被标成这两种的稿子不再算「标了发布但没对上」,也不进复盘统计;removed 的还记原因,当违规样本。
+    复盘评估只读覆盖索引里的列(不读正文),所以把 pub_state 加进 ix_drafts_loop(重建这个索引)。"""
+    cols = {r["name"] for r in c.execute("PRAGMA table_info(drafts)")}
+    for col in ("pub_state", "pub_state_note", "pub_state_at"):
+        if col not in cols:
+            c.execute(f"ALTER TABLE drafts ADD COLUMN {col} TEXT DEFAULT ''")
+    c.execute("DROP INDEX IF EXISTS ix_drafts_loop")
+    c.execute("CREATE INDEX IF NOT EXISTS ix_drafts_loop ON drafts(title, angle, account_id, account_name, project_id, published, published_at, qf_note_id, status, auto_ok, created, images, cover_card, ptype, feat, pub_edit, pub_state)")
+
+
 def _m024_cover_fp(c):
     """封面指纹(稿子封面 / 千帆笔记封面各算一个,用来把发布后改了标题的笔记对回稿子):kind = draft(key 是封面文件名)/ note(key 是笔记 ID)。"""
     c.execute("CREATE TABLE IF NOT EXISTS cover_fp(kind TEXT, key TEXT, dh TEXT DEFAULT '', vec BLOB, src TEXT DEFAULT '', err TEXT DEFAULT '', at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(kind, key))")
@@ -494,6 +506,7 @@ MIGRATIONS = [
     (22, "draft_indexes", _m022_draft_indexes),
     (23, "note_facet_index", _m023_note_facet_index),
     (24, "cover_fp", _m024_cover_fp),
+    (25, "pub_state", _m025_pub_state),
     # (2, "说明", _m002_xxx),
 ]
 

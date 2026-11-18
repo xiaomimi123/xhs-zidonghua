@@ -463,6 +463,8 @@ def _library(pid: int = 0, did: int = 0, brief: bool = False) -> list[dict]:
              "account_id": d["account_id"] or "", "account_name": d["account_name"] or "", "ptype": d["ptype"] or "", "ptype_got": d["ptype_got"] or "",
              "tier": (tiers.get(d["id"]) or {}).get("tier", ""), "lift": (tiers.get(d["id"]) or {}).get("lift"),
              "perf": {k: perf[d["id"]].get(k) for k in perf_keys if perf[d["id"]].get(k) not in (None, "")} if d["id"] in perf else None} for d in rows]
+    for it, d in zip(out, rows):
+        it["pub_state"], it["pub_state_note"] = d.get("pub_state") or "", d.get("pub_state_note") or ""
     if brief:
         for it in out:
             for k in _LIB_HEAVY:
@@ -538,7 +540,9 @@ def change_cover(did: int):
 @router.post("/api/drafts/{did}/published")
 def set_published(did: int, p: PubIn):
     _one("SELECT id FROM drafts WHERE id=?", did)
-    q_exec("UPDATE drafts SET published=?, published_at=? WHERE id=?", int(p.on), time.strftime("%Y-%m-%d") if p.on else "", did)   # 和登记接口一样记本地日期(以前是 UTC 带时分秒,北京时间早上 8 点前会差一天)
+    q_exec("UPDATE drafts SET published=?, published_at=? WHERE id=?", int(p.on), time.strftime("%Y-%m-%d") if p.on else "", did)
+    if p.on:
+        q_exec("UPDATE drafts SET pub_state='', pub_state_note='', pub_state_at='' WHERE id=?", did)   # 和登记接口一样记本地日期(以前是 UTC 带时分秒,北京时间早上 8 点前会差一天)
     return {"ok": True, "published": p.on}
 
 
@@ -839,6 +843,35 @@ def publish_batch(p: PublishBatch):
         ids = visible("draft", p.ids[:200])
         for i in ids:
             c.execute("UPDATE drafts SET published=?, published_at=? WHERE id=?", (int(p.on), day if p.on else "", i))
+            if p.on:   # 重新登记发布了:之前标的「被删 / 没发出去」作废
+                c.execute("UPDATE drafts SET pub_state='', pub_state_note='', pub_state_at='' WHERE id=?", (i,))
+    return {"ok": True, "n": len(ids)}
+
+
+class StateBatch(BaseModel):
+    ids: list[int]
+    state: str = ""   # removed = 发出去了但被平台删除 / 下架;unsent = 其实没发出去 / 不发了;空 = 恢复
+    note: str = ""    # 原因(被删时:违规 / 审核没过 / 账号问题 / 其他,可再补一句)
+
+
+@router.post("/api/drafts/state")
+def set_pub_state(p: StateBatch):
+    """员工在「标了发布但没对上」里核对后:这篇其实没发出去 / 已被平台删除。标了之后不再算「没对上」,也不进复盘统计;
+    被删的记下原因,当违规样本。state 为空 = 恢复(回到正常的待登记 / 已登记)。"""
+    if not p.ids:
+        raise HTTPException(400, "先选稿子")
+    if p.state not in ("", "removed", "unsent"):
+        raise HTTPException(400, "状态只能是 removed(被平台删除)/ unsent(没发出去)/ 空(恢复)")
+    ids = visible("draft", p.ids[:200])
+    note, now = p.note.strip()[:200], time.strftime("%Y-%m-%d %H:%M")
+    with conn() as c:
+        for i in ids:
+            if not p.state:
+                c.execute("UPDATE drafts SET pub_state='', pub_state_note='', pub_state_at='' WHERE id=?", (i,))
+            elif p.state == "unsent":   # 没发出去:回到未发布(不再催登记);发布日期清掉
+                c.execute("UPDATE drafts SET pub_state='unsent', pub_state_note=?, pub_state_at=?, published=0, published_at='' WHERE id=?", (note, now, i))
+            else:               # 被删:发布过,记原因
+                c.execute("UPDATE drafts SET pub_state='removed', pub_state_note=?, pub_state_at=? WHERE id=?", (note, now, i))
     return {"ok": True, "n": len(ids)}
 
 
@@ -959,7 +992,7 @@ def loop_overview():
     return loop.overview(_my_eval())
 
 
-_TIER_ORDER = {"winner": 0, "good": 1, "normal": 2, "weak": 3, "observing": 4, "nodata": 5, "unpublished": 6}
+_TIER_ORDER = {"winner": 0, "good": 1, "normal": 2, "weak": 3, "observing": 4, "nodata": 5, "unpublished": 6, "removed": 7, "unsent": 8}
 
 
 def _loop_rows(ev: dict, tier: str = "", account_id: str = "") -> list[dict]:
@@ -983,7 +1016,14 @@ def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1
     titles = [it.get("title") or "" for it in ev.get("notes", [])] + [r["title"] for r in ev["rows"] if r["published"] and r.get("title")]
     titlelab.maybe_start_tagging(titles)   # 千帆笔记和已发布稿子的标题,还没按结构分类的,后台让大模型分类(不阻塞页面)
     rows = _loop_rows(ev, tier)
-    regs = _loop_rows(ev, "unpublished" if reg == "todo" else "nodata")
+    if reg == "done":   # 员工标了「被平台删除 / 没发出去」的
+        regs = sorted((r for r in ev["rows"] if r["tier"] in loop.INACTIVE), key=lambda r: -r["id"])
+    else:
+        regs = _loop_rows(ev, "unpublished" if reg == "todo" else "nodata")
+        if reg == "nodata":   # 登记得最久、还没对上的排最前(最该先核对);没有日期的排最后
+            regs.sort(key=lambda r: -(r["days"] if r["days"] is not None else -1))
+    n_done = sum(1 for r in ev["rows"] if r["tier"] in loop.INACTIVE)
+    n_stale = sum(1 for r in ev["rows"] if r["tier"] == "nodata" and (r.get("days") or 0) >= loop.STALE_DAYS)
     n_noacc = sum(1 for r in regs if not r["account_id"])   # 没指定发布账号的有几篇(「只看没指定账号」按钮上显示)
     if noacc:
         regs = [r for r in regs if not r["account_id"]]
@@ -994,12 +1034,25 @@ def loop_page(tier: str = "", page: int = 1, reg: str = "todo", regpage: int = 1
         items_, _ = qianfan.notes_all()
         taken = {str(v.get("note_id")) for v in qianfan.match_drafts(items_).values()}
         reg_items = [{**x, "cands": (cs := qianfan.closest_notes(x["title"], x["account_id"], items_, taken, x.get("published_at") or "")), "closest": cs[0] if cs else None} for x in reg_items]
+    if reg_items:
+        reg_items = [{**x, "stale": x["tier"] == "nodata" and (x.get("days") or 0) >= loop.STALE_DAYS} for x in reg_items]
+    if reg == "done" and reg_items:   # 已处理的:带上原因、处理时间、帖子类型和这篇稿子命中过的风险词(被删的稿子当违规样本看)
+        extra = {r["id"]: r for r in autorun._in_chunks("SELECT id, pub_state_note, pub_state_at, ptype, checks FROM drafts WHERE id IN ({})", [x["id"] for x in reg_items])}
+        def hits_of(r):
+            seen, out = set(), []
+            for h in ((r.get("checks") or {}).get("hits") or []):
+                k = (h.get("category"), h.get("word"))
+                if k not in seen:
+                    seen.add(k); out.append(f"{h.get('word')}({h.get('category')})")
+            return out[:6]
+        reg_items = [{**x, "state_note": (extra.get(x["id"]) or {}).get("pub_state_note", ""), "state_at": (extra.get(x["id"]) or {}).get("pub_state_at", ""),
+                      "hits": hits_of(extra.get(x["id"]) or {})} for x in reg_items]
     if reg_items:   # 发布登记用卡片显示:只给这一页的稿子取封面
         covers = {r["id"]: next((i for i in (r["images"] or []) if i), "") for r in autorun._in_chunks("SELECT id, images FROM drafts WHERE id IN ({})", [x["id"] for x in reg_items])}
         reg_items = [{**x, "cover": covers.get(x["id"], "")} for x in reg_items]
     return {"overview": loop.overview(ev), "winners": _loop_rows(ev, "winner")[:max(wins, 0)],
             "rows": {"items": rows[(page - 1) * size:page * size], "total": len(rows), "page": page},
-            "reg": {"items": reg_items, "total": len(regs), "page": regpage, "noacc": n_noacc},
+            "reg": {"items": reg_items, "total": len(regs), "page": regpage, "noacc": n_noacc, "stale": n_stale, "done": n_done, "stale_days": loop.STALE_DAYS},
             "size": size, "cfg": ev["cfg"], "data_at": ev["data_at"]}
 
 

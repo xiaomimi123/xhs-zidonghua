@@ -1490,3 +1490,10 @@ body.busy #main{opacity:.55;transition:opacity .15s}
 }
 .lp-cvtag{flex:none;white-space:nowrap;display:inline-block;font-style:normal;font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;background:var(--accent-wash);color:var(--accent-ink);border:1px solid var(--accent)}   /* 注意:.lp-cv 已经是稿子封面缩略图的样式名,别重名 */
 .lp-pill:has(.lp-cvtag) b{flex:1;min-width:0}
+/* 发布登记:超期提示 / 已处理状态 */
+.lp-stale{font-size:11px;color:var(--accent-ink);background:var(--accent-wash);border:1px solid var(--accent);border-radius:999px;padding:1px 6px;margin-left:4px}
+.lp-rc.stale{border-color:var(--accent)}
+.lp-warn{display:block;color:var(--accent-ink);font-size:12px;line-height:1.5;margin:2px 0 4px}
+.lp-st{display:inline-block;font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;border:1px solid var(--line-2);color:var(--sub);background:var(--soft);margin-right:4px}
+.lp-st.removed{color:var(--accent-ink);background:var(--accent-wash);border-color:var(--accent)}
+
