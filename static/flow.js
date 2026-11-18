@@ -861,10 +861,11 @@ function lpStepBar(S, ov) {
 }
 function lpStepPublish(S, ov, regBlock) {
   const mx = Math.max(1, ...S.pub.days.map(d => d.n));
-  const bars = `<div class="lp-bars" role="img" aria-label="近 7 天每天发布数">${S.pub.days.map(d => `<div class="lp-bar"><b>${d.n}</b><div class="lp-bt"><i style="height:${Math.round(d.n / mx * 100)}%"></i></div><span>${d.day}</span></div>`).join("")}</div>`;
+  // 实心 = 千帆里已经找到的笔记(按笔记真实发布日期);浅色 = 员工标了已发布、千帆里还没找到(按标记的日期,不一定真发了)
+  const bars = `<div class="lp-bars" role="img" aria-label="近 7 天每天发布数">${S.pub.days.map(d => `<div class="lp-bar"><b>${d.n}</b><div class="lp-bt" title="${d.n - d.claimed} 篇已在千帆里找到${d.claimed ? `,${d.claimed} 篇只是标了发布、千帆里还没找到` : ""}"><i style="height:${Math.round((d.n - d.claimed) / mx * 100)}%"></i>${d.claimed ? `<i class="cl" style="height:${Math.round(d.claimed / mx * 100)}%"></i>` : ""}</div><span>${d.day}</span></div>`).join("")}</div>`;
   const ad = ov.adherence || [], bt = Object.fromEntries(((ov.bind_todo || {}).people || []).map(p => [p.name, p]));
   const people = ad.length > 1 ? `<section class="card flush" style="margin-top:12px"><div class="card-h" style="padding:12px 14px"><b>各人发布情况</b><span class="sub">没绑定笔记的稿子,数据追踪不到</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>发布人</th><th class="num">已发布</th><th class="num">已绑定</th><th class="num">没绑定</th><th class="num">绑定率</th></tr></thead><tbody>${ad.map(a => `<tr><td>${esc(a.name)}</td><td class="num">${a.published}</td><td class="num">${a.linked}</td><td class="num">${(bt[a.name] || {}).n ?? a.published - a.linked}</td><td class="num">${a.link_rate == null ? "—" : Math.round(a.link_rate * 100) + "%"}</td></tr>`).join("")}</tbody></table></div></section>` : "";
-  return `<section class="card"><div class="card-h"><b>近 7 天发布</b><span class="sub">本周 ${S.pub.week} 篇,${lpWk(S.pub.week, S.pub.last_week)}</span></div>${bars}</section>${people}${regBlock}`;
+  return `<section class="card"><div class="card-h"><b>近 7 天发布</b><span class="sub">本周 ${S.pub.week} 篇,${lpWk(S.pub.week, S.pub.last_week)}${S.pub.claimed ? `;其中 ${S.pub.claimed} 篇只是标了发布、千帆里还没找到(浅色部分)` : ""}</span></div>${bars}</section>${people}${regBlock}`;
 }
 function lpStepData(S, ov) {
   const d = S.data, bt = ov.bind_todo || { total: 0, old: 0 };

@@ -155,7 +155,7 @@ def match(notes: list[dict], drafts: list[dict]) -> dict[int, dict]:
     结果按输入缓存(笔记、稿子封面、账号、日期和指纹表都没变就直接返回上次的):页面每次打开都会对号,不缓存要多花约 0.4 秒。"""
     key = (_fp_version(),
            tuple(sorted((str(n.get("note_id")), n.get("cover") or "", n.get("account_id") or "", n.get("published_at") or "") for n in notes if n.get("cover"))),
-           tuple(sorted((d["id"], cover_file(d.get("images")), d.get("account_id") or "", _day(d.get("created"))) for d in drafts)))
+           tuple(sorted((d["id"], cover_file(d.get("images")), d.get("account_id") or "", _day(d.get("created")), int(bool(d.get("published")))) for d in drafts)))
     if _cache["key"] == key:
         return {k: dict(v) for k, v in _cache["out"].items()}
     out = _match(notes, drafts)
@@ -170,6 +170,7 @@ def _match(notes: list[dict], drafts: list[dict]) -> dict[int, dict]:
     files = {d["id"]: cover_file(d.get("images")) for d in drafts}
     dfp = get("draft", files.values())
     cands = [(d, dfp[files[d["id"]]]) for d in drafts if files.get(d["id"]) in dfp]
+    pub = {d["id"]: bool(d.get("published")) for d in drafts}
     if not cands:
         return {}
     picks = []
@@ -187,10 +188,14 @@ def _match(notes: list[dict], drafts: list[dict]) -> dict[int, dict]:
                 continue
             dists.append((ch.vec_dist(fp[1], vec), d["id"]))
         dists.sort()
-        if not dists or dists[0][0] > ch.SAME:
+        if not dists:
+            continue
+        # 员工已经标了「已发布」的稿子,封面放宽一档(发布时压缩、加滤镜、裁边会让封面差一点,但笔记没人认领、账号和时间都对得上、又是唯一的):没标发布的仍按严格的
+        limit = ch.LOOSE if pub.get(dists[0][1]) else ch.SAME
+        if dists[0][0] > limit:
             continue
         best = dists[0][0]
-        if len(dists) > 1 and dists[1][0] < max(2 * best, 2 * ch.SAME):   # 第二名也很像(同版式文字卡片 / 重复的封面):分不清,不自动对,留给人挑
+        if len(dists) > 1 and dists[1][0] < max(2 * best, 2 * limit):   # 第二名也很像(同版式文字卡片 / 重复的封面):分不清,不自动对,留给人挑
             continue
         picks.append((best, n, dists[0][1]))
     picks.sort(key=lambda x: x[0])

@@ -28,6 +28,8 @@ def _cover_kind(d: dict) -> str:
 TIERS = {"winner": "爆款", "good": "表现好", "normal": "一般", "weak": "偏低", "observing": "数据还在涨", "nodata": "没绑定笔记", "unpublished": "未发布",
          "removed": "被平台删除", "unsent": "没发出去"}
 INACTIVE = ("removed", "unsent")   # 员工标成「被平台删除 / 没发出去」的稿子:不算「标了发布但没对上」,也不进复盘统计
+AUTO_UNSENT_DAYS = 7                # 标了发布超过这么多天,期间千帆同步过、账号的笔记也采集到了、还是找不到:系统自己判断「多半没发出去」(标成「没发出去」,以后找到了会自动恢复)
+AUTO_NOTE = "系统判断"
 STALE_DAYS = 2                      # 标了发布超过这么多天,千帆里还找不到对应的笔记:提示员工核对(是真的发出去了,还是被删了 / 其实没发)
 WITH_DATA = ("winner", "good", "normal", "weak", "observing")   # 已经对上千帆笔记、有数据的
 _auto_at = 0.0
@@ -61,6 +63,19 @@ def _baselines(items: list[dict]) -> dict[str, tuple[str, float]]:
         metric = "eng" if sum(e) / len(e) >= 2 else "views"
         out[a] = (metric, qianfan._trimmed_mean(e if metric == "eng" else [r.get("views") or 0 for r in rows]))
     return out
+
+
+def _synced_accounts(items: list[dict], at: str) -> dict[str, str]:
+    """千帆笔记数据够新、可以拿来判断「这篇找不到」的账号 → 这批数据的同步日期(北京时间)。
+    条件:这个账号的笔记确实采集到过(采集端没接进来的账号不判断),整体数据 36 小时内更新过(采集端停了就别乱判)。"""
+    try:
+        t = datetime.datetime.strptime((at or "")[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return {}
+    if (datetime.datetime.utcnow() - t).total_seconds() > 36 * 3600:
+        return {}
+    day = (t + datetime.timedelta(hours=qianfan.TZ_OFFSET_H)).date().isoformat()
+    return {a: day for a in {it.get("account_id") for it in items} if a}
 
 
 def _days_since(day: str) -> int | None:
@@ -189,8 +204,16 @@ def evaluate(register: bool = True, pre: tuple | None = None) -> dict:
             if d["id"] in fresh:
                 d["feat"] = fresh[d["id"]]
     rows = []
+    synced = _synced_accounts(items, at)
     for d in drafts:
         it = perf.get(d["id"])
+        if (register and not it and d["published"] and not d.get("pub_state") and d["account_id"] in synced
+                and (_days_since(d["published_at"]) or 0) >= AUTO_UNSENT_DAYS and str(d["published_at"] or "")[:10] < synced[d["account_id"]]):
+            # 员工标了「已发布」,过了好几天、千帆之后也同步过这个账号的笔记,还是找不到:多半没发出去(或被删了)。系统自己标成「没发出去」,不用人一篇篇核对;
+            # 记下原因,在「已处理」里看得到;以后千帆里找到了这篇会自动恢复(见下面 st and it)
+            note = f"{AUTO_NOTE}:标记发布 {_days_since(d['published_at'])} 天,千帆同步后仍没找到这篇笔记"
+            q_exec("UPDATE drafts SET pub_state='unsent', pub_state_note=?, pub_state_at=?, published=0, published_at='' WHERE id=?", note, time.strftime("%Y-%m-%d %H:%M"), d["id"])
+            d["pub_state"], d["published"], d["published_at"], d["pub_state_note"] = "unsent", 0, "", note
         if it and register and not d["published"]:
             q_exec("UPDATE drafts SET published=1, published_at=? WHERE id=?", it.get("published_at") or time.strftime("%Y-%m-%d"), d["id"])
             d["published"], d["published_at"] = 1, it.get("published_at") or ""
@@ -407,7 +430,7 @@ def review_steps(ev: dict) -> dict:
     days = []
     for i in range(6, -1, -1):
         d = (today - _dt.timedelta(days=i)).isoformat()
-        days.append({"day": d[5:], "n": sum(1 for r in pub if day_of(r) == d)})
+        days.append({"day": d[5:], "n": sum(1 for r in pub if day_of(r) == d), "claimed": sum(1 for r in pub if day_of(r) == d and r["tier"] == "nodata")})
     week_lo, last_lo = (today - _dt.timedelta(days=6)).isoformat(), (today - _dt.timedelta(days=13)).isoformat()
     last_week = sum(1 for r in pub if last_lo <= day_of(r) < week_lo)
     linked = sum(1 for r in pub if r.get("edit"))
@@ -433,7 +456,7 @@ def review_steps(ev: dict) -> dict:
             if worst["lift"] <= 0.8 and worst["name"] != best["name"] and worst["lift"] * 1.3 <= best["lift"]:
                 advice.append(f"{label}「{worst['name']}」的稿子偏低(×{worst['lift']},{worst['n_mature']} 篇),可以少用或换个写法。")
         advice = advice[:3]
-    return {"pub": {"total": len(pub), "week": sum(x["n"] for x in days), "last_week": last_week, "days": days},
+    return {"pub": {"total": len(pub), "week": sum(x["n"] for x in days), "last_week": last_week, "days": days, "claimed": sum(x["claimed"] for x in days)},
             "data": {"linked": linked, "published": len(pub), "rate": round(linked / len(pub), 2) if pub else None, "waiting": tiers["observing"], "data_at": ev.get("data_at") or "",
                      "hours": int(float(get_settings().get("qf_account_hours") or 24)), "shops": shops},
             "result": {"good": tiers["winner"] + tiers["good"], "normal": tiers["normal"], "low": tiers["weak"], "observing": tiers["observing"], "n": len(withdata), "n_mature": len(mature)},

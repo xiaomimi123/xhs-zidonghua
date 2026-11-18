@@ -83,6 +83,23 @@ def run(rep, env):
         g2 = coverfp.match([note("N1", 1, "accB")], [drafts[1]])
         g3 = coverfp.match([note("N0", 0, day="2020-01-01")], [drafts[0]])
         rep.check("账号不一致不对(稿子指定了 accA,笔记是 accB);笔记发布日期比稿子生成早很多也不对", g2 == {} and g3 == {}, str((g2, g3)))
+        # 宽松档:员工标了「已发布」的稿子,封面差得多一点(比 SAME 大、不超过 LOOSE)也对上;没标发布的仍按严格的
+        loose_im, base_fp = None, ch.fingerprint(cards[2])
+        for cp in (0.012, 0.016, 0.02, 0.025):   # 发布时被裁了一点边:距离比同图大、但还是同一张
+            w_, h_ = cards[2].size
+            fpl = ch.fingerprint(_publish(cards[2].crop((int(w_ * cp), int(h_ * cp), int(w_ * (1 - cp)), int(h_ * (1 - cp))))))
+            dd = ch.vec_dist(fpl[1], base_fp[1])
+            if ch.SAME + 0.004 < dd < ch.LOOSE - 0.02:
+                loose_im = fpl; break
+        if loose_im is None:
+            rep.check("宽松档测试:造出了距离在 SAME 和 LOOSE 之间的封面", False, "没造出来")
+        else:
+            nl = note("NL", 2)
+            coverfp.put("note", "NL", loose_im, nl["cover"])
+            dl = {"id": d2, **db.q_one("SELECT images, account_id, created FROM drafts WHERE id=?", d2)}
+            g_un = coverfp.match([nl], [{**dl, "published": 0}])
+            g_pub = coverfp.match([nl], [{**dl, "published": 1}])
+            rep.check("封面宽松档:稿子没标发布时封面差一点不自动对;标了「已发布」的就对上(笔记没人认领、唯一、账号时间都对)", g_un == {} and g_pub.get(d2, {}).get("note_id") == "NL", str((g_un, g_pub)))
         # 分不清:两篇稿子用了同一张封面(重复 / 克隆),不自动对,留给人挑
         dup = mkd("同封面的另一篇", [names[0]])
         drafts2 = drafts + [{"id": dup, **db.q_one("SELECT images, account_id, created FROM drafts WHERE id=?", dup)}]

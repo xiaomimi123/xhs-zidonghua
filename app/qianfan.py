@@ -435,7 +435,7 @@ def account_name(account_id: str) -> str | None:
 def match_drafts(items: list[dict]) -> dict[int, dict]:
     """笔记表现和我们生成的稿子对上号:标题去掉表情标点后一样,或 3 字片段重合 ≥ 80%。返回 {草稿 id: 表现数据}。
     稿子指定了发布账号、笔记也带账号时,只在同一个账号里对,避免别的账号的同标题笔记串号。"""
-    drafts = q_all("SELECT id, title, account_id, qf_note_id, images, created FROM drafts WHERE title!=''")
+    drafts = q_all("SELECT id, title, account_id, qf_note_id, images, created, published FROM drafts WHERE title!=''")
     by_note = {str(it.get("note_id")): it for it in items if it.get("note_id")}
     out, taken = {}, set()
     for d in drafts:   # 手动对上的优先,不再按标题猜

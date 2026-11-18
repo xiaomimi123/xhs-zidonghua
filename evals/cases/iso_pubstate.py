@@ -103,6 +103,32 @@ def run(rep, env):
     rep.check("页面:复盘「发布登记」有「已处理」一栏;没对上的显示登记天数和核对提示,带「没发出去 / 被平台删除 / 取消标记」三个按钮;被删弹窗有原因选项;预览里有恢复",
               'data-rtab="done"' in flow and "data-unsent" in flow and "data-removed" in flow and "data-restore" in flow and "function stateDialog" in flow and "STATE_REASONS" in flow
               and "千帆里还没找到:请核对" in flow and "data-pstate-clear" in flow)
+    # ---- 系统自动判断:标了发布超过 7 天、千帆同步后还是找不到 → 多半没发出去 ----
+    x_old = mk("自动判断测试甲:标了十天找不到", 1, day(10))
+    x_new = mk("自动判断测试乙:标了三天找不到", 1, day(3))
+    x_noacc = mk("自动判断测试丙:账号没采集", 1, day(10))
+    db.q_exec("UPDATE drafts SET account_id='acct_none', account_name='没采集的号' WHERE id=?", x_noacc)
+    x_back = mk("自动判断测试丁:十天前标的但笔记其实在", 1, day(10))
+    qianfan.ingest({"kind": "notes", "shop_id": "pstest2", "shop_name": "自动判断店", "items": [
+        {"note_id": "AU1", "title": "自动判断测试丁:十天前标的但笔记其实在", "views": 30, "likes": 2, "collects": 1, "comments": 0, "published_at": day(9), "account_id": "acct_ps", "account_name": "状态号"},
+        {"note_id": "AU2", "title": "这是这个账号别的笔记和稿子无关", "views": 30, "likes": 2, "collects": 1, "comments": 0, "published_at": day(1), "account_id": "acct_ps", "account_name": "状态号"}]})
+    loop.evaluate(register=True)
+    st = lambda i: db.q_one("SELECT published, published_at, pub_state, pub_state_note FROM drafts WHERE id=?", i)
+    s_old, s_new, s_na, s_bk = st(x_old), st(x_new), st(x_noacc), st(x_back)
+    rep.check("自动判断:标了 10 天、账号的笔记采集到了、千帆里还是找不到 → 系统标成「没发出去」并写明「系统判断」;标了 3 天的、账号没采集的不动;笔记其实在的按笔记对上(已发布)",
+              s_old["pub_state"] == "unsent" and s_old["published"] == 0 and s_old["pub_state_note"].startswith("系统判断") and s_new["pub_state"] == "" and s_new["published"] == 1
+              and s_na["pub_state"] == "" and s_na["published"] == 1 and s_bk["pub_state"] == "" and s_bk["published"] == 1, str((s_old, s_new, s_na, s_bk)))
+    pgd2 = u.get("/api/loop/page?reg=done&size=100").json()
+    dm2 = {x["id"]: x for x in pgd2["reg"]["items"]}
+    rep.check("自动判断的稿子出现在「已处理」里,带原因(系统判断),可以恢复", x_old in dm2 and dm2[x_old]["state_note"].startswith("系统判断") and dm2[x_old]["tier"] == "unsent")
+    qianfan.ingest({"kind": "notes", "shop_id": "pstest2", "shop_name": "自动判断店", "items": [
+        {"note_id": "AU3", "title": "自动判断测试甲:标了十天找不到", "views": 12, "likes": 1, "collects": 0, "comments": 0, "published_at": day(8), "account_id": "acct_ps", "account_name": "状态号"}]})
+    loop.evaluate(register=True)
+    s_old2 = st(x_old)
+    rep.check("以后千帆里找到了这篇:系统判断自动恢复,按笔记登记为已发布(发布日期取笔记的)", s_old2["pub_state"] == "" and s_old2["published"] == 1 and s_old2["published_at"] == day(8), str(s_old2))
+    ov_s = loop.review_steps(loop.evaluate(register=False))
+    rep.check("近 7 天发布:每天分开算「千帆里已找到」和「只是标了、还没找到」(claimed)", all("claimed" in d_ and d_["claimed"] <= d_["n"] for d_ in ov_s["pub"]["days"]) and "claimed" in ov_s["pub"])
+    db.q_exec("DELETE FROM qf_snapshots WHERE shop_id='pstest2'")
     rep.check("页面:预览里标记发布只有底部一个按钮(面板里不再放「登记已发布」),全站统一叫「标记 / 已发布」,不再出现「登记已发布 / 发布登记」",
               "登记已发布" not in flow and "发布登记" not in flow and "data-ppub>" in flow and flow.count("data-ppub>") == 1 and "没标记发布的" in flow and "发布标记" in flow)
     rep.check("页面:新建任务的发布账号选填(可以不指定,发布时再选);标记已发布前必须有发布账号(预览和批量);复盘「发布标记」默认看「没对上」,「没标记发布的」排在最后",
