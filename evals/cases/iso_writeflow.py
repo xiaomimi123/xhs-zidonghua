@@ -150,6 +150,14 @@ def run(rep, env):
     api_user.set_published(d3, api_user.PubIn(on=False))
     row = db.q_one("SELECT published, published_at FROM drafts WHERE id=?", d3)
     rep.check("取消后发布日期清空", row["published"] == 0 and row["published_at"] == "")
+    from fastapi import HTTPException as _HE
+    try:
+        api_user.publish_batch(api_user.PublishBatch(ids=[d3], on=True, published_at="2026-11-10")); refused = False
+    except _HE as e_:
+        refused = e_.status_code == 400 and "没指定发布账号" in str(e_.detail)
+    from app import qianfan as _qf
+    rep.check("标记已发布必须有发布账号:稿子没指定账号时拒绝(400,说明先指定账号);取消发布不受限制", refused or not _qf.accounts(), "账号已接入但没拦住")
+    db.q_exec("UPDATE drafts SET account_id='acct_wf', account_name='流程号' WHERE id=?", d3)
     api_user.publish_batch(api_user.PublishBatch(ids=[d3], on=True, published_at="2026-11-10"))
     rep.check("登记接口按选的日期记", db.q_one("SELECT published_at FROM drafts WHERE id=?", d3)["published_at"] == "2026-11-10")
 

@@ -598,7 +598,7 @@ def _agg(rows: list[dict], base: float, metric: str) -> dict:
 
 def topic_report(account_id: str = "", shop: str = "") -> dict:
     """某个账号(空 = 全部)的笔记,按选题角度 / 内容类型 / 主题汇总平均阅读和互动。
-    lift = 该类的平均表现 ÷ 账号所有已归类笔记的平均;平均互动 ≥ 2 的账号用互动(赞+藏+评)比较,否则互动太少没有区分度,改用阅读量。
+    lift = 该类的平均表现 ÷ 账号所有已归类笔记的平均;平均互动 ≥ 2 的账号用互动(赞+藏)比较,否则互动太少没有区分度,改用阅读量。
     互动数是笔记累计值,发得早的笔记会占便宜;样本少于 3 篇、总量太小的类别只作参考。"""
     items = [it for it in _latest_notes() if (not account_id or it.get("account_id", "") == account_id) and (not shop or it.get("shop_id", "") == shop)]
     tags = {r["note_id"]: r for r in q_all("SELECT note_id, ctype, topic, angle FROM qf_note_tags WHERE angle!=''")}

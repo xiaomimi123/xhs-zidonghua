@@ -64,6 +64,10 @@ async function fNew() {
   const [list, runs, hot, accts] = await Promise.all([api("/api/products").catch(() => []), api("/api/runs?limit=40").catch(() => []),
     api(`/api/qianfan/hot?track=${encodeURIComponent(FL.track || "")}`).catch(() => ({})), fetchAccts()]);
   if (FL.account && !accts.some(a => a.account_id === FL.account)) FL.account = "";
+  if (!FL.account && accts.length && !FL.accountTouched) {   // 默认带上次用的账号(没有就留空,开始生成时要求选一个)
+    let last = ""; try { last = localStorage.getItem("xhs_last_acct") || ""; } catch {}
+    if (accts.some(a => a.account_id === last)) FL.account = last;
+  }
   const plan = FL.account ? (FL.plan[FL.account] ||= await api(`/api/qianfan/account_plan?account_id=${encodeURIComponent(FL.account)}`).catch(() => null)) : null;
   if (plan && FL.angAcc !== FL.account) { FL.angles = new Set(plan.recommended); FL.angAcc = FL.account; }   // 换了账号就按这个账号的推荐重新选
   if (!FL.account) { FL.angles = new Set(); FL.angAcc = ""; }
@@ -110,7 +114,7 @@ async function fNew() {
       ${FL.account ? `<div id="fakw">${accKwHtml(FL.accKw[FL.account])}</div>` : ""}
       ${(hot.keywords || []).length || (hot.topics || []).length ? `<span class="fl-lbl">最近的热词 · 点一下加进关键词</span><div class="fl-chips">${[...(hot.keywords || []).slice(0, 8), ...(hot.topics || []).slice(0, 6)].map(w => `<button class="chip" data-fhot="${esc(w)}">${esc(w)}</button>`).join("")}</div>` : ""}`}
     ${accts.length ? `<h3 class="fl-sh fl-sec"><i>2</i>发到哪个账号 <small>建议选</small></h3>` : ""}
-    ${accts.length ? `<span class="fl-lbl">打算发到哪个账号 · 建议选上:发布后对数据、按账号分析都要靠它</span><div class="fl-chips"><button class="chip ${FL.account ? "" : "on"}" data-facc="">不指定</button>${accts.map(a => `<button class="chip ${FL.account === a.account_id ? "on" : ""}" data-facc="${esc(a.account_id)}" title="${esc(a.shop_name || "")}">${esc(a.name)}${new Set(accts.map(x => x.shop_name)).size > 1 && a.shop_name && a.shop_name.replace(/的店$/, "") !== a.name ? `<span class="sub"> · ${esc(a.shop_name.replace(/的店$/, ""))}</span>` : ""}</button>`).join("")}</div>` : ""}
+    ${accts.length ? `<span class="fl-lbl">打算发到哪个账号 · 必选:写稿风格、发布后对数据、按账号分析都要靠它</span><div class="fl-chips" id="faccs">${accts.map(a => `<button class="chip ${FL.account === a.account_id ? "on" : ""}" data-facc="${esc(a.account_id)}" title="${esc(a.shop_name || "")}">${esc(a.name)}${new Set(accts.map(x => x.shop_name)).size > 1 && a.shop_name && a.shop_name.replace(/的店$/, "") !== a.name ? `<span class="sub"> · ${esc(a.shop_name.replace(/的店$/, ""))}</span>` : ""}</button>`).join("")}</div>` : ""}
     ${plan ? angleBlock(plan) : ""}
     <h3 class="fl-sh fl-sec"><i>${accts.length ? 3 : 2}</i>生成几篇</h3>
     <div class="fl-num">
@@ -152,7 +156,7 @@ async function fNew() {
     }
     const rm = t.closest("[data-frm]"); if (rm) { keep(); P.files.splice(+rm.dataset.frm, 1); return fNew(); }
     const ag = t.closest("[data-fang]"); if (ag) { keep(); const n = ag.dataset.fang; FL.angles.has(n) ? FL.angles.delete(n) : FL.angles.add(n); return fNew(); }
-    const ac = t.closest("[data-facc]"); if (ac) { keep(); FL.account = ac.dataset.facc; return fNew(); }
+    const ac = t.closest("[data-facc]"); if (ac) { keep(); FL.account = ac.dataset.facc; FL.accountTouched = true; try { localStorage.setItem("xhs_last_acct", FL.account); } catch {} return fNew(); }
     const tr = t.closest("[data-ftrack]"); if (tr) { keep(); FL.track = tr.dataset.ftrack; return fNew(); }
     const c = t.closest("[data-fcnt]"); if (c) { keep(); FL.count = Math.max(1, Math.min(50, FL.count + +c.dataset.fcnt)); return fNew(); }
     const st = t.closest("[data-fset]"); if (st) { keep(); FL.count = +st.dataset.fset; return fNew(); }
@@ -217,7 +221,7 @@ async function fNew() {
       if (!FL.track) return err("先选一个赛道");
       body = { ...body, track: FL.track, keywords: FL.kw.split(/[,，、\n]+/).map(s => s.trim()).filter(Boolean) };
     }
-    if (accts.length && !FL.account && !confirm("还没选发布账号。\n\n不选的话,稿子发布后只能按标题对数据,两个号发了同标题的笔记会串;复盘里也归不进任何账号的统计。\n(之后可以在「数据复盘 → 发布标记」里批量补上)\n\n仍然不指定账号,继续生成?")) return;
+    if (accts.length && !FL.account) { err("先选打算发到哪个账号(上面的账号按钮)"); $("#faccs")?.scrollIntoView({ block: "center" }); return; }
     if (prod && !picked) {   // 新产品:先检查素材(传错图、混进别的产品、文案像指令…),有问题让用户选继续还是回去改
       $("#fstart").disabled = true; $("#fstart").textContent = "检查素材中…";
       const go_ = await checkProduct({ name: P.name, images: P.files, selling_points: P.sp, audience: P.aud, forbid: P.forbid });
@@ -431,6 +435,13 @@ async function fOpen(id, list) {
 function closePv() { const dirty = FL.pv?.dirty, op = FL.pv?.opener; FL.pv = null; $(".fl-pv")?.remove(); document.body.classList.remove("fl-lock"); if (dirty) render(); else if (op && op.isConnected) op.focus({ preventScroll: true }); }
 // 成品预览里的发布状态:选发布日期;已标记发布但没对上千帆数据时,可以手动对上;对上的可以取消
 const todayStr = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+// 标记已发布前必须知道发到了哪个账号:没选就拦住,把「发布账号」下拉框标出来
+function needAcct(d) {
+  if (d.account_id || !(FL.accts || []).length) return false;
+  toast("先选这篇实际发布到哪个账号(上面的「实际发布账号」),再标记已发布", 1);
+  const sel = $("[data-pacc]"); if (sel) { sel.focus(); sel.classList.add("need"); setTimeout(() => sel.classList.remove("need"), 2500); }
+  return true;
+}
 function pubPanel(d) {
   if (d.pub_state) return `<div class="pv-pub"><b>发布状态</b><span class="sub"><span class="lp-st ${d.pub_state}">${d.pub_state === "removed" ? "被平台删除" : "没发出去"}</span>${d.pub_state_note ? ` · ${esc(d.pub_state_note)}` : ""}。这篇不再提醒绑定,也不进复盘统计。</span><div class="pv-pr"><button class="btn gray sm" data-pstate-clear>恢复</button></div></div>`;
   if (!d.published) return `<div class="pv-pub"><b>发布状态</b><span class="sub">还没发布。发到小红书后点下方「标记已发布」,复盘页才会统计它的数据</span><div class="pv-pr"><label class="sub">发布日期 <input type="date" id="pvday" value="${todayStr()}" max="${todayStr()}" style="width:auto"></label></div></div>`;
@@ -452,7 +463,7 @@ function drawPv() {
         <h2>${esc(d.title)}</h2><div class="fl-body">${esc(d.content)}</div><div class="fl-tags">${d.tags.map(t => "#" + esc(t)).join(" ")}</div>
         <p class="sub">${esc(d.run)} · #${d.id}${d.published ? " · 已发布" : ""}</p>
         <section class="pv-box"><h4>发布</h4>
-        <div class="fl-acct"><label class="sub">发布账号 <select data-pacc>${`<option value="">未指定</option>` + (FL.accts || []).map(a => `<option value="${esc(a.account_id)}" ${d.account_id === a.account_id ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select></label></div>
+        <div class="fl-acct"><label class="sub">实际发布账号 <select data-pacc>${`<option value="">未指定</option>` + (FL.accts || []).map(a => `<option value="${esc(a.account_id)}" ${d.account_id === a.account_id ? "selected" : ""}>${esc(a.name)}</option>`).join("")}</select></label></div>
         ${pubPanel(d)}
         ${d.perf ? `<div class="banner ok" style="margin-top:10px"><b>已在千帆里对上号</b>${d.perf.matched_by === "cover" ? " · 按封面对上(笔记标题和稿子不一样)" : ""} · 发在「${esc(d.perf.account_name || "未知账号")}」${d.perf.published_at ? ` · ${esc(String(d.perf.published_at).slice(0, 10))}` : ""}${d.account_id && d.perf.account_id && d.account_id !== d.perf.account_id ? ` <span class="warn">(和指定的账号不一致)</span>` : ""}<br><span class="sub" style="color:inherit">阅读 ${fmtN(d.perf.views)} · 点赞 ${fmtN(d.perf.likes)} · 收藏 ${fmtN(d.perf.collects)} · 评论 ${fmtN(d.perf.comments)}${d.perf.shares != null ? ` · 分享 ${fmtN(d.perf.shares)}` : ""}</span></div>` : d.published ? `<p class="sub">已标记发布,千帆数据同步后会自动对上号并显示表现</p>` : ""}</section></div>
       <div class="fl-tf">
@@ -503,6 +514,7 @@ function bindPv(m) {
       return;
     }
     if (e.target.closest("[data-ppubd]")) {
+      if (!d.published && needAcct(d)) return;
       try { await api("/api/drafts/publish", "POST", { ids: [d.id], on: true, published_at: $("#pvday").value }); toast("已标记发布"); await pvRefresh(d); bindDialog([d.id], () => pvRefresh(d)); } catch (err) { toast(err.message, 1); }
       return;
     }
@@ -514,6 +526,7 @@ function bindPv(m) {
     if (e.target.closest("[data-ppub]")) {   // 预览里标记发布只有底部这一个按钮(日期取面板里的日期);点了之后接着弹绑定笔记,没有「标了发布但没选日期、没绑定笔记」的捷径
       try {
         if (d.published) { await api("/api/drafts/publish", "POST", { ids: [d.id], on: false }); toast("已取消发布标记"); await pvRefresh(d); }
+        else if (needAcct(d)) return;
         else { await api("/api/drafts/publish", "POST", { ids: [d.id], on: true, published_at: $("#pvday")?.value || todayStr() }); toast("已标记发布"); await pvRefresh(d); bindDialog([d.id], () => pvRefresh(d)); }
       } catch (err) { toast(err.message, 1); }
       return;
@@ -689,7 +702,7 @@ function nbOpen(i) {
 }
 
 // ---------- 复盘:发布 → 数据回流 → 谁爆了 → 继续复刻 ----------
-const LP = { tier: "withdata", reg: "todo", sel: new Set(), page: 1, regPage: 1, winAll: false, noacc: false, step: "result", cmp: "account" };
+const LP = { tier: "withdata", reg: "nodata", sel: new Set(), page: 1, regPage: 1, winAll: false, noacc: false, step: "result", cmp: "account" };
 try { LP.step = localStorage.lpStep || "result"; } catch { }
 const LP_WIN = 6;   // 爆款榜默认先列几篇
 const LP_SIZE = 20;   // 复盘页每个列表每页条数
@@ -875,7 +888,7 @@ function lpStepResult(S, rows, pg, names, tierCnt) {
     <div class="fl-chips" style="margin-bottom:10px">${Object.entries(names).map(([k, n]) => `<button class="chip ${LP.tier === k ? "on" : ""}" data-lt="${k}">${n} ${tierCnt(k)}</button>`).join("")}</div>
     ${rows.length ? `<div class="lp-nc-grid">${rows.map(lpCard).join("")}</div>` : `<section class="card"><div class="empty" style="border:0">这个筛选下没有稿子</div></section>`}
     ${pager(LP.page, pg.rows.total, LP_SIZE, "lpg")}
-    <p class="sub" style="margin:14px 2px 0">「比同龄 ×N」:这篇的互动(赞+藏+评),除以该账号所有笔记的平均,再除以同样发布天数的笔记通常的水平;发布越久互动越多,所以新稿不能直接和老笔记比。账号互动很少时改比阅读量。数据更新于 ${esc(String(pg.data_at || "-").slice(0, 16))}。</p>`;
+    <p class="sub" style="margin:14px 2px 0">「比同龄 ×N」:这篇的互动(赞+藏,评论不算),除以该账号所有笔记的平均,再除以同样发布天数的笔记通常的水平;发布越久互动越多,所以新稿不能直接和老笔记比。账号互动很少时改比阅读量。数据更新于 ${esc(String(pg.data_at || "-").slice(0, 16))}。</p>`;
 }
 function lpStepNext(S, wins, nWin, c, se) {
   const n = S.next;
@@ -899,7 +912,7 @@ function linkDialog(did, draft, onDone) {
   const load = async () => {
     const r = await api(`/api/loop/notes?draft_id=${did}&other=${other ? 1 : 0}&q=${encodeURIComponent($("#lq").value.trim())}`).catch(() => ({ items: [] }));
     $("#lscope").innerHTML = r.only_account ? `只显示这篇稿子所标账号「${esc(r.account_name || "")}」的笔记${r.n_other ? `。标错账号了?<a href="#" data-other>也显示其他账号的 ${r.n_other} 篇</a>` : ""}` : (r.account_name ? `已显示所有账号的笔记,「${esc(r.account_name)}」的排前面。<a href="#" data-other="0">只看这个账号</a>` : "");
-    $("#lcl").innerHTML = r.items.length ? r.items.map(n => `<button class="lp-c" data-nid="${esc(n.note_id)}"><b>${esc(n.title)}</b><span class="sub">${esc(n.account_name || "")}${n.published_at ? " · " + esc(n.published_at) : ""} · 阅读 ${fmtN(n.views)} · 赞藏评 ${fmtN((n.likes || 0) + (n.collects || 0) + (n.comments || 0))}${n.cover_same ? " · 封面一致" : ""}${n.sim >= 0.4 ? " · 标题相近" : ""}${n.same_account ? " · 同账号" : ""}</span></button>`).join("")
+    $("#lcl").innerHTML = r.items.length ? r.items.map(n => `<button class="lp-c" data-nid="${esc(n.note_id)}"><b>${esc(n.title)}</b><span class="sub">${esc(n.account_name || "")}${n.published_at ? " · " + esc(n.published_at) : ""} · 阅读 ${fmtN(n.views)} · 赞藏 ${fmtN((n.likes || 0) + (n.collects || 0))}${n.cover_same ? " · 封面一致" : ""}${n.sim >= 0.4 ? " · 标题相近" : ""}${n.same_account ? " · 同账号" : ""}</span></button>`).join("")
       : `<div class="empty" style="border:0">没有可对的笔记。可能千帆数据还没同步,或都已经对上了稿子。</div>`;
   };
   let t; $("#lq").oninput = () => { clearTimeout(t); t = setTimeout(load, 300); };
@@ -940,8 +953,8 @@ async function fLoop(useCache) {   // useCache:切换步骤 / 对比维度时数
     : LP.reg === "done"
       ? `<div class="lp-rc nd" data-id="${r.id}">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${stateTag(r)} ${esc(r.account_name || "未指定账号")}${r.ptype && r.ptype !== "(未标注)" ? ` · ${esc(r.ptype)}` : ""}${r.state_at ? ` · ${esc(r.state_at)}` : ""}</span>${r.state_note ? `<span class="sub">原因:${esc(r.state_note)}</span>` : ""}${r.hits && r.hits.length ? `<span class="sub">这篇命中过的风险词:${r.hits.map(esc).join("、")}</span>` : ""}<span class="lp-ca"><button class="btn gray sm" data-restore="${r.id}" title="标错了:恢复成正常状态">恢复</button></span></span></div>`
       : `<div class="lp-rc nd${r.stale ? " stale" : ""}" data-id="${r.id}">${regCv(r)}<span class="lp-ci"><b>${esc(r.title)}</b><span class="sub">${esc(r.account_name || "未指定账号")} · 标了已发布${r.published_at ? `(${esc(String(r.published_at).slice(0, 10))})` : ""}${ageTxt(r)}</span>${r.stale ? `<span class="lp-warn">已经 ${r.days} 天了千帆里还没找到:请核对是真的发出去了(粘贴链接绑上),还是已被平台删除 / 其实没发。</span>` : ""}${lpBind(r)}<span class="lp-ca"><button class="btn gray sm" data-link="${r.id}">搜索更多笔记</button><button class="btn ghost sm" data-unsent="${r.id}" title="其实没发出去 / 不发了:不再催标记">没发出去</button><button class="btn ghost sm" data-removed="${r.id}" title="发出去了但被平台删除:记下原因,当违规样本">被平台删除</button><button class="btn ghost sm" data-unpub="${r.id}" title="先放回待标记,以后再发">取消标记</button></span></span></div>`;
-  const regBlock = `<section class="card" style="margin-top:12px"><div class="card-h"><b>发布标记</b><span class="sub">发布后系统会按标题自动对上千帆数据;这里处理还没标记的和对不上的</span></div>
-    <div class="fl-chips" style="margin-bottom:10px"><button class="chip ${LP.reg === "todo" ? "on" : ""}" data-rtab="todo">待标记发布 ${nTodo}</button><button class="chip ${LP.reg === "nodata" ? "on" : ""}" data-rtab="nodata">标了发布但没对上数据 ${nNodata}${pg.reg.stale ? ` <small class="lp-stale">${pg.reg.stale} 篇超 ${pg.reg.stale_days} 天</small>` : ""}</button><button class="chip ${LP.reg === "done" ? "on" : ""}" data-rtab="done" title="核对后标成「被平台删除 / 没发出去」的稿子">已处理 ${pg.reg.done || 0}</button>${pg.reg.noacc || LP.noacc ? `<button class="chip ${LP.noacc ? "on" : ""}" data-rnoacc title="没指定发布账号的稿子,对号时没有账号保护,也归不进任何账号的统计">只看没指定账号 ${pg.reg.noacc}</button>` : ""}</div>
+  const regBlock = `<section class="card" style="margin-top:12px"><div class="card-h"><b>发布标记</b><span class="sub">发布后系统会按标题和封面自动对上千帆数据,这里只需要处理对不上的;没标记发布的稿子在最后一栏批量标记</span></div>
+    <div class="fl-chips" style="margin-bottom:10px"><button class="chip ${LP.reg === "nodata" ? "on" : ""}" data-rtab="nodata">标了发布但没对上数据 ${nNodata}${pg.reg.stale ? ` <small class="lp-stale">${pg.reg.stale} 篇超 ${pg.reg.stale_days} 天</small>` : ""}</button><button class="chip ${LP.reg === "done" ? "on" : ""}" data-rtab="done" title="核对后标成「被平台删除 / 没发出去」的稿子">已处理 ${pg.reg.done || 0}</button><button class="chip ${LP.reg === "todo" ? "on" : ""}" data-rtab="todo" title="还没标记发布的稿子:发出去的在这里批量标记已发布">没标记发布的 ${nTodo}</button>${pg.reg.noacc || LP.noacc ? `<button class="chip ${LP.noacc ? "on" : ""}" data-rnoacc title="没指定发布账号的稿子,对号时没有账号保护,也归不进任何账号的统计">只看没指定账号 ${pg.reg.noacc}</button>` : ""}</div>
     ${regList.length ? `${LP.reg === "todo" ? `<div class="lp-rbar"><button class="btn gray sm" data-rall>${regList.length && regList.every(r => LP.sel.has(r.id)) ? "取消全选" : `全选本页 ${regList.length} 篇`}</button><span class="sub">已选 <b>${LP.sel.size}</b> 篇</span><label class="sub" style="margin-left:auto">发布日期 <input type="date" id="rday" value="${today}" max="${today}" style="width:auto"></label><button class="btn sm" data-rpub ${LP.sel.size ? "" : "disabled"}>标记已发布</button></div>
       ${accts.length ? `<div class="lp-rbar" style="margin-top:-2px"><span class="sub">给选中的稿子指定发布账号</span><select id="racc" aria-label="发布账号">${accts.map(a => `<option value="${esc(a.account_id)}">${esc(a.name)}</option>`).join("")}</select><button class="btn gray sm" data-racc ${LP.sel.size ? "" : "disabled"}>指定账号</button></div>` : ""}` : `<p class="sub" style="margin:0 0 8px">${LP.reg === "done" ? "这些是核对后标成「被平台删除 / 没发出去」的稿子:不再提醒绑定,也不进复盘统计。被删的会留着原因和命中过的风险词,当违规样本。标错了点「恢复」。" : "一般是发布时改过标题 / 封面,或千帆数据还没同步(当天发的要等一两天)。最久的排最前,超过几天的会提示核对:点候选一键绑定,或粘贴笔记链接;确实没发出去、或被平台删了的,点对应的按钮标出来。"}</p>`}
     <div class="lp-rcs ${LP.reg === "nodata" ? "nd" : ""}">${regList.map(regRow).join("")}</div>${pager(LP.regPage, pg.reg.total, LP_SIZE, "rpg")}`
@@ -990,6 +1003,8 @@ async function fLoop(useCache) {   // useCache:切换步骤 / 对比维度时数
       try { const r = await api("/api/drafts/set_account", "POST", { ids: [...LP.sel], account_id: aid }); toast(`已把 ${r.n} 篇指定发布到「${nm}」`); LP.sel.clear(); return fLoop(); } catch (err) { return toast(err.message, 1); }
     }
     if (e.target.closest("[data-rpub]")) {
+      const noAcc = regList.filter(r => LP.sel.has(r.id) && !r.account_name).length;
+      if (noAcc && accts.length) return toast(`选中的稿子里有 ${noAcc} 篇没指定发布账号:先用上面的「指定账号」指定,再标记已发布`, 1);
       try { const r = await api("/api/drafts/publish", "POST", { ids: [...LP.sel], on: true, published_at: $("#rday").value }); toast(`已标记 ${r.n} 篇为已发布`); const ids = [...LP.sel]; LP.sel.clear(); await fLoop(); return bindDialog(ids); } catch (err) { return toast(err.message, 1); }
     }
     const up = e.target.closest("[data-unpub]");

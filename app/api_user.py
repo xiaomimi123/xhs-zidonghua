@@ -839,8 +839,12 @@ def publish_batch(p: PublishBatch):
     if day and not re.match(r"^\d{4}-\d{2}-\d{2}$", day):
         raise HTTPException(400, "发布日期格式不对,应为 YYYY-MM-DD")
     day = day or time.strftime("%Y-%m-%d")
+    ids = visible("draft", p.ids[:200])
+    if p.on and ids and qianfan.accounts():   # 标记发布时必须知道发到了哪个账号:匹配千帆笔记、算账号基线、按账号分析都靠它(账号还没接进来的环境不拦)
+        no_acc = sum(1 for r in autorun._in_chunks("SELECT id, account_id FROM drafts WHERE id IN ({})", ids) if not r["account_id"])
+        if no_acc:
+            raise HTTPException(400, f"有 {no_acc} 篇还没指定发布账号。先指定发布到哪个账号再标记已发布(数据才能对到账号上)")
     with conn() as c:
-        ids = visible("draft", p.ids[:200])
         for i in ids:
             c.execute("UPDATE drafts SET published=?, published_at=? WHERE id=?", (int(p.on), day if p.on else "", i))
             if p.on:   # 重新登记发布了:之前标的「被删 / 没发出去」作废

@@ -21,7 +21,7 @@ def run(rep, env):
 
     pj = db.q_exec("INSERT INTO projects(track,keywords,direction) VALUES('美食','[]','')").lastrowid
     mk = lambda title, pub=0, pday="", extra=None: db.q_exec(
-        "INSERT INTO drafts(project_id,title,content,status,published,published_at,ptype,checks) VALUES(?,?,?,'ready',?,?,'产品软文',?)", pj, title, "正文", pub, pday,
+        "INSERT INTO drafts(project_id,title,content,status,published,published_at,ptype,checks,account_id,account_name) VALUES(?,?,?,'ready',?,?,'产品软文',?,'acct_ps','状态号')", pj, title, "正文", pub, pday,
         json.dumps(extra or {}, ensure_ascii=False)).lastrowid
     a_old = mk("状态测试甲:登记了五天", 1, day(5))
     a_new = mk("状态测试乙:今天才登记", 1, day(0))
@@ -104,5 +104,8 @@ def run(rep, env):
               'data-rtab="done"' in flow and "data-unsent" in flow and "data-removed" in flow and "data-restore" in flow and "function stateDialog" in flow and "STATE_REASONS" in flow
               and "千帆里还没找到:请核对" in flow and "data-pstate-clear" in flow)
     rep.check("页面:预览里标记发布只有底部一个按钮(面板里不再放「登记已发布」),全站统一叫「标记 / 已发布」,不再出现「登记已发布 / 发布登记」",
-              "登记已发布" not in flow and "发布登记" not in flow and "data-ppub>" in flow and flow.count("data-ppub>") == 1 and "待标记发布" in flow and "发布标记" in flow)
+              "登记已发布" not in flow and "发布登记" not in flow and "data-ppub>" in flow and flow.count("data-ppub>") == 1 and "没标记发布的" in flow and "发布标记" in flow)
+    rep.check("页面:新建任务的发布账号必选(没有「不指定」,没选不让开始,默认带上次用的);标记已发布前必须有发布账号(预览和批量);复盘「发布标记」默认看「没对上」,「没标记发布的」排在最后",
+              "data-facc=\"\">不指定" not in flow and "先选打算发到哪个账号" in flow and "xhs_last_acct" in flow and "function needAcct" in flow and "没指定发布账号" in flow
+              and 'reg: "nodata"' in flow and flow.index('data-rtab="nodata"') < flow.index('data-rtab="done"') < flow.index('data-rtab="todo"'))
     db.q_exec("DELETE FROM drafts WHERE project_id=?", pj)
