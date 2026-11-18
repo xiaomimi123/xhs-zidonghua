@@ -877,7 +877,7 @@ def set_pub_state(p: StateBatch):
 
 @router.get("/api/loop/notes")
 def loop_notes(draft_id: int = 0, q: str = ""):
-    """手动对号时的候选:千帆里还没对上任何稿子的笔记。给了 draft_id 时,同账号的、标题更像的排前面。"""
+    """手动对号时的候选:千帆里还没对上任何稿子的笔记,封面一致的排前面,其余按发布日期从新到旧。"""
     items, _ = qianfan.notes_all()
     taken = {str(v.get("note_id")) for v in qianfan.match_drafts(items).values()}
     if draft_id:
@@ -900,8 +900,10 @@ def loop_notes(draft_id: int = 0, q: str = ""):
         out.append({"note_id": nid, "title": it["title"], "published_at": it.get("published_at") or "", "account_name": it.get("account_name") or "",
                     "views": it.get("views"), "likes": it.get("likes"), "collects": it.get("collects"), "comments": it.get("comments"), "sim": round(sim, 2), "same_account": same,
                     "cover_same": cdist.get(nid, 9) <= 0.04, "cover_d": cdist.get(nid)})
-    out.sort(key=lambda x: (x["cover_same"], x["cover_d"] is not None, -(x["cover_d"] or 0), x["same_account"], x["sim"], x["published_at"]), reverse=True)
-    return {"items": out[:40]}
+    # 「搜索更多笔记」窗口:封面一模一样的排最前(几乎就是它),其余一律按发布日期从新到旧,方便按日期找
+    out.sort(key=lambda x: x["published_at"], reverse=True)
+    out.sort(key=lambda x: x["cover_same"], reverse=True)
+    return {"items": out[:60]}
 
 
 @router.get("/api/loop/bind_cands")
