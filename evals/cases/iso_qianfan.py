@@ -35,6 +35,15 @@ def run(rep, env):
     col.post("/api/qianfan/ingest", json={"task_id": acc_t["id"], "kind": "account", "error": "登录过期"})
     rep.check("千帆:采集端报错 → 任务失败并记原因", q("SELECT status, error FROM crawl_tasks WHERE id=?", acc_t["id"])[0] == {"status": "failed", "error": "登录过期"})
     rep.check("千帆:刚失败的类别一小时内不重复下发", qf.schedule() == 0)
+    # 失败后的重试间隔:经典话题按正常间隔(12 小时)再试,别的类别一小时后就重试
+    topic_ids = [t["id"] for t in got if t["query"] == "hot_topics"]
+    db.q_exec(f"UPDATE crawl_tasks SET status='failed', error='page.fetch timed out', finished_at=datetime('now','-2 hours') WHERE id IN ({','.join('?' * len(topic_ids))})", *topic_ids)
+    db.q_exec("UPDATE crawl_tasks SET finished_at=datetime('now','-2 hours') WHERE id=?", acc_t["id"])
+    before = {r["id"] for r in q("SELECT id FROM crawl_tasks")}
+    n_re = qf.schedule()
+    new_t = [r for r in q("SELECT id, query FROM crawl_tasks") if r["id"] not in before]
+    rep.check("千帆:失败 2 小时后,账号数据重试了,经典话题还在退避(正常间隔内不重试)", n_re == 1 and [r["query"] for r in new_t] == ["account"], str(new_t))
+    db.q_exec("DELETE FROM crawl_tasks WHERE id IN (%s)" % ",".join(str(r["id"]) for r in new_t))
     rep.check("千帆:接口要采集端 Token", TestClient(app).post("/api/qianfan/ingest", json={}).status_code in (401, 403))
     rep.check("千帆:kind 不对返回 400", col.post("/api/qianfan/ingest", json={"kind": "x", "items": [1]}).status_code == 400)
     # 排序:用户任务 > 千帆 > 沉淀

@@ -773,10 +773,12 @@ def schedule(force: bool = False, kinds: list[str] | None = None) -> int:
                     snap = q_one("SELECT snap_at FROM qf_snapshots WHERE kind=? AND scope=? AND period=? AND shop_id=? ORDER BY id DESC LIMIT 1", kind, scope, period, shop)
                 if snap and q_one("SELECT ? > datetime('now', ?) ok", snap["snap_at"], f"-{int(hours * 60)} minutes")["ok"]:
                     continue  # 还没到下次同步的时间
-                fail = q_one("SELECT 1 FROM crawl_tasks WHERE type='qianfan' AND query=? AND label=? AND status='failed' AND finished_at > datetime('now','-1 hours') "
-                             "AND (?='' OR params LIKE ?)", kind, scope, shop, f'%"shop": "{shop}"%')
+                # 刚失败过就先别重复下发:一般一小时后再试;经典话题是平台编辑精选的静态榜单,失败多半是采集电脑连不上平台的安全脚本(一时半会儿好不了),按正常间隔再试,别每小时占 20 秒采集时间
+                back_h = max(1, hours) if kind == "hot_topics" else 1
+                fail = q_one("SELECT 1 FROM crawl_tasks WHERE type='qianfan' AND query=? AND label=? AND status='failed' AND finished_at > datetime('now', ?) "
+                             "AND (?='' OR params LIKE ?)", kind, scope, f"-{int(back_h * 60)} minutes", shop, f'%"shop": "{shop}"%')
                 if fail:
-                    continue  # 刚失败过:一小时后再试,不要一直重复下发
+                    continue
             add_task(kind, scope, period, shop)
             n += 1
     return n

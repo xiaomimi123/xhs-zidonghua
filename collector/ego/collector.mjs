@@ -81,7 +81,12 @@ async function creatorPage() {
   return cpage;
 }
 async function qfCreator(path) {
-  const r = await (await creatorPage()).fetch(path);
+  let r;
+  try { r = await (await creatorPage()).fetch(path); }
+  catch (e) {
+    if (/timed out/.test(e.message)) throw new QfError("创作服务平台的接口一直没有响应(页面的安全脚本 as.xiaohongshu.com 在这台电脑的 ego 浏览器里连不上,多半是代理 / 网络规则问题);千帆的数据不受影响");
+    throw e;
+  }
   if (r.status === 401 || r.status === 403) { cpage = null; throw new QfError("创作服务平台登录已过期,需要重新登录"); }
   let j;
   try { j = JSON.parse(r.body); } catch { throw new QfError(`创作服务平台返回非 JSON(${r.status})`); }
