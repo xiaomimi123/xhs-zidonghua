@@ -892,17 +892,20 @@ function linkDialog(did, draft, onDone) {
   m.innerHTML = `<div class="card lp-dlg"><div class="card-h"><b>对上千帆笔记</b><button class="btn ghost sm" data-x>关闭</button></div>
     <p class="sub" style="margin:0 0 8px">稿子:${esc(draft ? draft.title : "")}</p>
     <div class="lp-paste" style="margin-bottom:6px"><input id="lurl" placeholder="粘贴小红书笔记链接,直接绑定"><button class="btn sm" id="lurlgo">用链接绑定</button></div>
-    <div class="lp-ed" style="margin-bottom:10px"><label><input type="checkbox" id="led-c"> 发布时改了封面</label><label><input type="checkbox" id="led-b"> 改了正文</label></div><input id="lq" placeholder="搜索千帆里的笔记标题" style="width:100%;margin-bottom:8px"><div class="lp-cl" id="lcl"><div class="sub" style="padding:12px">加载中…</div></div></div>`;
+    <div class="lp-ed" style="margin-bottom:10px"><label><input type="checkbox" id="led-c"> 发布时改了封面</label><label><input type="checkbox" id="led-b"> 改了正文</label></div><div id="lscope" class="sub" style="margin:0 0 6px"></div><input id="lq" placeholder="搜索千帆里的笔记标题" style="width:100%;margin-bottom:8px"><div class="lp-cl" id="lcl"><div class="sub" style="padding:12px">加载中…</div></div></div>`;
   document.body.appendChild(m);
   const close = () => m.remove();
+  let other = false;
   const load = async () => {
-    const r = await api(`/api/loop/notes?draft_id=${did}&q=${encodeURIComponent($("#lq").value.trim())}`).catch(() => ({ items: [] }));
+    const r = await api(`/api/loop/notes?draft_id=${did}&other=${other ? 1 : 0}&q=${encodeURIComponent($("#lq").value.trim())}`).catch(() => ({ items: [] }));
+    $("#lscope").innerHTML = r.only_account ? `只显示这篇稿子所标账号「${esc(r.account_name || "")}」的笔记${r.n_other ? `。标错账号了?<a href="#" data-other>也显示其他账号的 ${r.n_other} 篇</a>` : ""}` : (r.account_name ? `已显示所有账号的笔记,「${esc(r.account_name)}」的排前面。<a href="#" data-other="0">只看这个账号</a>` : "");
     $("#lcl").innerHTML = r.items.length ? r.items.map(n => `<button class="lp-c" data-nid="${esc(n.note_id)}"><b>${esc(n.title)}</b><span class="sub">${esc(n.account_name || "")}${n.published_at ? " · " + esc(n.published_at) : ""} · 阅读 ${fmtN(n.views)} · 赞藏评 ${fmtN((n.likes || 0) + (n.collects || 0) + (n.comments || 0))}${n.cover_same ? " · 封面一致" : ""}${n.sim >= 0.4 ? " · 标题相近" : ""}${n.same_account ? " · 同账号" : ""}</span></button>`).join("")
       : `<div class="empty" style="border:0">没有可对的笔记。可能千帆数据还没同步,或都已经对上了稿子。</div>`;
   };
   let t; $("#lq").oninput = () => { clearTimeout(t); t = setTimeout(load, 300); };
   m.onclick = async e => {
     if (e.target === m || e.target.closest("[data-x]")) return close();
+    const ot = e.target.closest("[data-other]"); if (ot) { e.preventDefault(); other = ot.dataset.other !== "0"; return load(); }
     const fl = { cover: $("#led-c").checked, body: $("#led-b").checked };
     const go_ = async body => { try { const r = await api(`/api/drafts/${did}/link`, "POST", { ...body, ...fl }); toast(r.pending ? "已记下,千帆数据同步后会自动对上" : "已对上,数据会出现在复盘里"); close(); onDone ? onDone() : fLoop(); } catch (err) { toast(err.message, 1); } };
     if (e.target.closest("#lurlgo")) { const u = $("#lurl").value.trim(); return u ? go_({ url: u }) : toast("先粘贴笔记链接", 1); }

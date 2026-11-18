@@ -875,8 +875,13 @@ def set_pub_state(p: StateBatch):
     return {"ok": True, "n": len(ids)}
 
 
+def draft_acct(did: int) -> str:
+    r = q_one("SELECT account_name FROM drafts WHERE id=?", did)
+    return (r or {}).get("account_name") or ""
+
+
 @router.get("/api/loop/notes")
-def loop_notes(draft_id: int = 0, q: str = ""):
+def loop_notes(draft_id: int = 0, q: str = "", other: int = 0):
     """手动对号时的候选:千帆里还没对上任何稿子的笔记,封面一致的排前面,其余按发布日期从新到旧。"""
     items, _ = qianfan.notes_all()
     taken = {str(v.get("note_id")) for v in qianfan.match_drafts(items).values()}
@@ -886,10 +891,13 @@ def loop_notes(draft_id: int = 0, q: str = ""):
     cdist = coverfp.note_cover_dists(d["images"], items, d["account_id"]) if d else {}   # 封面和这篇稿子的封面像的笔记
     key = qianfan._norm_title(q)
     gd = qianfan._grams(qianfan._norm_title(d["title"])) if d else set()
-    out = []
+    out, n_other = [], 0
     for it in items:
         nid = str(it.get("note_id") or "")
         if not nid or nid in taken or not it.get("title"):
+            continue
+        if d and d["account_id"] and it.get("account_id") != d["account_id"] and not other:   # 稿子标了账号:默认只列这个账号的笔记(员工标错账号时才勾「其他账号」)
+            n_other += 1
             continue
         t = qianfan._norm_title(it["title"])
         if key and key not in t:
@@ -903,7 +911,8 @@ def loop_notes(draft_id: int = 0, q: str = ""):
     # 「搜索更多笔记」窗口:封面一模一样的排最前(几乎就是它),然后是稿子所标账号的笔记,各组内都按发布日期从新到旧,方便按日期找
     out.sort(key=lambda x: x["published_at"], reverse=True)
     out.sort(key=lambda x: (x["cover_same"], x["same_account"]), reverse=True)   # 稿子标的是哪个账号,就先列这个账号的笔记,再列别的账号
-    return {"items": out[:80]}
+    acct = draft_acct(draft_id) if d else ""
+    return {"items": out[:80], "only_account": bool(d and d["account_id"] and not other), "account_name": acct, "n_other": n_other}
 
 
 @router.get("/api/loop/bind_cands")

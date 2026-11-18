@@ -49,8 +49,17 @@ def run(rep, env):
     rep.check("手动对号候选:只列还没对上稿子的千帆笔记", "x1" in ids_ and "m0" not in ids_, str(ids_[:5]))
     nc = [x for x in cand if not x["cover_same"]]
     sa = [x for x in nc if x["same_account"]]
-    rep.check("手动对号候选:封面一致的在最前,然后是稿子所标账号的笔记,各组按发布日期从新到旧;所标账号的笔记不会被别的账号挤出去",
-              [x["published_at"] for x in sa] == sorted((x["published_at"] for x in sa), reverse=True) and len(nc) > 3 and sa and nc[:len(sa)] == sa, str([(x["same_account"], x["published_at"]) for x in nc][:6]))
+    r_def = user.get(f"/api/loop/notes?draft_id={d_nodata}").json()
+    qf.ingest({"kind": "notes", "shop_id": "shop_loop_other", "items": [{"note_id": f"o{i}", "title": f"别的账号的新笔记{i}号", "published_at": day(0), "views": 50, "likes": 1, "collects": 0, "comments": 0, "account_id": "acc_other", "account_name": "别的号"} for i in range(70)]})
+    r_def2 = user.get(f"/api/loop/notes?draft_id={d_nodata}").json()
+    r_all = user.get(f"/api/loop/notes?draft_id={d_nodata}&other=1").json()
+    rep.check("手动对号候选:稿子标了账号,默认只列这个账号的笔记(别的账号再新、再多也不出现),带账号名和「其他账号还有几篇」;勾选后才显示其他账号,所标账号的排前面",
+              r_def2["only_account"] and r_def2["account_name"] == "闭环号" and all(x["same_account"] for x in r_def2["items"]) and [x["note_id"] for x in r_def2["items"]] == [x["note_id"] for x in r_def["items"]]
+              and r_def2["n_other"] == 70 and not r_all["only_account"] and any(not x["same_account"] for x in r_all["items"])
+              and r_all["items"][0]["same_account"] and len(r_all["items"]) == 80, str((r_def2["n_other"], len(r_all["items"]))))
+    rep.check("手动对号候选:所标账号的笔记各自按发布日期从新到旧",
+              [x["published_at"] for x in sa] == sorted((x["published_at"] for x in sa), reverse=True) and len(sa) > 3, str([x["published_at"] for x in sa][:6]))
+    db.q_exec("DELETE FROM qf_snapshots WHERE shop_id='shop_loop_other'")
     rep.check("手动对号候选:能按标题搜索", [x["note_id"] for x in user.get(f"/api/loop/notes?q={'改过标题'}").json()["items"]] == ["x1"])
     rep.check("手动对号:千帆里没有这篇笔记时拒绝", user.post(f"/api/drafts/{d_nodata}/link", json={"note_id": "nope"}).status_code == 400)
     rep.check("手动对号:成功", user.post(f"/api/drafts/{d_nodata}/link", json={"note_id": "x1"}).status_code == 200)
