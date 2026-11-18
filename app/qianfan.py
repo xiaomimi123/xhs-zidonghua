@@ -93,7 +93,7 @@ def normalize(kind: str, body: dict) -> dict:
                                   "account_id", "account_name"])
             if not r.get("title"):
                 continue
-            r["engagement"] = r.get("likes", 0) + r.get("collects", 0) + r.get("comments", 0)
+            r["engagement"] = note_eng(r)   # 赞 + 藏(评论不算,见 note_eng);老快照里存的是含评论的旧值,读的时候一律重新算,不用这个字段
         elif kind == "hot_notes":
             r = _norm_row(it, ["rank", "title", "author", "note_id", "likes", "collects", "comments", "heat", "url", "cover"])
             if not r.get("title"):
@@ -573,10 +573,17 @@ def _trimmed_mean(vals: list[float], frac: float = 0.05) -> float:
     return sum(v) / len(v) if v else 0.0
 
 
+def note_eng(r: dict) -> int:
+    """我们自己的笔记的「互动」= 赞 + 藏,**不算评论**。
+    发布了商品的笔记,评论区显示的是商品自带的评价:同一个商品下所有笔记的评论数一模一样(实测康泰的笔记评论全是 21、健元的 23),
+    阅读只有几次却有几十条评论,占了互动的 83%,不是读者对这篇笔记的反应。算进互动里,爆款榜 / 账号基线 / 复盘建议都会被带偏。"""
+    return (r.get("likes") or 0) + (r.get("collects") or 0)
+
+
 def _agg(rows: list[dict], base: float, metric: str) -> dict:
     n = len(rows)
     sv = lambda k: sum(r.get(k) or 0 for r in rows)
-    eng = [(r.get("likes") or 0) + (r.get("collects") or 0) + (r.get("comments") or 0) for r in rows]
+    eng = [note_eng(r) for r in rows]
     best = max(zip(eng, rows), key=lambda x: (x[0], x[1].get("views") or 0))[1]
     eng_avg, views_avg = sum(eng) / n, sv("views") / n
     score = eng_avg if metric == "eng" else views_avg          # 账号整体互动太少时改用阅读量比较
@@ -596,7 +603,7 @@ def topic_report(account_id: str = "", shop: str = "") -> dict:
     items = [it for it in _latest_notes() if (not account_id or it.get("account_id", "") == account_id) and (not shop or it.get("shop_id", "") == shop)]
     tags = {r["note_id"]: r for r in q_all("SELECT note_id, ctype, topic, angle FROM qf_note_tags WHERE angle!=''")}
     tagged = [{**it, **{k: tags[_note_key(it)][k] for k in ("ctype", "topic", "angle")}} for it in items if _note_key(it) in tags]
-    eng = lambda r: (r.get("likes") or 0) + (r.get("collects") or 0) + (r.get("comments") or 0)
+    eng = note_eng
     n = len(tagged)
     eng_avg = sum(eng(r) for r in tagged) / n if n else 0
     views_avg = sum(r.get("views") or 0 for r in tagged) / n if n else 0
@@ -627,7 +634,7 @@ def style_titles(account_id: str, n: int = 5) -> list[str]:
     items = [it for it in _latest_notes() if not account_id or it.get("account_id", "") == account_id]
     tags = {r["note_id"]: r["angle"] for r in q_all("SELECT note_id, angle FROM qf_note_tags WHERE angle!=''")}
     rows = [it for it in items if tags.get(_note_key(it)) in WRITABLE and it.get("title")]
-    eng = lambda r: (r.get("likes") or 0) + (r.get("collects") or 0) + (r.get("comments") or 0)
+    eng = note_eng
     use_eng = sum(eng(r) for r in rows) / len(rows) >= 2 if rows else False
     rows.sort(key=lambda r: (eng(r), r.get("views") or 0) if use_eng else (r.get("views") or 0, eng(r)), reverse=True)
     return [r["title"] for r in rows[:n]]

@@ -46,11 +46,12 @@ def cfg() -> dict:
 
 
 def _eng(r: dict) -> int:
-    return (r.get("likes") or 0) + (r.get("collects") or 0) + (r.get("comments") or 0)
+    """互动 = 赞 + 藏,不算评论(商品笔记的评论是商品自带的评价,不是读者对笔记的反应;见 qianfan.note_eng)。"""
+    return qianfan.note_eng(r)
 
 
 def _baselines(items: list[dict]) -> dict[str, tuple[str, float]]:
-    """每个账号的对比基线:该账号所有笔记的互动(赞+藏+评)去掉最高 5% 后的平均;互动太少没有区分度的账号改用阅读量。"""
+    """每个账号的对比基线:该账号所有笔记的互动(赞+藏)去掉最高 5% 后的平均;互动太少没有区分度的账号改用阅读量。"""
     by: dict[str, list[dict]] = defaultdict(list)
     for it in items:
         by[it.get("account_id") or ""].append(it)

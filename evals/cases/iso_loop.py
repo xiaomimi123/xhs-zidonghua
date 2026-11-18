@@ -32,6 +32,14 @@ def run(rep, env):
     rep.check("判定:刚发布的数据没沉淀,标观察中,不下结论", tier(d_new) == "observing", tier(d_new))
     rep.check("判定:标了已发布但千帆里没对上 = 没对上数据;没发布 = 未发布", tier(d_nodata) == "nodata" and tier(d_off) == "unpublished")
     rep.check("判定:互动下限挡住小数据(几个赞不算爆款)", loop.classify({"likes": 5, "collects": 0, "comments": 0, "views": 50, "published_at": day(20)}, {"published": 1, "published_at": ""}, ("eng", 1.0), loop.cfg())[0] != "winner")
+    cfg0 = loop.cfg()
+    only_cm = {"likes": 1, "collects": 0, "comments": 49, "views": 3, "published_at": day(20)}
+    rep.check("评论不算互动:商品笔记的评论是商品自带的评价,阅读 3 赞 1 评 49 的不算爆款,互动 = 赞+藏",
+              loop._eng(only_cm) == 1 and loop._eng({"likes": 12, "collects": 9, "comments": 99}) == 21
+              and loop.classify(only_cm, {"published": 1, "published_at": ""}, ("eng", 1.0), cfg0)[0] != "winner")
+    rows_cm = [{"likes": 6, "collects": 2, "comments": 40 + i, "views": 300, "published_at": day(30)} for i in range(20)]
+    bl = loop._baselines(rows_cm)[""]
+    rep.check("账号基线也不含评论:评论再多,基线仍是赞+藏的平均(8)", bl[0] == "eng" and abs(bl[1] - 8) < 1e-6, str(bl))
     rep.check("对上数据的稿子自动登记为已发布", db.q_one("SELECT published FROM drafts WHERE id=?", d_win)["published"] == 1)
     rep.check("账号基线取去掉最高 5% 的平均,几篇爆款不拉高门槛", loop._baselines(items)[acc][0] == "eng")
 

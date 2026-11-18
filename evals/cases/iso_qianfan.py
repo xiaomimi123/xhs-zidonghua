@@ -17,7 +17,7 @@ def run(rep, env):
     r = qf.normalize("account", {"account": {"粉丝数": "1.2万", "新增粉丝": 35, "昵称": "测试号"}})
     rep.check("千帆:账号数据认中文表头和\"1.2万\"", r["account"] == {"fans": 12000, "new_fans": 35, "name": "测试号"}, str(r))
     r = qf.normalize("notes", {"items": [{"标题": "空气炸锅早餐!!10分钟搞定", "点赞": 20, "收藏": "1千", "评论": 3}, {"点赞": 5}]})
-    rep.check("千帆:笔记表现没标题的行丢掉,互动数 = 赞+藏+评", len(r["items"]) == 1 and r["items"][0]["engagement"] == 20 + num_qf("1千") + 3, str(r))
+    rep.check("千帆:笔记表现没标题的行丢掉,互动数 = 赞+藏(评论是商品自带的评价,不算)", len(r["items"]) == 1 and r["items"][0]["engagement"] == 20 + num_qf("1千"), str(r))
     rep.check("千帆:热门话题去掉 # 号并按排名排序", [i["name"] for i in qf.normalize("hot_topics", {"items": [{"rank": 2, "话题": "#b"}, {"rank": 1, "话题": "#a"}]})["items"]] == ["a", "b"])
     rep.check("千帆:空数据拒绝", _raises2(lambda: qf.normalize("hot_notes", {"items": []})) and _raises2(lambda: qf.normalize("account", {})))
     # 采集端接口:领任务 → 回传 → 任务完成

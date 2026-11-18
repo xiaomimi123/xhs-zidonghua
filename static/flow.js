@@ -834,7 +834,7 @@ function lpWinner(r) {
     <div class="lp-wt"><span class="fl-pill bad">爆款 ×${r.lift ?? "-"}</span>${r.generation ? `<span class="fl-pill">第 ${r.generation} 代</span>` : ""}${r.spawned ? `<span class="fl-pill ok">已复刻 ${r.spawned} 轮</span>` : ""}</div>
     <b class="lp-title">${esc(r.title)}</b>
     <div class="sub">${esc(r.account_name || "未指定账号")} · ${esc(r.published_at || "")}${r.days != null ? ` · 发布 ${r.days} 天` : ""}</div>
-    <div class="lp-m"><span>阅读 <b>${fmtN(r.views)}</b></span><span>赞 <b>${fmtN(r.likes)}</b></span><span>藏 <b>${fmtN(r.collects)}</b></span><span>评 <b>${fmtN(r.comments)}</b></span></div>
+    <div class="lp-m"><span>阅读 <b>${fmtN(r.views)}</b></span><span>赞 <b>${fmtN(r.likes)}</b></span><span>藏 <b>${fmtN(r.collects)}</b></span><span class="lp-nc" title="商品笔记的评论是商品自带的评价,不是读者对这篇笔记的反应,不计入互动和爆款">评 <b>${fmtN(r.comments)}</b></span></div>
     <div class="lp-act"><select data-spn aria-label="复刻篇数">${[3, 5, 10, 20].map(n => `<option value="${n}">${n} 篇</option>`).join("")}</select><button class="btn sm" data-spawn="${r.id}">继续复刻</button></div>
   </article>`;
 }
@@ -883,7 +883,7 @@ function lpStepNext(S, wins, nWin, c, se) {
     : `<p class="sub" style="margin:0;line-height:1.8">${n.need ? `发布满 ${c.min_days} 天、有数据的稿子目前只有 ${S.result.n_mature} 篇,再攒 ${n.need} 篇就能看出哪种封面、类型更好。` : "目前没有明显更好或更差的做法,继续观察。"}</p>`;
   const spawn = se.spawned.mature > 0 ? `<section class="card" style="margin-top:12px"><div class="card-h"><b>继续复刻有没有用</b><span class="sub">对比普通复刻和「以爆款为样本继续复刻」的稿子</span></div><div class="lp-effs">${lpEff("普通复刻稿", se.original)}${lpEff("爆款样本复刻稿", se.spawned)}</div></section>` : "";
   return `<section class="card"><div class="card-h"><b>给下一批稿子的建议</b></div>${advice}</section>
-    <h3 class="lp-h">爆款榜 <span class="sub">${nWin} 篇 · 发布满 ${c.min_days} 天、互动 ≥ ${c.min_eng},并且是本账号同龄笔记的 ${c.win_lift} 倍以上</span></h3>
+    <h3 class="lp-h">爆款榜 <span class="sub">${nWin} 篇 · 发布满 ${c.min_days} 天、赞+藏 ≥ ${c.min_eng}(评论不算),并且是本账号同龄笔记的 ${c.win_lift} 倍以上</span></h3>
     ${wins.length ? `<div class="lp-ws">${(LP.winAll ? wins : wins.slice(0, LP_WIN)).map(lpWinner).join("")}</div>${wins.length > LP_WIN ? `<p style="text-align:center;margin:12px 0 0"><button class="btn gray sm" data-winall>${LP.winAll ? "收起" : `展开全部 ${wins.length} 篇`}</button></p>` : ""}` : `<div class="empty"><b>还没有爆款</b>稿子发布满 ${c.min_days} 天、互动明显高于同龄笔记,就会出现在这里,可以一键继续复刻</div>`}${spawn}`;
 }
 // 手动把稿子对上千帆里的一篇笔记:列出还没对上任何稿子的千帆笔记,同账号、标题更像的排前面,可搜索

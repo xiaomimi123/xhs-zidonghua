@@ -17,7 +17,7 @@ def _summary(perf_all: list[dict], sid: str, shop_list: list[dict]) -> dict:
     import datetime
     cut = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
     pool = [it for it in perf_all if str(it.get("published_at") or "") >= cut] or perf_all
-    top = sorted(pool, key=lambda r: (r.get("engagement") or 0, r.get("views") or 0), reverse=True)[:3]
+    top = sorted(pool, key=lambda r: (qianfan.note_eng(r), r.get("views") or 0), reverse=True)[:3]
     top = [{k: it.get(k) for k in ("title", "account_name", "views", "likes", "collects", "comments", "published_at")} for it in top]
     hot, shop_for_hot = {}, sid or (shop_list[0]["shop_id"] if shop_list else "")
     for kind in ("hot_keywords", "hot_topics"):
@@ -51,7 +51,7 @@ def overview(account: str = "", shop: str = ""):
     matched = qianfan.match_drafts(perf)
     for it in perf:
         it["mine"] = any(v is it for v in matched.values())
-    top = sorted(perf, key=lambda r: r.get("engagement", 0), reverse=True)
+    top = sorted(perf, key=qianfan.note_eng, reverse=True)
     return {"settings": {k: s[k] for k in SETTING_KEYS}, "status": qianfan.status(), "sample": qianfan.has_sample(),
             "summary": _summary(perf_all, sid, shop_list),
             "shops": shop_list, "shop": sid,
