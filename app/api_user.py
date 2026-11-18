@@ -900,10 +900,10 @@ def loop_notes(draft_id: int = 0, q: str = ""):
         out.append({"note_id": nid, "title": it["title"], "published_at": it.get("published_at") or "", "account_name": it.get("account_name") or "",
                     "views": it.get("views"), "likes": it.get("likes"), "collects": it.get("collects"), "comments": it.get("comments"), "sim": round(sim, 2), "same_account": same,
                     "cover_same": cdist.get(nid, 9) <= 0.04, "cover_d": cdist.get(nid)})
-    # 「搜索更多笔记」窗口:封面一模一样的排最前(几乎就是它),其余一律按发布日期从新到旧,方便按日期找
+    # 「搜索更多笔记」窗口:封面一模一样的排最前(几乎就是它),然后是稿子所标账号的笔记,各组内都按发布日期从新到旧,方便按日期找
     out.sort(key=lambda x: x["published_at"], reverse=True)
-    out.sort(key=lambda x: x["cover_same"], reverse=True)
-    return {"items": out[:60]}
+    out.sort(key=lambda x: (x["cover_same"], x["same_account"]), reverse=True)   # 稿子标的是哪个账号,就先列这个账号的笔记,再列别的账号
+    return {"items": out[:80]}
 
 
 @router.get("/api/loop/bind_cands")

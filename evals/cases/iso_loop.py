@@ -48,7 +48,9 @@ def run(rep, env):
     ids_ = [x["note_id"] for x in cand]
     rep.check("手动对号候选:只列还没对上稿子的千帆笔记", "x1" in ids_ and "m0" not in ids_, str(ids_[:5]))
     nc = [x for x in cand if not x["cover_same"]]
-    rep.check("手动对号候选:封面一致的在最前,其余按发布日期从新到旧", [x["published_at"] for x in nc] == sorted((x["published_at"] for x in nc), reverse=True) and len(nc) > 3, str([x["published_at"] for x in nc][:6]))
+    sa = [x for x in nc if x["same_account"]]
+    rep.check("手动对号候选:封面一致的在最前,然后是稿子所标账号的笔记,各组按发布日期从新到旧;所标账号的笔记不会被别的账号挤出去",
+              [x["published_at"] for x in sa] == sorted((x["published_at"] for x in sa), reverse=True) and len(nc) > 3 and sa and nc[:len(sa)] == sa, str([(x["same_account"], x["published_at"]) for x in nc][:6]))
     rep.check("手动对号候选:能按标题搜索", [x["note_id"] for x in user.get(f"/api/loop/notes?q={'改过标题'}").json()["items"]] == ["x1"])
     rep.check("手动对号:千帆里没有这篇笔记时拒绝", user.post(f"/api/drafts/{d_nodata}/link", json={"note_id": "nope"}).status_code == 400)
     rep.check("手动对号:成功", user.post(f"/api/drafts/{d_nodata}/link", json={"note_id": "x1"}).status_code == 200)
